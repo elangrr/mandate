@@ -9,17 +9,30 @@
 # What a run does, all reads being free queries:
 #   1. lists the payee's plans (CollectorPlans) and, for each, walks its
 #      supporter list in windows of 200 (CollectorScan), keeping only active
-#      mandates given to this key;
-#   2. pulls every due mandate that has paid before (its session existed);
-#   3. for due mandates that have never paid, first asks the chain whether
-#      the payer really gave this key a session
-#      (auth/accounts/<payer>/session/<key>). Anyone can record a mandate
-#      without creating a session, so these may be junk. At most -max-checks
-#      such checks per run: the never-checked first, newest first, then the
-#      ones that had no session, oldest check first. With -state, results are
-#      kept between runs, so a run continues where the last one stopped and
-#      junk cannot keep a real new supporter waiting for ever.
-#   4. pulls at most -max-pulls mandates per run.
+#      mandates given to this key that are due;
+#   2. reads each due mandate's session from the chain
+#      (auth/accounts/<payer>/session/<key>) and skips, with the reason, a
+#      mandate whose session is missing (never created, revoked or expired),
+#      is not scoped to exactly vm/exec:<realm>, has a spend limit below the
+#      price plus what a pull can cost the payer (the fee plus the storage
+#      deposit of a first pull at the chain's storage price), has already
+#      spent its budget for the current spend period, or expires within a
+#      minute. Anyone can record a mandate without a session, so never-paid
+#      mandates may be junk: at most -max-checks of them are read per run,
+#      never-read first (newest first), then oldest read first;
+#   3. pulls at most -max-pulls mandates. A pull the chain or the realm
+#      refuses is remembered and not tried again before the plan's next
+#      period (each refused try can cost the payer the fee).
+#
+# With -state <file>, what a run learned is kept for the next one (the file
+# only holds mandates still listed, so it does not grow). It is replaced
+# atomically through a private temporary file next to it.
+#
+# Exit status: 0 when every due mandate was pulled or skipped for a reason
+# on the payer's side (a revoked session is not an error), 1 when a pull
+# failed for another reason or a read failed, 2 for bad arguments.
+#
+# Needs gnokey (v1.8.0) and python3.
 #
 # Run it from cron or a loop at least once per period.
 #
@@ -112,7 +125,8 @@ echo "collector key $KEY ($ADDR) for payee $PAYEE on $CHAIN via $REMOTE"
 # qtext <expr>: a realm function returning a string, printed with real newlines.
 # Runs in a subshell, so it counts queries in a file.
 QCOUNT="$(mktemp)"
-trap 'rm -f "$QCOUNT"' EXIT
+TMPFILES=("$QCOUNT")
+trap 'rm -f "${TMPFILES[@]}"' EXIT
 qtext() {
 	local out data
 	echo >>"$QCOUNT"
@@ -124,11 +138,15 @@ qtext() {
 
 # 1. plans, then each plan's supporter list in windows
 PLANS=()
+declare -A PERIOD=()
 page=1
 while :; do
 	more=0
 	while read -r id rest; do
-		case "$id" in "" | end) ;; more) more=1 ;; *) [[ "$id" =~ ^[0-9]+$ ]] && PLANS+=("$id") ;; esac
+		case "$id" in "" | end) ;; more) more=1 ;; *)
+			read -r _ period _ <<<"$rest"
+			[[ "$id" =~ ^[0-9]+$ && "$period" =~ ^[0-9]+$ ]] && PLANS+=("$id") PERIOD[$id]=$period ;;
+		esac
 	done <<<"$(qtext "CollectorPlans(address(\"$PAYEE\"), $page)")"
 	[ "$more" = 1 ] || break
 	page=$((page + 1))
@@ -150,7 +168,7 @@ for plan in "${PLANS[@]+"${PLANS[@]}"}"; do
 			fi
 			listed=$((listed + 1))
 			if [ "$due" != due ]; then waiting=$((waiting + 1)); continue; fi
-			if [ "$pulls" -gt 0 ]; then PROVEN+=("$id $payer $amount"); else UNPROVEN+=("$id $payer $amount"); fi
+			if [ "$pulls" -gt 0 ]; then PROVEN+=("$id $payer $amount ${PERIOD[$plan]}"); else UNPROVEN+=("$id $payer $amount ${PERIOD[$plan]}"); fi
 		done <<<"$(qtext "CollectorScan($plan, address(\"$ADDR\"), $from)")"
 		[ -n "$next" ] || break
 		from="$next"
@@ -158,12 +176,86 @@ for plan in "${PLANS[@]+"${PLANS[@]}"}"; do
 done
 echo "${#PLANS[@]} plans, $listed active mandates for this key ($waiting not due), ${#PROVEN[@]} due that paid before, ${#UNPROVEN[@]} due that never paid ($(wc -l <"$QCOUNT") realm queries)"
 
-# 3. order the never-paid ones: never checked first (newest first), then by oldest check
+# Each due mandate's session, read from the chain (free). Prints one word:
+# ok, or the reason to skip it: no-session, scope, limit, budget, expired.
+# The realm checks the scope again in Pull; the chain checks the rest. A
+# skip costs the payer nothing, a refused pull can cost them the fee.
+session_check() { # <payer> <amount>
+	local out
+	out="$(gnokey query "auth/accounts/$1/session/$ADDR" -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || {
+		if grep -q SessionNotFound <<<"$out"; then echo no-session; else echo "query-failed"; fi
+		return 0
+	}
+	printf '%s\n' "$out" | python3 -c '
+import json, sys
+realm, need, now = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+d = json.loads(sys.stdin.read().split("data:", 1)[1])
+s = d.get("BaseSessionAccount", d)
+def ugnot(c):
+    total = 0
+    for part in (c or "").split(","):
+        if part.endswith("ugnot") and part[:-5].isdigit():
+            total += int(part[:-5])
+    return total
+exp, period, reset = int(s.get("expires_at") or 0), int(s.get("spend_period") or 0), int(s.get("spend_reset") or 0)
+limit, used = ugnot(s.get("spend_limit")), ugnot(s.get("spend_used"))
+if d.get("allow_paths") != ["vm/exec:" + realm]:
+    print("scope")
+elif exp and now + 60 >= exp:
+    print("expired")
+elif limit < need:
+    print("limit")
+elif (period == 0 or now < reset + period) and limit - used < need:
+    print("budget")
+else:
+    print("ok")
+' "$REALM" "$(($2 + PULL_COST))" "$NOW" 2>/dev/null || echo "query-failed"
+}
+
+# What one pull can cost the payer on top of the amount: the fee, plus the
+# storage deposit of a first pull (the realm keeps it under STORAGE_BOUND
+# bytes), priced at the chain's storage price.
+PRICE_OUT="$(gnokey query params/vm:p:storage_price -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || { echo "could not read the storage price: $PRICE_OUT" >&2; exit 1; }
+STORAGE_PRICE="$(sed -n 's/^data: "\([0-9]*\)ugnot"$/\1/p' <<<"$PRICE_OUT")"
+[[ "$STORAGE_PRICE" =~ ^[0-9]+$ ]] || { echo "unexpected storage price: $PRICE_OUT" >&2; exit 1; }
+STORAGE_BOUND=100
+PULL_COST=$((${GAS_FEE%ugnot} + STORAGE_BOUND * STORAGE_PRICE))
+
+# State between runs (-state): one line per mandate, "<id> <last check> <retry after>".
+#   last check:  when a never-paid mandate's session was last read, so the
+#                -max-checks budget rotates over them;
+#   retry after: a pull for it was refused by the chain or the realm; it is
+#                not tried again before its plan's next period, since the
+#                payer may pay a fee for each refused try.
+# Only mandates seen in this run's listing are kept, so the file stays as
+# long as the list of active mandates for this key.
 NOW="$(date +%s)"
-declare -A LAST=()
+declare -A LAST=() RETRY=() SEEN=()
 if [ -n "$STATE" ] && [ -f "$STATE" ]; then
-	while read -r sid st; do [[ "$sid" =~ ^[0-9]+$ && "$st" =~ ^[0-9]+$ ]] && LAST[$sid]=$st; done <"$STATE"
+	while read -r sid st ra; do
+		[[ "$sid" =~ ^[0-9]+$ ]] || continue
+		[[ "$st" =~ ^[0-9]+$ ]] && LAST[$sid]=$st
+		[[ "${ra:-}" =~ ^[0-9]+$ ]] && RETRY[$sid]=$ra
+	done <"$STATE"
 fi
+save_state() {
+	[ -n "$STATE" ] || return 0
+	local tmp k
+	tmp="$(mktemp "$STATE.XXXXXX")" || { echo "could not write the state file next to $STATE" >&2; return 1; }
+	TMPFILES+=("$tmp")
+	for k in "${!SEEN[@]}"; do
+		if [ -n "${LAST[$k]:-}" ] || [ "${RETRY[$k]:-0}" -gt "$NOW" ]; then
+			printf '%s %s %s\n' "$k" "${LAST[$k]:-0}" "${RETRY[$k]:-0}"
+		fi
+	done >"$tmp" && mv "$tmp" "$STATE"
+}
+
+for row in "${PROVEN[@]+"${PROVEN[@]}"}" "${UNPROVEN[@]+"${UNPROVEN[@]}"}"; do
+	read -r id _ <<<"$row"
+	SEEN[$id]=1
+done
+
+# Never-paid ones in check order: never checked first (newest first), then by oldest check.
 ORDERED=()
 if [ "${#UNPROVEN[@]}" -gt 0 ]; then
 	mapfile -t ORDERED < <(for row in "${UNPROVEN[@]}"; do
@@ -172,33 +264,50 @@ if [ "${#UNPROVEN[@]}" -gt 0 ]; then
 	done | sort -k1,1n -k2,2nr | cut -d' ' -f2-)
 fi
 
-TODO=("${PROVEN[@]+"${PROVEN[@]}"}")
-checks=0 nosession=0 deferred=0
-for row in "${ORDERED[@]+"${ORDERED[@]}"}"; do
-	read -r id payer amount <<<"$row"
-	if [ "$checks" -ge "$MAX_CHECKS" ]; then deferred=$((deferred + 1)); continue; fi
-	checks=$((checks + 1))
-	LAST[$id]=$NOW
-	if gnokey query "auth/accounts/$payer/session/$ADDR" -remote "$REMOTE" -home "$HOME_DIR" >/dev/null 2>&1; then
-		TODO+=("$row")
-	else
-		nosession=$((nosession + 1))
+TODO=() checks=0 deferred=0 later=0 qfail=0
+declare -A SKIPS=()
+consider() { # <row> <never paid 0|1>
+	local id payer amount period why
+	read -r id payer amount period <<<"$1"
+	if [ "${RETRY[$id]:-0}" -gt "$NOW" ]; then later=$((later + 1)); return; fi
+	if [ "$2" = 1 ]; then
+		if [ "$checks" -ge "$MAX_CHECKS" ]; then deferred=$((deferred + 1)); return; fi
+		checks=$((checks + 1))
+		LAST[$id]=$NOW
 	fi
-done
-echo "checked $checks never-paid mandates on chain: $nosession without a session (skipped), $deferred left for later runs"
-if [ -n "$STATE" ]; then
-	tmp="$STATE.tmp.$$"
-	for k in "${!LAST[@]}"; do printf '%s %s\n' "$k" "${LAST[$k]}"; done >"$tmp" && mv "$tmp" "$STATE"
-fi
+	why="$(session_check "$payer" "$amount")"
+	case "$why" in
+	ok) TODO+=("$1") ;;
+	query-failed) qfail=$((qfail + 1)); echo "  could not read the session of mandate $id ($payer)" >&2 ;;
+	*) SKIPS[$why]=$((${SKIPS[$why]:-0} + 1)); echo "  skipping mandate $id ($payer): $(reason "$why")" ;;
+	esac
+}
+reason() {
+	case "$1" in
+	no-session) echo "no session for this key (never created, revoked or expired on chain)" ;;
+	scope) echo "the session is not scoped to exactly vm/exec:$REALM" ;;
+	limit) echo "the session's spend limit is below the price + $PULL_COST ugnot for fee and storage" ;;
+	budget) echo "the session's budget for this spend period is already used" ;;
+	expired) echo "the session expires within a minute" ;;
+	esac
+}
+for row in "${PROVEN[@]+"${PROVEN[@]}"}"; do consider "$row" 0; done
+for row in "${ORDERED[@]+"${ORDERED[@]}"}"; do consider "$row" 1; done
+skipped_total=0
+for k in "${!SKIPS[@]}"; do skipped_total=$((skipped_total + SKIPS[$k])); done
+echo "sessions read: $skipped_total skipped, $checks of them never paid, $deferred never-paid left for later runs, $later waiting after a refused pull"
+save_state
 
-# 2 and 4. pull
-failed=0 pulled=0 skipped=0
+# Pull. A refusal the payer caused (revoked or expired session, budget used,
+# mandate cancelled meanwhile) is recorded and is not an error; anything
+# else is.
+failed=0 refused=0 pulled=0 over=0
 for row in "${TODO[@]+"${TODO[@]}"}"; do
-	read -r id payer amount <<<"$row"
-	if [ "$pulled" -ge "$MAX_PULLS" ]; then skipped=$((skipped + 1)); continue; fi
+	read -r id payer amount period <<<"$row"
+	if [ "$pulled" -ge "$MAX_PULLS" ]; then over=$((over + 1)); continue; fi
+	pulled=$((pulled + 1))
 	if [ "$DRY" = 1 ]; then
 		echo "  would pull mandate $id: ${amount}ugnot from $payer"
-		pulled=$((pulled + 1))
 		continue
 	fi
 	echo "  pulling mandate $id: ${amount}ugnot from $payer"
@@ -209,16 +318,28 @@ for row in "${TODO[@]+"${TODO[@]}"}"; do
 	else
 		out="$(gnokey "${args[@]}" "$KEY" 2>&1)" || true
 	fi
-	pulled=$((pulled + 1))
 	if printf '%s\n' "$out" | grep -q '^OK!'; then
 		printf '%s\n' "$out" | grep -E '^(GAS USED|STORAGE DELTA|TX HASH):' | sed 's/^/    /'
+		unset 'RETRY[$id]'
+		continue
+	fi
+	RETRY[$id]=$((NOW + period))
+	msg="$(printf '%s\n' "$out" | grep -E '^Data:|panic:' | head -2 | tr '\n' ' ')"
+	if grep -qiE 'session not found|session expired|spend limit|insufficient (funds|coins)|mandate: (no active mandate|expired|too early)' <<<"$out"; then
+		refused=$((refused + 1))
+		echo "    refused (payer side, not retried before the next period): $msg"
 	else
 		failed=$((failed + 1))
-		echo "    FAILED: $(printf '%s\n' "$out" | grep -E '^Data:|panic:' | head -2 | tr '\n' ' ')"
+		echo "    FAILED: $msg"
 	fi
 done
-[ "$skipped" -gt 0 ] && echo "$skipped due mandates left for the next run (-max-pulls $MAX_PULLS)"
-if [ "$failed" -gt 0 ]; then
-	echo "$failed pulls failed" >&2
+save_state
+[ "$over" -gt 0 ] && echo "$over due mandates left for the next run (-max-pulls $MAX_PULLS)"
+echo "done: $pulled pulled or tried, $refused refused on the payer's side, $failed failed"
+# Exit status: 0 when every due mandate was pulled or skipped for a reason on
+# the payer's side (a revoked session is not an error); 1 when a pull failed
+# for another reason or a session could not be read.
+if [ "$failed" -gt 0 ] || [ "$qfail" -gt 0 ]; then
+	echo "$failed pulls failed, $qfail sessions could not be read" >&2
 	exit 1
 fi

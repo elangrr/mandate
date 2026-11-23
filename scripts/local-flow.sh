@@ -111,6 +111,13 @@ pub_of() { gnokey list -home "$KB" | awk -v k="$1" '$2 == k { for (i = 1; i <= N
 
 step "throwaway keys in a temporary keybase"
 for k in payer payee stranger coll coll2 coll3 coll4 coll5; do newkey "$k"; done
+# step 13: 32 supporters with the sessions the pages tell them to create, and
+# four whose sessions the collector must skip or whose pull the chain refuses.
+SUPPORTERS=() FUND=()
+for i in $(seq 1 32) low wide revoked poor; do newkey "s$i"; SUPPORTERS+=("s$i"); done
+for k in "${SUPPORTERS[@]}"; do
+	if [ "$k" = spoor ]; then FUND+=(-add-account "$(addr_of "$k")=1000000ugnot"); else FUND+=(-add-account "$(addr_of "$k")=10000000ugnot"); fi
+done
 PAYER="$(addr_of payer)" PAYEE="$(addr_of payee)" STRANGER="$(addr_of stranger)"
 COLL="$(addr_of coll)" COLL2="$(addr_of coll2)" COLL3="$(addr_of coll3)" COLL4="$(addr_of coll4)" COLL5="$(addr_of coll5)"
 GPUB="$(pub_of coll)" GPUB2="$(pub_of coll2)" GPUB3="$(pub_of coll3)" GPUB4="$(pub_of coll4)" GPUB5="$(pub_of coll5)"
@@ -170,7 +177,7 @@ func Render(string) string { return "other" }
 EOF
 sed 's/^package other/package sub/; s/^\/\/ Package other/\/\/ Package sub/' "$TMP/extra/other/other.gno" >"$TMP/extra/sub/sub.gno"
 (cd "$REPO" && GNOHOME="$TMP/gnohome" exec gnodev local -chain-id dev -extra-root "$TMP/extra" \
-	-add-account "$PAYER=100000000ugnot" -add-account "$PAYEE=100000000ugnot" -add-account "$STRANGER=100000000ugnot" \
+	-add-account "$PAYER=100000000ugnot" -add-account "$PAYEE=100000000ugnot" -add-account "$STRANGER=100000000ugnot" "${FUND[@]}" \
 	-node-rpc-listener "$RPC" -web-listener "127.0.0.1:$WEB_PORT" -no-watch -empty-blocks >"$TMP/gnodev.log" 2>&1) &
 GNODEV_PID=$!
 for _ in $(seq 90); do
@@ -269,7 +276,7 @@ expect_ok "session for coll4 (chain expiry in 30 min)" payer $(session_args "$GP
 expect_ok "Subscribe plan 4 with coll4, realm expiry in ~100 s" payer call -pkgpath "$REALM" -func Subscribe -args 4 -args "$COLL4" -args "$EXP4" "${CALL[@]}"
 # coll5: scoped to the whole namespace, wider than this realm.
 expect_ok "session for coll5 (vm/exec:gno.land/r/mandate_dev, too wide)" payer $(session_args "$GPUB5" "vm/exec:gno.land/r/mandate_dev" 5000000ugnot 60 "$EXP")
-eq "IsActive(payer, 1)" "(true bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 1)")"
+eq "HasMandate(payer, 1)" "(true bool)" "$(qeval "$REALM.HasMandate(address(\"$PAYER\"), 1)")"
 
 step "1b. what subscribing costs a new payer and a returning payer whose key is already known"
 expect_ok "stranger subscribes to plan 1 with coll (new payer, known key)" stranger call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL" -args "$EXP" "${CALL[@]}"
@@ -324,7 +331,7 @@ expect_fail "Offer through the session" "cannot be called with a session key" co
 expect_fail "Subscribe through the session" "cannot be called with a session key" coll2 call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL5" -args "$EXP" -master "$PAYER" "${PULLGAS[@]}"
 expect_fail "Cancel through the session" "cannot be called with a session key" coll2 call -pkgpath "$REALM" -func Cancel -args "$PAYER" -args "$COLL2" -master "$PAYER" "${PULLGAS[@]}"
 expect_fail "SetCollectorKey through the session" "cannot be called with a session key" coll2 call -pkgpath "$REALM" -func SetCollectorKey -args "$GPUB5" -master "$PAYER" "${PULLGAS[@]}"
-eq "IsActive(payer, 2) still true" "(true bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 2)")"
+eq "HasMandate(payer, 2) still true" "(true bool)" "$(qeval "$REALM.HasMandate(address(\"$PAYER\"), 2)")"
 if tx coll2 session create -pubkey "$GPUB5" -allow-paths '*' -expires-at 30m -master "$PAYER" "${CALL[@]}"; then fail "a session created a session"; fi
 grep -q "cannot be used with session" "$OUT" || fail "unexpected: $(head -3 "$OUT")"
 echo "  ok: a session cannot create a session (gnokey refuses; the chain always denies auth/* from sessions)"
@@ -350,10 +357,11 @@ out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -p
 echo "$out" | sed 's/^/    /'
 grep -q "would pull mandate 1: 1000000ugnot from $PAYER" <<<"$out" || fail "dry run does not list mandate 1 as due"
 p="$(bal "$PAYER")" e="$(bal "$PAYEE")"
-grep -q "checked 1 never-paid mandates on chain: 1 without a session" <<<"$out" || fail "collector did not skip the junk mandate"
+grep -q "skipping mandate [0-9]* ($STRANGER): no session for this key" <<<"$out" || fail "collector did not skip the junk mandate"
 grep -q "would pull mandate" <<<"$(grep "$STRANGER" <<<"$out")" && fail "collector would pull the junk mandate"
 [ -s "$TMP/collect.state" ] || fail "collector state file not written"
 echo "  ok: the junk mandate was checked on chain (no session) and skipped; state kept in a file"
+STATE_LINES_BEFORE="$(wc -l <"$TMP/collect.state")"
 out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -state "$TMP/collect.state" -insecure-password-stdin)"
 echo "$out" | sed 's/^/    /'
 grep -q "pulling mandate 1" <<<"$out" || fail "collector did not pull mandate 1"
@@ -389,7 +397,7 @@ wait_until "$((T2 + 62))"
 if tx coll2 $(pull coll2 2000000) && grep -q '^OK!' "$OUT"; then fail "pull after revoke succeeded"; fi
 echo "  ok: pull after revoke refused: $(grep -E '^Data:' "$OUT" | head -1)"
 eq "payer unchanged" "$p" "$(bal "$PAYER")"
-eq "IsActive(payer, 2) is still true: the realm cannot see a revoke" "(true bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 2)")"
+eq "HasMandate(payer, 2) is still true: the realm cannot see a revoke" "(true bool)" "$(qeval "$REALM.HasMandate(address(\"$PAYER\"), 2)")"
 if gnokey query "auth/accounts/$PAYER/session/$COLL2" -remote "$RPC" -home "$KB" >"$OUT" 2>&1; then fail "session query still finds the revoked session"; fi
 grep -q SessionNotFound "$OUT" || fail "unexpected: $(head -3 "$OUT")"
 echo "  ok: auth/accounts/<payer>/session/<coll2> says SessionNotFound: the check an off-chain service must add"
@@ -398,7 +406,7 @@ step "7. expiry"
 wait_until "$((T0 + 105))"
 expect_fail "coll3: chain session expired" "session expired" coll3 $(pull coll3 500000)
 expect_fail "coll4: realm terms expired" "mandate: expired" coll4 $(pull coll4 500000)
-eq "IsActive(payer, 4)" "(false bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 4)")"
+eq "HasMandate(payer, 4)" "(false bool)" "$(qeval "$REALM.HasMandate(address(\"$PAYER\"), 4)")"
 
 step "8. hostile payee: burn the allowance as fees"
 wait_until "$((T2 + 62))"
@@ -473,7 +481,62 @@ wait_until "$(($(now) + 62))"
 expect_ok "payer cancels plan 1's mandate (own key)" payer call -pkgpath "$REALM" -func Cancel -args "$PAYER" -args "$COLL" "${CALL[@]}"
 note_gas "Cancel"
 expect_fail "pull after cancel" "no active mandate" coll $(pull coll 1000000)
-eq "IsActive(payer, 1)" "(false bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 1)")"
+eq "HasMandate(payer, 1)" "(false bool)" "$(qeval "$REALM.HasMandate(address(\"$PAYER\"), 1)")"
+
+step "13. the collector: 32 supporters with the pages' sessions, and the sessions it must skip"
+# The pages tell a supporter to create the session with spend limit = price +
+# FeeAllowance, spend period = the plan's period, scope = exactly the realm.
+ALLOW="$(qeval "$REALM.FeeAllowance" | sed -n 's/^(\([0-9]*\) int64)$/\1/p')"
+[[ "$ALLOW" =~ ^[0-9]+$ ]] || fail "could not read FeeAllowance"
+expect_ok "Offer plan 5 (1 GNOT / 60 s)" payee call -pkgpath "$REALM" -func Offer -args "Supporter E" -args 1000000 -args 60 "${CALL[@]}"
+EXP13="$(($(now) + 1800))"
+for k in "${SUPPORTERS[@]}"; do
+	a="$(addr_of "$k")" scope="vm/exec:$REALM" limit="$((1000000 + ALLOW))ugnot"
+	case "$k" in
+	slow) limit="1010000ugnot" ;;          # below price + fee + storage bound
+	swide) scope="vm/exec:gno.land/r/mandate_dev" ;; # wider than the realm
+	esac
+	tx "$k" $(session_args "$GPUB" "$scope" "$limit" 60 "$EXP13") || true
+	grep -q '^OK!' "$OUT" || fail "session for $k: $(grep -E '^Data:' "$OUT" | head -1)"
+	tx "$k" call -pkgpath "$REALM" -func Subscribe -args 5 -args "$COLL" -args "$EXP13" "${CALL[@]}" || true
+	grep -q '^OK!' "$OUT" || fail "Subscribe for $k: $(grep -E '^Data:' "$OUT" | head -1)"
+done
+echo "  ok: ${#SUPPORTERS[@]} supporters subscribed to plan 5 with sessions for coll"
+expect_ok "srevoked revokes its session" srevoked session revoke -pubkey "$GPUB" "${CALL[@]}"
+for f in "$TMP"/collect.state.*; do [ -e "$f" ] && fail "a temporary state file was left: $f"; done
+echo "999999 1 1" >>"$TMP/collect.state" # a mandate that no longer exists: must be pruned
+set +e
+out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -state "$TMP/collect.state" -max-checks 100 -insecure-password-stdin 2>&1)"
+rc=$?
+set -e
+echo "$out" | sed 's/^/    /'
+eq "collector exit status (a revoked session, a refused pull and junk are not errors)" 0 "$rc"
+for k in $(seq 1 32); do
+	pt="$(qeval "$REALM.PaidThrough(address(\"$(addr_of "s$k")\"), 5)" | sed -n 's/^(\([0-9]*\) int64)$/\1/p')"
+	[ "${pt:-0}" -gt "$(now)" ] || fail "supporter s$k (position $k) was not paid: PaidThrough=$pt"
+done
+echo "  ok: all 32 first payments went through, the 32nd included (PaidThrough > now for each)"
+grep -q "skipping mandate [0-9]* ($(addr_of slow)): the session's spend limit is below" <<<"$out" || fail "low spend limit not skipped"
+grep -q "skipping mandate [0-9]* ($(addr_of swide)): the session is not scoped to exactly" <<<"$out" || fail "wide session not skipped"
+grep -q "skipping mandate [0-9]* ($(addr_of srevoked)): no session for this key" <<<"$out" || fail "revoked session not skipped"
+grep -q "refused (payer side, not retried before the next period)" <<<"$out" || fail "the poor supporter's pull was not reported as refused"
+grep -q "done: 33 pulled or tried, 1 refused on the payer's side, 0 failed" <<<"$out" || fail "unexpected collector summary"
+echo "  ok: low limit, wide scope and revoked sessions skipped with their reason; the refused pull recorded"
+info="$(qeval "$REALM.GetPlan(5)")"
+grep -q "PaidThisPeriod.*32\|(32 int)" <<<"$info" || echo "    note: GetPlan(5): $(tr '\n' ' ' <<<"$info" | cut -c1-300)"
+p="$(bal "$(addr_of spoor)")"
+set +e
+out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -state "$TMP/collect.state" -insecure-password-stdin 2>&1)"
+rc=$?
+set -e
+echo "$out" | sed 's/^/    /'
+eq "second run exit status" 0 "$rc"
+grep -q "1 waiting after a refused pull" <<<"$out" || fail "the refused pull was retried in the same period"
+eq "the poor supporter paid nothing more" "$p" "$(bal "$(addr_of spoor)")"
+grep -q '^999999 ' "$TMP/collect.state" && fail "state file kept a mandate that is no longer listed"
+for f in "$TMP"/collect.state.*; do [ -e "$f" ] && fail "a temporary state file was left: $f"; done
+echo "  ok: state file pruned to listed mandates ($(wc -l <"$TMP/collect.state") lines), no temporary file left"
+eq "realm balance" 0 "$(bal "$REALM_ADDR")"
 
 step "pages in gnoweb"
 page="$(curl -s "http://127.0.0.1:$WEB_PORT/r/mandate_dev/mandate:plan/1")"
