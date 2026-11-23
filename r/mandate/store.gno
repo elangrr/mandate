@@ -1,7 +1,5 @@
 package mandate
 
-import "crypto/sha256"
-
 // chunkSize is the number of entries per chunk of a mandateList.
 const chunkSize = 32
 
@@ -16,6 +14,7 @@ type mandateList struct {
 	N      int
 	first  []*Mandate      // entries 0 .. chunkSize-1
 	chunks []*mandateChunk // entries chunkSize .. N-1, chunkSize per chunk
+	last   *mandateChunk   // chunks[len(chunks)-1], so an append never reads chunks
 }
 
 type mandateChunk struct {
@@ -27,10 +26,10 @@ func (l *mandateList) add(m *Mandate) {
 	case l.N < chunkSize:
 		l.first = append(l.first, m)
 	case l.N%chunkSize == 0:
-		l.chunks = append(l.chunks, &mandateChunk{items: []*Mandate{m}})
+		l.last = &mandateChunk{items: []*Mandate{m}}
+		l.chunks = append(l.chunks, l.last)
 	default:
-		c := l.chunks[len(l.chunks)-1]
-		c.items = append(c.items, m)
+		l.last.items = append(l.last.items, m)
 	}
 	l.N++
 }
@@ -55,52 +54,117 @@ func (l *mandateList) page(page int) ([]*Mandate, bool) {
 	return out, more
 }
 
-// payerBucket returns the map that holds one payer's lookup entries,
-// creating it on first use. The bucket is chosen by the first byte of
-// sha256(payer), so all entries of one payer share one bucket and a lookup
-// or a subscribe reads and writes a single small map.
-func payerBucket(payer address) map[string]*Mandate {
-	h := sha256.Sum256([]byte(payer.String()))
-	i := int(h[0])
-	if buckets[i] == nil {
-		buckets[i] = map[string]*Mandate{}
+// MaxActivePerPayer is how many active mandates one payer may hold: the
+// chain allows 16 sessions per account (tm2 std.MaxSessionsPerAccount), and
+// each active mandate needs its own session key.
+const MaxActivePerPayer = MaxSessionsPerWallet
+
+// Payer holds one payer's own lookups and nothing of anyone else's, so no
+// address can make another payer's Pull, Subscribe or Cancel read or write
+// more than the payer tree's depth.
+//   - Active: the payer's current mandates, at most MaxActivePerPayer that
+//     are not expired. Cancel removes an entry at once; an expired entry is
+//     removed at the payer's next Subscribe. Each entry carries the session
+//     address and plan id inline, so finding a mandate reads one small array
+//     and loads only the mandate found.
+//   - Head: the payer's newest mandate; older ones follow through
+//     prevOfPayer (history, walked only by free reads).
+type Payer struct {
+	Active []activeRef
+	Head   *Mandate
+}
+
+type activeRef struct {
+	Session address
+	PlanID  uint64
+	M       *Mandate
+}
+
+func payerOf(a address) *Payer {
+	v := payers.Get(a.String())
+	if v == nil {
+		return nil
 	}
-	return buckets[i]
+	return v.(*Payer)
 }
 
-// peekBucket is payerBucket for reads: it never creates a bucket, so free
-// reads never write.
-func peekBucket(payer address) map[string]*Mandate {
-	h := sha256.Sum256([]byte(payer.String()))
-	return buckets[int(h[0])]
-}
-
-// Bucket keys. Addresses have a fixed length, so the keys cannot collide.
-func headKey(payer address) string              { return "h" + payer.String() }
-func sessionKey(payer, sess address) string     { return "s" + payer.String() + sess.String() }
-func planKey(payer address, plan uint64) string { return "p" + payer.String() + utoa(plan) }
-
-// mandateBySession returns the payer's latest mandate for this session key.
-func mandateBySession(payer, sess address) *Mandate {
-	if bk := peekBucket(payer); bk != nil {
-		return bk[sessionKey(payer, sess)]
+// activeBySession returns the payer's active-list mandate for this session
+// key (it may have expired but not been pruned yet), or nil.
+func activeBySession(payer, sess address) *Mandate {
+	if pr := payerOf(payer); pr != nil {
+		for _, r := range pr.Active {
+			if r.Session == sess {
+				return r.M
+			}
+		}
 	}
 	return nil
 }
 
-// mandateByPayerPlan returns the payer's latest mandate for the plan.
-func mandateByPayerPlan(payer address, planID uint64) *Mandate {
-	if bk := peekBucket(payer); bk != nil {
-		return bk[planKey(payer, planID)]
+// activeByPlan returns the payer's active-list mandate for the plan, or nil.
+func activeByPlan(payer address, planID uint64) *Mandate {
+	if pr := payerOf(payer); pr != nil {
+		for _, r := range pr.Active {
+			if r.PlanID == planID {
+				return r.M
+			}
+		}
 	}
 	return nil
 }
 
-// payerHead returns the payer's newest mandate; older ones follow through
-// prevOfPayer.
+// removeActive drops m's entry from the payer's active list.
+func (pr *Payer) removeActive(m *Mandate) {
+	out := make([]activeRef, 0, len(pr.Active))
+	for _, r := range pr.Active {
+		if r.M != m {
+			out = append(out, r)
+		}
+	}
+	pr.Active = out
+}
+
+// pruneExpired drops expired entries; it reports whether it changed anything.
+func (pr *Payer) pruneExpired(now int64) {
+	keep := 0
+	for _, r := range pr.Active {
+		if r.M.isActive(now) {
+			keep++
+		}
+	}
+	if keep == len(pr.Active) {
+		return
+	}
+	out := make([]activeRef, 0, keep)
+	for _, r := range pr.Active {
+		if r.M.isActive(now) {
+			out = append(out, r)
+		}
+	}
+	pr.Active = out
+}
+
+// latestBySession returns the payer's newest mandate for this session key,
+// active or not, walking the history when it is no longer active. For free
+// reads only.
+func latestBySession(payer, sess address) *Mandate {
+	if m := activeBySession(payer, sess); m != nil {
+		return m
+	}
+	if pr := payerOf(payer); pr != nil {
+		for m := pr.Head; m != nil; m = m.prevOfPayer {
+			if m.Session == sess {
+				return m
+			}
+		}
+	}
+	return nil
+}
+
+// payerHead returns the payer's newest mandate.
 func payerHead(payer address) *Mandate {
-	if bk := peekBucket(payer); bk != nil {
-		return bk[headKey(payer)]
+	if pr := payerOf(payer); pr != nil {
+		return pr.Head
 	}
 	return nil
 }

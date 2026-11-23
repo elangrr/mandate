@@ -142,13 +142,12 @@ type Payee struct {
 }
 
 // State. Storage is paid per byte (100 ugnot) and gas mostly per object
-// read or written, so the layout keeps both small (docs/design.md has the
-// numbers):
-//   - plans, payees and collector keys are rare and live in avl trees;
-//   - per-payer lookups (by session key, by plan, history head) live in
-//     256 hash buckets of small maps: a new payer adds map entries of about
-//     200 bytes instead of avl nodes of about 1 KB, and a lookup reads one
-//     bucket;
+// read or written, so the layout keeps both small, and nothing one address
+// does can grow what another payer's calls read (docs/design.md):
+//   - plans, payees, payers and collector keys live in avl trees: an
+//     attacker can only add depth (log2 of the number of entries);
+//   - each payer's lookups live in that payer's own record (Payer), capped
+//     at MaxActivePerPayer active mandates;
 //   - per-plan and per-key lists are chunked (see mandateList), so adding
 //     one entry rewrites one small chunk however long the list is;
 //   - a payer's history is a linked list through the mandates, walked only
@@ -161,9 +160,8 @@ var (
 
 	plans  = avl.NewTree() // pad(planID) -> *Plan
 	payees = avl.NewTree() // payee -> *Payee
+	payers = avl.NewTree() // payer -> *Payer
 	keys   = avl.NewTree() // session address -> *KeyIndex
-
-	buckets [256]map[string]*Mandate // see payerBucket
 
 	totalPulls int64
 	totalPaid  int64
@@ -275,14 +273,25 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 	if expiresAtUnix > now+MaxTerm {
 		panic("mandate: expiry is more than " + itoa(MaxTerm/86400) + " days away")
 	}
-	if m := mandateBySession(payer, sessionAddr); m != nil && m.isActive(now) {
-		panic("mandate: this session already has an active mandate; cancel it first or use another session key")
-	}
-	if m := mandateByPayerPlan(payer, planID); m != nil && m.isActive(now) {
-		panic("mandate: you already have an active mandate for this plan")
+	pr := payerOf(payer)
+	if pr != nil {
+		pr.pruneExpired(now) // an expired mandate's lookups go when its payer subscribes again
+		for _, r := range pr.Active {
+			if r.Session == sessionAddr {
+				panic("mandate: this session already has an active mandate; cancel it first or use another session key")
+			}
+			if r.PlanID == planID {
+				panic("mandate: you already have an active mandate for this plan")
+			}
+		}
+		if len(pr.Active) >= MaxActivePerPayer {
+			panic("mandate: at most " + strconv.Itoa(MaxActivePerPayer) + " active mandates per wallet (the chain allows " + strconv.Itoa(MaxSessionsPerWallet) + " sessions); cancel one first")
+		}
+	} else {
+		pr = &Payer{}
+		payers.Set(payer.String(), pr)
 	}
 	nextMandateID++
-	bk := payerBucket(payer)
 	m := &Mandate{
 		ID:          nextMandateID,
 		Payer:       payer,
@@ -291,11 +300,10 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		ExpiresAt:   expiresAtUnix,
 		NextPullAt:  now,
 		plan:        p,
-		prevOfPayer: bk[headKey(payer)],
+		prevOfPayer: pr.Head,
 	}
-	bk[headKey(payer)] = m
-	bk[sessionKey(payer, sessionAddr)] = m
-	bk[planKey(payer, planID)] = m
+	pr.Head = m
+	pr.Active = append(pr.Active, activeRef{Session: sessionAddr, PlanID: planID, M: m})
 	ki := keyIndexOf(sessionAddr)
 	if ki == nil {
 		ki = &KeyIndex{}
@@ -343,12 +351,9 @@ func checkPull(isSession bool, sess address, paths []string, payer address, sent
 	if len(paths) != 1 || paths[0] != "vm/exec:"+realmPath {
 		panic("mandate: the session must be scoped to exactly vm/exec:" + realmPath)
 	}
-	m := mandateBySession(payer, sess)
+	m := activeBySession(payer, sess)
 	if m == nil {
-		panic("mandate: no mandate for this session")
-	}
-	if m.CancelledAt != 0 {
-		panic("mandate: cancelled")
+		panic("mandate: no active mandate for this session (never recorded, cancelled or replaced)")
 	}
 	if now >= m.ExpiresAt {
 		panic("mandate: expired")
@@ -393,17 +398,15 @@ func recordPull(m *Mandate, p *Plan, now int64) {
 // already makes every later Pull fail.
 func Cancel(cur realm, payer address, sessionAddr address) {
 	caller := directCaller(cur)
-	m := mandateBySession(payer, sessionAddr)
+	m := activeBySession(payer, sessionAddr)
 	if m == nil {
-		panic("mandate: no such mandate")
+		panic("mandate: no active mandate for this payer and session (never recorded, already cancelled or replaced)")
 	}
 	p := m.plan
 	if caller != m.Payer && caller != p.Payee {
 		panic("mandate: only the payer or the payee can cancel")
 	}
-	if m.CancelledAt != 0 {
-		panic("mandate: already cancelled")
-	}
+	payerOf(payer).removeActive(m)
 	m.CancelledAt = time.Now().Unix()
 	m.CancelledBy = caller
 	p.Cancelled++

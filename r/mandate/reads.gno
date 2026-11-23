@@ -75,7 +75,7 @@ func GetPlan(id uint64) (PlanInfo, bool) {
 
 // MandateOf returns the latest mandate of payer for this session address.
 func MandateOf(payer, sessionAddr address) (MandateInfo, bool) {
-	m := mandateBySession(payer, sessionAddr)
+	m := latestBySession(payer, sessionAddr)
 	if m == nil {
 		return MandateInfo{}, false
 	}
@@ -89,14 +89,14 @@ func MandateOf(payer, sessionAddr address) (MandateInfo, bool) {
 // SessionQuery in MandateInfo), and should rely on a successful Pull, not on
 // this flag, as proof of payment.
 func IsActive(payer address, planID uint64) bool {
-	m := mandateByPayerPlan(payer, planID)
+	m := activeByPlan(payer, planID)
 	return m != nil && m.isActive(time.Now().Unix())
 }
 
 // NextPullAt returns when the next pull of payer's active mandate for the
 // plan is allowed (unix seconds), or 0 if there is no active mandate.
 func NextPullAt(payer address, planID uint64) int64 {
-	m := mandateByPayerPlan(payer, planID)
+	m := activeByPlan(payer, planID)
 	if m == nil || !m.isActive(time.Now().Unix()) {
 		return 0
 	}

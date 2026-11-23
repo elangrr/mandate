@@ -59,10 +59,7 @@ func now() int64 { return time.Now().Unix() }
 
 func resetState() {
 	nextPlanID, nextMandateID = 0, 0
-	plans, payees, keys = avl.NewTree(), avl.NewTree(), avl.NewTree()
-	for i := range buckets {
-		buckets[i] = nil
-	}
+	plans, payees, payers, keys = avl.NewTree(), avl.NewTree(), avl.NewTree(), avl.NewTree()
 	totalPulls, totalPaid = 0, 0
 }
 
@@ -128,16 +125,18 @@ func snapshot() string {
 		b.WriteString(k + ":" + itoa(int64(v.(*KeyIndex).Mandates.N)) + ",")
 		return false
 	})
-	for i, bk := range buckets {
-		if bk == nil {
-			continue
+	payers.Iterate("", "", func(k string, v any) bool {
+		pr := v.(*Payer)
+		b.WriteString("\npayer " + k + " active:")
+		for _, r := range pr.Active {
+			b.WriteString(" " + r.Session.String() + "/" + utoa(r.PlanID) + "=" + utoa(r.M.ID))
 		}
-		b.WriteString("\nbucket " + itoa(int64(i)) + ":")
-		for k, m := range bk {
-			b.WriteString(" " + k + "=" + utoa(m.ID)) // map order is fixed by insertion in gno
+		if pr.Head != nil {
+			b.WriteString(" head=" + utoa(pr.Head.ID))
 		}
-	}
-	for _, t := range []*avl.Tree{plans, payees, keys} {
+		return false
+	})
+	for _, t := range []*avl.Tree{plans, payees, payers, keys} {
 		b.WriteString(itoa(int64(t.Size())) + ",")
 	}
 	return b.String()
@@ -389,8 +388,8 @@ func TestPullRules(cur realm, t *testing.T) {
 		panicsLocal(t, cur, "scoped to exactly", func() { checkPull(true, sessA, bad, payer, ugnot(2*gnot), now()) }, "paths "+strings.Join(bad, ","))
 	}
 	// No mandate for this payer and session.
-	panicsLocal(t, cur, "no mandate", func() { checkPull(true, sessB, paths, payer, ugnot(2*gnot), now()) }, "other session")
-	panicsLocal(t, cur, "no mandate", func() { checkPull(true, sessA, paths, payer2, ugnot(2*gnot), now()) }, "other payer")
+	panicsLocal(t, cur, "no active mandate", func() { checkPull(true, sessB, paths, payer, ugnot(2*gnot), now()) }, "other session")
+	panicsLocal(t, cur, "no active mandate", func() { checkPull(true, sessA, paths, payer2, ugnot(2*gnot), now()) }, "other payer")
 	// Wrong coins.
 	for _, c := range []chain.Coins{
 		nil,
@@ -492,8 +491,8 @@ func TestCancel(cur realm, t *testing.T) {
 		{stranger, payer, sessA, "only the payer or the payee"},
 		{payee2, payer, sessA, "only the payer or the payee"},
 		{sessA, payer, sessA, "only the payer or the payee"},
-		{payer, payer, sessB, "no such mandate"},
-		{payer, payer2, sessA, "no such mandate"},
+		{payer, payer, sessB, "no active mandate"},
+		{payer, payer2, sessA, "no active mandate"},
 	} {
 		testing.SetOriginSend(nil)
 		testing.SetRealm(testing.NewUserRealm(c.who))

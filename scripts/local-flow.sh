@@ -463,7 +463,7 @@ step "12. cancel by the payer"
 wait_until "$(($(now) + 62))"
 expect_ok "payer cancels plan 1's mandate (own key)" payer call -pkgpath "$REALM" -func Cancel -args "$PAYER" -args "$COLL" "${CALL[@]}"
 note_gas "Cancel"
-expect_fail "pull after cancel" "mandate: cancelled" coll $(pull coll 1000000)
+expect_fail "pull after cancel" "no active mandate" coll $(pull coll 1000000)
 eq "IsActive(payer, 1)" "(false bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 1)")"
 
 step "pages in gnoweb"

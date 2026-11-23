@@ -104,8 +104,8 @@ func TestPayerHistory(cur realm, t *testing.T) {
 	has(t, renders(t, "payer/"+payer.String()+"?page=2"), "## Mandate "+utoa(ids[0])+":", "oldest on page 2")
 }
 
-// Free reads never create storage: looking up an unknown payer leaves every
-// bucket empty.
+// Free reads never create storage: looking up an unknown payer creates no
+// payer record.
 func TestReadsDoNotWrite(cur realm, t *testing.T) {
 	resetState()
 	MandateOf(payer, sessA)
@@ -113,11 +113,7 @@ func TestReadsDoNotWrite(cur realm, t *testing.T) {
 	NextPullAt(payer, 1)
 	MandatesOf(payer, 1)
 	renders(t, "payer/"+payer.String())
-	for i, bk := range buckets {
-		if bk != nil {
-			t.Fatalf("bucket %d was created by a read", i)
-		}
-	}
+	uassert.Equal(t, 0, payers.Size())
 }
 
 // Paid, LastPullAt and SessionPubKey are derived, not stored.
@@ -164,4 +160,106 @@ func TestActiveCountLimit(cur realm, t *testing.T) {
 	last := testutils.TestAddress("md_a" + itoa(int64(activeCountLimit+2)))
 	cancel(cur, last, last, sessA)
 	has(t, renders(t, "plan/"+utoa(pid)), "at least 199 active supporters", "capped count after a cancel")
+}
+
+// At most MaxActivePerPayer active mandates; a cancelled or expired one
+// frees its slot.
+func TestActiveCap(cur realm, t *testing.T) {
+	resetState()
+	var pids []uint64
+	for i := 0; i < MaxActivePerPayer+2; i++ {
+		pids = append(pids, offer(cur, payee, "Plan "+itoa(int64(i)), gnot, MinPeriod))
+	}
+	sess := func(i int) address { return testutils.TestAddress("md_cap" + itoa(int64(i))) }
+	for i := 0; i < MaxActivePerPayer; i++ {
+		subscribe(cur, payer, pids[i], sess(i), now()+day)
+	}
+	uassert.Equal(t, MaxActivePerPayer, len(payerOf(payer).Active))
+	testing.SetOriginSend(nil)
+	testing.SetRealm(testing.NewUserRealm(payer))
+	fails(t, cur, "at most 16 active mandates", func() { Subscribe(cross(cur), pids[16], sess(16), now()+day) }, "17th mandate")
+	// a cancel frees a slot
+	cancel(cur, payer, payer, sess(0))
+	uassert.Equal(t, MaxActivePerPayer-1, len(payerOf(payer).Active))
+	subscribe(cur, payer, pids[16], sess(16), now()+day)
+	// an expired mandate frees its slot at the next Subscribe
+	resetState()
+	pids = nil
+	for i := 0; i < MaxActivePerPayer+1; i++ {
+		pids = append(pids, offer(cur, payee, "Plan "+itoa(int64(i)), gnot, MinPeriod))
+	}
+	subscribe(cur, payer, pids[0], sess(0), now()+120)
+	for i := 1; i < MaxActivePerPayer; i++ {
+		subscribe(cur, payer, pids[i], sess(i), now()+day)
+	}
+	testing.SetOriginSend(nil)
+	testing.SetRealm(testing.NewUserRealm(payer))
+	fails(t, cur, "at most 16 active", func() { Subscribe(cross(cur), pids[16], sess(16), now()+day) }, "17th before expiry")
+	testing.SkipHeights(24) // 120 s: mandate 1 expires
+	subscribe(cur, payer, pids[16], sess(16), now()+day)
+	uassert.Equal(t, MaxActivePerPayer, len(payerOf(payer).Active))
+	for _, r := range payerOf(payer).Active {
+		uassert.True(t, r.Session != sess(0), "expired entry pruned")
+	}
+}
+
+// What the reads return for cancelled and expired mandates (documented in
+// docs/design.md): MandateOf still returns the newest mandate for that payer
+// and session with its status; IsActive is false; NextPullAt is 0; Pull and
+// Cancel find no active mandate.
+func TestInactiveReads(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
+	pid2 := offer(cur, payee, "Plan 2", gnot, MinPeriod)
+	subscribe(cur, payer, pid, sessA, now()+day)
+	subscribe(cur, payer, pid2, sessB, now()+120)
+	cancel(cur, payer, payer, sessA)
+	m, ok := MandateOf(payer, sessA)
+	uassert.True(t, ok)
+	uassert.Equal(t, "cancelled", m.Status)
+	uassert.False(t, IsActive(payer, pid))
+	uassert.Equal(t, int64(0), NextPullAt(payer, pid))
+	panicsLocal(t, cur, "no active mandate", func() { checkPull(true, sessA, []string{selfPaths}, payer, ugnot(gnot), now()) }, "pull cancelled")
+	testing.SetOriginSend(nil)
+	testing.SetRealm(testing.NewUserRealm(payer))
+	fails(t, cur, "no active mandate", func() { Cancel(cross(cur), payer, sessA) }, "cancel twice")
+	uassert.Equal(t, 1, len(payerOf(payer).Active)) // the cancel removed its entry
+	// expired: entry kept until the next Subscribe; reads say expired
+	testing.SkipHeights(24)
+	m, _ = MandateOf(payer, sessB)
+	uassert.Equal(t, "expired", m.Status)
+	uassert.False(t, IsActive(payer, pid2))
+	uassert.Equal(t, int64(0), NextPullAt(payer, pid2))
+	panicsLocal(t, cur, "mandate: expired", func() { checkPull(true, sessB, []string{selfPaths}, payer, ugnot(gnot), now()) }, "pull expired")
+	subscribe(cur, payer, pid, sessA, now()+day) // prunes the expired entry
+	uassert.Equal(t, 1, len(payerOf(payer).Active))
+	m, _ = MandateOf(payer, sessB) // still found through the history
+	uassert.Equal(t, "expired", m.Status)
+	uassert.Equal(t, 3, len(MandatesOf(payer, 1)))
+}
+
+// Nothing another address does changes a payer's own record: an attacker's
+// subscribe/cancel loop leaves the victim's Payer exactly as it was.
+func TestPayerIsolation(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
+	pid2 := offer(cur, payee, "Plan 2", gnot, MinPeriod)
+	subscribe(cur, payer, pid, sessA, now()+day)
+	victim := func() string {
+		pr := payerOf(payer)
+		s := utoa(pr.Head.ID) + ":"
+		for _, r := range pr.Active {
+			s += r.Session.String() + "/" + utoa(r.PlanID) + "=" + utoa(r.M.ID) + ","
+		}
+		return s
+	}
+	before := victim()
+	for i := 0; i < 40; i++ {
+		s := testutils.TestAddress("md_junk" + itoa(int64(i)))
+		subscribe(cur, stranger, pid2, s, now()+day)
+		cancel(cur, stranger, stranger, s)
+	}
+	uassert.Equal(t, before, victim())
+	uassert.Equal(t, 0, len(payerOf(stranger).Active)) // cancels left nothing behind
+	uassert.Equal(t, 40, len(MandatesOf(stranger, 1))+len(MandatesOf(stranger, 2)))
 }
