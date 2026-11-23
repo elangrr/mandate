@@ -276,8 +276,8 @@ func TestTitleCharacters(cur realm, t *testing.T) {
 }
 
 // PaidThrough moves only with a successful payment: never before the first
-// one, payment time + period after each, and 0 once the mandate is
-// cancelled. IsPaidUp is now < PaidThrough, exclusive at the boundary.
+// one, payment time + period after each, and the paid time is kept after a
+// cancel until it runs out. IsPaidUp is now < PaidThrough, exclusive at the boundary.
 func TestPaidThrough(cur realm, t *testing.T) {
 	resetState()
 	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
@@ -306,9 +306,11 @@ func TestPaidThrough(cur realm, t *testing.T) {
 	uassert.Equal(t, t1+MinPeriod, PaidThrough(payer, pid))
 
 	cancel(cur, payer, payer, sessA)
-	uassert.Equal(t, int64(0), PaidThrough(payer, pid), "cancelled")
-	uassert.False(t, IsPaidUp(payer, pid))
+	uassert.Equal(t, t1+MinPeriod, PaidThrough(payer, pid), "cancelled: the paid period is still the payer's")
+	uassert.True(t, IsPaidUp(payer, pid))
 	uassert.False(t, HasMandate(payer, pid))
+	testing.SkipHeights(MinPeriod / 5)
+	uassert.False(t, IsPaidUp(payer, pid), "the kept time runs out")
 }
 
 func TestSetCollectorKey(cur realm, t *testing.T) {

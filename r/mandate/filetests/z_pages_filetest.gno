@@ -73,11 +73,11 @@ func main(cur realm) {
 // Built on [gno.land](https://gno.land) · source: not published yet
 //
 // ==== Render("plan/1")
-// # Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5
+// # Plan #1: Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5
 //
 // **1 GNOT every week** to [g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5)
 //
-// Plan 1 · published 2009-02-13 23:31 UTC · 0 supporters paid in the current period (since 2009-02-12 00:00 UTC), 0 in the one before · 0 payments, 0 GNOT in total · last payment: never
+// Plan 1 · published 2009-02-13 23:31 UTC · 0 payments in the current period (since 2009-02-12 00:00 UTC), 0 in the one before · 0 payments, 0 GNOT in total · last payment: never
 //
 // Plans never change. New terms are published as a new plan.
 //
@@ -94,27 +94,27 @@ func main(cur realm) {
 // 1. Create the session (your own key; it cannot be done with a session):
 //
 // ```
-// gnokey maketx session create -pubkey gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 1100000ugnot -spend-period 604800 -expires-at 1266103890 -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx session create -pubkey gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 1100000ugnot -spend-period 604800 -expires-at 1266103890 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
 // 2. Record the terms here:
 //
 // ```
-// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 1 -args g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh -args 1266103890 -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 1 -args g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh -args 1266103890 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// The first payment is collected right after, then one every week. Your page at `/r/mandate_dev/mandate:payer/<your address>` shows how to stop.
+// The first payment is collected right after, then one every week. If you paid for this plan before and that period has not ended (you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends: time you paid for is never charged twice. Your page at `/r/mandate_dev/mandate:payer/<your address>` shows how to stop.
 //
 // ---
 //
 // Built on [gno.land](https://gno.land) · source: not published yet
 //
 // ==== Render("plan/2")
-// # Demo | one minute
+// # Plan #2: Demo | one minute
 //
 // **0.25 GNOT every minute** to [g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5) (a test plan: the period is under a day)
 //
-// Plan 2 · published 2009-02-13 23:31 UTC · 0 supporters paid in the current period (since 2009-02-13 23:31 UTC), 0 in the one before · 0 payments, 0 GNOT in total · last payment: never
+// Plan 2 · published 2009-02-13 23:31 UTC · 0 payments in the current period (since 2009-02-13 23:31 UTC), 0 in the one before · 0 payments, 0 GNOT in total · last payment: never
 //
 // Plans never change. New terms are published as a new plan.
 //
@@ -131,16 +131,16 @@ func main(cur realm) {
 // 1. Create the session (your own key; it cannot be done with a session):
 //
 // ```
-// gnokey maketx session create -pubkey gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 350000ugnot -spend-period 60 -expires-at 1266103890 -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx session create -pubkey gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 350000ugnot -spend-period 60 -expires-at 1266103890 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
 // 2. Record the terms here:
 //
 // ```
-// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 2 -args g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh -args 1266103890 -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 2 -args g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh -args 1266103890 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// The first payment is collected right after, then one every minute. Your page at `/r/mandate_dev/mandate:payer/<your address>` shows how to stop.
+// The first payment is collected right after, then one every minute. If you paid for this plan before and that period has not ended (you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends: time you paid for is never charged twice. Your page at `/r/mandate_dev/mandate:payer/<your address>` shows how to stop.
 //
 // ---
 //
@@ -151,7 +151,7 @@ func main(cur realm) {
 //
 // Each mandate lets one creator's collector key pull a fixed amount once per period. To stop one completely, run both commands shown under it: **revoke** removes the session on chain (no pull can be signed any more) and **cancel** ends the mandate here. Revoke alone already stops every payment.
 //
-// ## Mandate 1: [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1)
+// ## Mandate 1: [plan #1 Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1)
 //
 // - Status here: **active** (if you revoked the session on chain, no payment can be taken)
 // - Price: 1 GNOT every week to [g1jg8mtu…sqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5)
@@ -162,13 +162,13 @@ func main(cur realm) {
 // Revoke the session (your own key):
 //
 // ```
-// gnokey maketx session revoke -pubkey gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx session revoke -pubkey gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
 // Cancel the mandate (your own key):
 //
 // ```
-// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Cancel -args g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj -args g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Cancel -args g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj -args g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
 //
@@ -181,7 +181,7 @@ func main(cur realm) {
 //
 // Each mandate lets one creator's collector key pull a fixed amount once per period. To stop one completely, run both commands shown under it: **revoke** removes the session on chain (no pull can be signed any more) and **cancel** ends the mandate here. Revoke alone already stops every payment.
 //
-// ## Mandate 2: [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1)
+// ## Mandate 2: [plan #1 Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1)
 //
 // - Status here: **cancelled**
 // - Price: 1 GNOT every week to [g1jg8mtu…sqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5)
@@ -204,10 +204,10 @@ func main(cur realm) {
 //
 // ## Plans
 //
-// | Plan | Price | Paid this / last period | Payments | Last payment |
+// | Plan | Price | Payments this / last period | All payments | Last payment |
 // |---|---|---|---|---|
-// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | 0 / 0 | 0 | never |
-// | [Demo \| one minute](/r/mandate_dev/mandate:plan/2) | 0.25 GNOT every minute | 0 / 0 | 0 | never |
+// | [#1 Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | 0 / 0 | 0 | never |
+// | [#2 Demo \| one minute](/r/mandate_dev/mandate:plan/2) | 0.25 GNOT every minute | 0 / 0 | 0 | never |
 //
 // ---
 //
@@ -223,13 +223,13 @@ func main(cur realm) {
 // 1. Publish a plan with your own key: a title (one line, at most 80 characters, no invisible formatting characters: direction controls and zero-width characters, the joiner included, are refused, so emoji joined into one, such as families, cannot be used), the amount (at least 0.1 GNOT) and the period (60 seconds to 366 days). Plans cannot be changed.
 //
 // ```
-// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Offer -args "TITLE" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Offer -args "TITLE" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
 // 2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key:
 //
 // ```
-// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
 // 3. Collect each payment when it is due, signed with the collector key on behalf of the supporter. Only the exact price is accepted, at most once per period. The fee counts against the supporter's fee allowance, so keep it small:
@@ -245,8 +245,8 @@ func main(cur realm) {
 // Open a plan's page: it shows the two exact commands, with the creator's collector key, the spend limit (price plus 0.1 GNOT for fees) and the period filled in. The general form:
 //
 // ```
-// gnokey maketx session create -pubkey COLLECTOR_GPUB -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit PRICE_PLUS_100000ugnot -spend-period PERIOD_SECONDS -expires-at UNIX_TIME -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
-// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args PLAN_ID -args COLLECTOR_ADDRESS -args UNIX_TIME -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx session create -pubkey COLLECTOR_GPUB -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit PRICE_PLUS_100000ugnot -spend-period PERIOD_SECONDS -expires-at UNIX_TIME -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args PLAN_ID -args COLLECTOR_ADDRESS -args UNIX_TIME -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
 // Use the same UNIX_TIME for both, at most 366 days ahead. The session must allow exactly `vm/exec:gno.land/r/mandate_dev/mandate` and nothing else, or Pull refuses it.
@@ -256,13 +256,13 @@ func main(cur realm) {
 // Do both, with your own key. Your page (`/r/mandate_dev/mandate:payer/YOUR_ADDRESS`) shows them filled in.
 //
 // ```
-// gnokey maketx session revoke -pubkey COLLECTOR_GPUB -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
-// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Cancel -args YOUR_ADDRESS -args COLLECTOR_ADDRESS -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx session revoke -pubkey COLLECTOR_GPUB -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
+// gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Cancel -args YOUR_ADDRESS -args COLLECTOR_ADDRESS -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
 // ## Checking a supporter (free)
 //
-// To decide whether to deliver something to a supporter, ask how long their latest payment covers them: `PaidThrough` returns a unix time (0 if they never paid or cancelled); deliver while now is before it. Do not rely on a mandate merely existing: anyone can record one without paying. A realm cannot see a session revoked on chain either, but a revoked supporter stops paying, so `PaidThrough` stops moving and runs out within one period. The second query shows the chain's view of the session.
+// To decide whether to deliver something to a supporter, ask how long their latest payment covers them: `PaidThrough` returns a unix time (0 if they never paid); deliver while now is before it. Paid time stays the supporter's after a cancel or an expiry. Do not rely on a mandate merely existing: anyone can record one without paying. A realm cannot see a session revoked on chain either, but a revoked supporter stops paying, so `PaidThrough` stops moving and runs out within one period. It runs out at the due time and moves on only when the creator's collector takes the next payment, so allow a grace equal to how often the collector runs (an hour, say) before treating someone as lapsed. The second query shows the chain's view of the session.
 //
 // ```
 // gnokey query vm/qeval -data 'gno.land/r/mandate_dev/mandate.PaidThrough(address("PAYER"), PLAN_ID)' -remote https://rpc.onyx.testnets.gno.land:443

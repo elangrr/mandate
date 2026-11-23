@@ -22,9 +22,11 @@
 //     allowance as gas fees (it goes to the network, not to the payee).
 //   - The chain allows at most 16 sessions per account, so a wallet can have
 //     at most 16 mandates at a time.
-//   - A realm cannot see an on-chain session revoke. IsActive reports the
-//     realm's view (not cancelled, not expired); an off-chain checker must
-//     also query auth/accounts/<payer>/session/<session address>.
+//   - A realm cannot see an on-chain session revoke. A service deciding
+//     whether someone has paid reads PaidThrough, which moves only when a
+//     payment succeeds; HasMandate is only the realm's view (recorded, not
+//     cancelled, not expired), and the chain's own view of the session is
+//     the free query auth/accounts/<payer>/session/<session address>.
 //   - A session scoped to vm/exec:<this realm> also allows every realm under
 //     this path (the chain's scope match is prefix-based). Nothing must ever
 //     be deployed under a sub-path of this realm. Pull also refuses any
@@ -77,11 +79,11 @@ const (
 	// wanted is at least the current gas price (1 ugnot per 1,000 gas on
 	// Onyx, raised by the chain when blocks are full), and counts the Pull's
 	// storage deposit against the same limit. With the pages' 20M gas wanted
-	// the minimum fee is 20,000 ugnot. A mandate's first pull also adds it to
-	// the plan's paid-once list: up to 446 bytes (44,600 ugnot) when that
-	// starts a new array, as for a plan's first paying supporter. So the
-	// allowance covers a gas price up to 2.7x Onyx's current one on such a
-	// pull, and about 5x on every other pull.
+	// the minimum fee is 20,000 ugnot. A Pull creates no object: a first
+	// payment adds at most 78 bytes measured (7,800 ugnot at 100 ugnot per
+	// byte), later ones nothing. So the worst pull costs about 28,000 ugnot
+	// and the allowance covers a gas price up to about 4.5x Onyx's current
+	// one (docs/design.md, "Pull's budget").
 	FeeAllowance int64 = 100_000
 	// MaxTitleLen is the longest plan title, in characters.
 	MaxTitleLen = 80
@@ -106,8 +108,10 @@ type Plan struct {
 	LastPullAt int64     // unix seconds, 0 = never
 
 	// Payments per period window: window k is [k*Period, (k+1)*Period). A
-	// mandate pulls at most once per Period, so it pays at most once in a
-	// window and these count distinct payers. Read with paidWindows, which
+	// mandate pays at most once in a window, and paid time carries over to a
+	// payer's next mandate for the plan, so a payer is not charged twice for
+	// one period; but these count payments, not distinct people (a creator
+	// can pay its own plan from a second wallet). Read with paidWindows, which
 	// turns them into counts for the window containing "now" and the one
 	// before it, so they are true at any time without a transaction.
 	payWindow int64 // index of the window of the last payment
@@ -155,9 +159,10 @@ type Payee struct {
 //   - plans, payees and payers live in avl trees: an attacker can only add
 //     depth (log2 of the number of entries);
 //   - each payer's lookups live in that payer's own record (Payer, stored
-//     by value in the tree), capped at MaxActivePerPayer active mandates;
+//     by value in the tree), capped at MaxActivePerPayer active mandates
+//     and MaxCreditsPerPayer kept credits;
 //   - each plan's supporter list holds small values in chunks (see
-//     supporterList), so adding one costs the same however long it is;
+//     fixedList), so adding one costs the same however long it is;
 //   - a payer's history is a linked list through the mandates, walked only
 //     by free reads.
 var (
@@ -297,6 +302,14 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 	} else {
 		pr = &Payer{}
 	}
+	// Time already paid for on this plan (a cancelled or expired mandate's)
+	// carries over: the first pull of the new mandate is due when it ends.
+	first := now
+	status := byte(statusUnpaid)
+	if until := pr.takeCredit(planID, now); until > now {
+		first = until
+		status = statusPaid // covered now, so listed as a supporter
+	}
 	nextMandateID++
 	m := &Mandate{
 		ID:          nextMandateID,
@@ -304,7 +317,7 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		Session:     sessionAddr,
 		CreatedAt:   now,
 		ExpiresAt:   expiresAtUnix,
-		NextPullAt:  now,
+		NextPullAt:  first,
 		Index:       p.Supporters.N,
 		plan:        p,
 		prevOfPayer: pr.Head,
@@ -312,7 +325,7 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 	pr.Head = m
 	pr.Active = append(pr.Active, activeRef{Session: sessionAddr, PlanID: planID, ID: m.ID, M: m})
 	pr.save(payer)
-	p.Supporters.add(encodeEntry(payer, m.ID, statusUnpaid))
+	p.Supporters.add(encodeEntry(payer, m.ID, status))
 	chain.Emit("Subscribed",
 		"mandate", utoa(m.ID),
 		"plan", utoa(planID),
@@ -320,6 +333,7 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		"payee", p.Payee.String(),
 		"session", sessionAddr.String(),
 		"expires", itoa(expiresAtUnix),
+		"first", itoa(first),
 	)
 	return m.ID
 }
@@ -415,10 +429,12 @@ func Cancel(cur realm, payer address, sessionAddr address) {
 	if caller != m.Payer && caller != p.Payee {
 		panic("mandate: only the payer or the payee can cancel")
 	}
+	now := time.Now().Unix()
 	pr := payerOf(payer)
 	pr.removeActive(m)
+	pr.keepCredit(p.ID, m.paidThrough(), now) // paid time stays the payer's
 	pr.save(payer)
-	m.CancelledAt = time.Now().Unix()
+	m.CancelledAt = now
 	m.CancelledBy = caller
 	p.Cancelled++
 	p.Supporters.setStatus(m.Index, statusCancelled)
@@ -444,7 +460,7 @@ func (p *Plan) countPayment(now int64) {
 	p.payWindow = w
 }
 
-// paidWindows returns how many supporters paid in the period window that
+// paidWindows returns how many payments were made in the period window that
 // contains now, and in the window before it.
 func (p *Plan) paidWindows(now int64) (current, previous int) {
 	switch now / p.Period {
@@ -476,6 +492,17 @@ func directCaller(cur realm) address {
 
 func (m *Mandate) isActive(now int64) bool {
 	return m.CancelledAt == 0 && now < m.ExpiresAt
+}
+
+// paidThrough returns until when this mandate's payments cover its payer:
+// its next pull time once it has paid, or when it started with paid time
+// carried over from an earlier mandate (its first pull is then after its
+// creation). 0 when it has never paid and carried nothing.
+func (m *Mandate) paidThrough() int64 {
+	if m.Pulls > 0 || m.NextPullAt > m.CreatedAt {
+		return m.NextPullAt
+	}
+	return 0
 }
 
 // status is the realm's view of a mandate: cancelled, expired or active.

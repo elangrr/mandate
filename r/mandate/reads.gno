@@ -19,11 +19,12 @@ type PlanInfo struct {
 	CreatedAt int64
 	Mandates  int // mandates ever created for this plan
 	Cancelled int // how many of them were cancelled
-	// PaidThisPeriod and PaidLastPeriod count the supporters who paid in the
-	// plan's current period window, which started at PeriodStart, and in the
-	// window before it. Windows are [k*Period, (k+1)*Period) in unix time; a
-	// mandate pays at most once per window. Historical facts, true at any
-	// time, whatever has expired or been cancelled since.
+	// PaidThisPeriod and PaidLastPeriod count the payments in the plan's
+	// current period window, which started at PeriodStart, and in the window
+	// before it. Windows are [k*Period, (k+1)*Period) in unix time. They count
+	// payments, not distinct people (a creator can pay its own plan from a
+	// second wallet). Historical facts, true at any time, whatever has
+	// expired or been cancelled since.
 	PaidThisPeriod int
 	PaidLastPeriod int
 	PeriodStart    int64
@@ -46,10 +47,15 @@ type MandateInfo struct {
 	ExpiresAt     int64
 	NextPullAt    int64
 	LastPullAt    int64
-	Pulls         int64
-	Paid          int64
-	CancelledAt   int64
-	CancelledBy   address
+	// PaidThrough is until when this mandate's payments, or paid time
+	// carried over from the payer's earlier mandate for the plan, cover the
+	// payer (0 if neither). A mandate that starts with carried time has its
+	// first pull at that time.
+	PaidThrough int64
+	Pulls       int64
+	Paid        int64
+	CancelledAt int64
+	CancelledBy address
 	// Status is "active", "expired" or "cancelled": the realm's view only.
 	Status string
 	// Due is true when the mandate is active and a pull is allowed now.
@@ -92,21 +98,36 @@ func MandateOf(payer, sessionAddr address) (MandateInfo, bool) {
 }
 
 // PaidThrough is the read for services that deliver something to paying
-// supporters. It returns the unix time until which payer's latest payment
-// for the plan covers them (the payment's time plus one period), or 0 when
-// they have no mandate for the plan that is still recorded (not cancelled
-// or replaced) or have never paid. Deliver while time < PaidThrough.
+// supporters. It returns the unix time until which the payer's payments for
+// the plan cover them: the latest payment's time plus one period. Paid time
+// stays the payer's when a mandate is cancelled (by either side) or
+// expires, and a new mandate for the same plan starts when it ends, so it
+// is never lost or charged twice. 0 when they never paid for the plan.
+// Deliver while now < PaidThrough.
+//
+// It turns false at the due time and moves on only when the payee's
+// collector pulls the next payment: allow a grace equal to how often the
+// collector runs (an hour, say) before treating a supporter as lapsed.
 //
 // A payment is proof; a mandate is not: anyone can record a mandate
 // without creating a session and without paying. A realm also cannot see a
 // session revoked on chain: a revoked supporter simply stops paying, so
 // PaidThrough stops moving and runs out within one period.
 func PaidThrough(payer address, planID uint64) int64 {
-	m := activeByPlan(payer, planID)
-	if m == nil || m.Pulls == 0 {
+	pr := payerOf(payer)
+	if pr == nil {
 		return 0
 	}
-	return m.NextPullAt
+	now := time.Now().Unix()
+	until := pr.creditFor(planID, now)
+	for _, r := range pr.Active {
+		if r.PlanID == planID {
+			if t := r.M.paidThrough(); t > until {
+				until = t
+			}
+		}
+	}
+	return until
 }
 
 // IsPaidUp reports whether payer's latest payment for the plan still covers
@@ -424,6 +445,7 @@ func (m *Mandate) info(now int64) MandateInfo {
 		ExpiresAt:     m.ExpiresAt,
 		NextPullAt:    m.NextPullAt,
 		LastPullAt:    m.lastPullAt(),
+		PaidThrough:   m.paidThrough(),
 		Pulls:         m.Pulls,
 		Paid:          m.Pulls * p.Amount,
 		CancelledAt:   m.CancelledAt,

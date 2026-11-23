@@ -97,6 +97,10 @@ func main(cur realm) {
 //       {
 //         "key": "expires",
 //         "value": "1234654290"
+//       },
+//       {
+//         "key": "first",
+//         "value": "1234567890"
 //       }
 //     ],
 //     "pkg_path": "gno.land/r/mandate_dev/mandate"

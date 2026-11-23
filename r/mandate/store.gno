@@ -131,10 +131,28 @@ const MaxActivePerPayer = MaxSessionsPerWallet
 //     and loads only the mandate found.
 //   - Head: the payer's newest mandate; older ones follow through
 //     prevOfPayer (history, walked only by free reads).
+//   - Credits: time the payer has paid for on a plan where they no longer
+//     have an active mandate (cancelled by either side, or expired and
+//     pruned), at most MaxCreditsPerPayer, each still in the future. A new
+//     mandate for that plan starts when the credit ends, so paid time is
+//     never lost or charged twice.
 type Payer struct {
-	Active []activeRef
-	Head   *Mandate
+	Active  []activeRef
+	Head    *Mandate
+	Credits []credit
 }
+
+// credit is paid time kept for a plan: the payer is covered until Until.
+type credit struct {
+	PlanID uint64
+	Until  int64
+}
+
+// MaxCreditsPerPayer bounds a payer's kept credits. It is reached only by a
+// payer who leaves more than 16 plans while each is still paid ahead; then
+// the credit that ends soonest gives way to a later one (that time is lost,
+// for that plan only).
+const MaxCreditsPerPayer = 16
 
 type activeRef struct {
 	Session address
@@ -193,7 +211,8 @@ func (pr *Payer) removeActive(m *Mandate) {
 	pr.Active = out
 }
 
-// pruneExpired drops expired entries; it reports whether it changed anything.
+// pruneExpired drops expired entries from the active list, keeping the
+// time each had paid for as a credit for its plan.
 func (pr *Payer) pruneExpired(now int64) {
 	keep := 0
 	for _, r := range pr.Active {
@@ -208,9 +227,91 @@ func (pr *Payer) pruneExpired(now int64) {
 	for _, r := range pr.Active {
 		if r.M.isActive(now) {
 			out = append(out, r)
+		} else {
+			pr.keepCredit(r.PlanID, r.M.paidThrough(), now)
 		}
 	}
 	pr.Active = out
+}
+
+// pruneCredits drops credits that have run out.
+func (pr *Payer) pruneCredits(now int64) {
+	keep := 0
+	for _, c := range pr.Credits {
+		if c.Until > now {
+			keep++
+		}
+	}
+	if keep == len(pr.Credits) {
+		return
+	}
+	out := make([]credit, 0, keep)
+	for _, c := range pr.Credits {
+		if c.Until > now {
+			out = append(out, c)
+		}
+	}
+	pr.Credits = out
+}
+
+// keepCredit records that the payer is paid on the plan until `until`
+// (nothing if that is not in the future). One credit per plan, the later
+// time wins. At MaxCreditsPerPayer, the credit ending soonest gives way if
+// this one ends later; otherwise this one is dropped.
+func (pr *Payer) keepCredit(planID uint64, until, now int64) {
+	if until <= now {
+		return
+	}
+	pr.pruneCredits(now)
+	// A plan has a credit only while the payer has no active mandate for it
+	// (Subscribe uses it up), so this is a guard, not a path taken today.
+	for i := range pr.Credits {
+		if pr.Credits[i].PlanID == planID {
+			if until > pr.Credits[i].Until {
+				pr.Credits[i] = credit{PlanID: planID, Until: until}
+			}
+			return
+		}
+	}
+	if len(pr.Credits) < MaxCreditsPerPayer {
+		pr.Credits = append(pr.Credits, credit{PlanID: planID, Until: until})
+		return
+	}
+	soonest := 0
+	for i := range pr.Credits {
+		if pr.Credits[i].Until < pr.Credits[soonest].Until {
+			soonest = i
+		}
+	}
+	if until > pr.Credits[soonest].Until {
+		pr.Credits[soonest] = credit{PlanID: planID, Until: until}
+	}
+}
+
+// creditFor returns until when a kept credit covers the payer on the plan,
+// or 0. For reads; it changes nothing.
+func (pr *Payer) creditFor(planID uint64, now int64) int64 {
+	for _, c := range pr.Credits {
+		if c.PlanID == planID && c.Until > now {
+			return c.Until
+		}
+	}
+	return 0
+}
+
+// takeCredit removes the plan's credit and returns until when it covered
+// the payer, or 0 if there was none still in the future.
+func (pr *Payer) takeCredit(planID uint64, now int64) int64 {
+	pr.pruneCredits(now)
+	for i, c := range pr.Credits {
+		if c.PlanID == planID {
+			out := make([]credit, 0, len(pr.Credits)-1)
+			out = append(out, pr.Credits[:i]...)
+			pr.Credits = append(out, pr.Credits[i+1:]...)
+			return c.Until
+		}
+	}
+	return 0
 }
 
 // latestBySession returns the payer's newest mandate for this session key,

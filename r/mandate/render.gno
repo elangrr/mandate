@@ -24,7 +24,7 @@ const (
 // and Onyx's store is far larger), so gas wanted keeps about 2x headroom.
 // The Pull fee counts against the session's spend limit (see FeeAllowance).
 const (
-	callGas    = "-gas-fee 100000ugnot -gas-wanted 40000000"
+	callGas    = "-gas-fee 100000ugnot -gas-wanted 60000000"
 	PullGasFee = 20_000
 	pullGas    = "-gas-fee 20000ugnot -gas-wanted 20000000"
 )
@@ -128,7 +128,7 @@ func plansWithSupporters(from int) string {
 		if current, previous := p.paidWindows(now); current+previous == 0 {
 			continue
 		}
-		t.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
+		t.WriteString("| [#" + utoa(p.ID) + " " + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
 			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + payingCell(p, now) +
 			" | " + itoa(p.Pulls) + " |\n")
 		rows++
@@ -140,7 +140,7 @@ func plansWithSupporters(from int) string {
 		}
 		b.WriteString(".\n\n")
 	} else {
-		b.WriteString("| Plan | Price | Creator | Paid this / last period | Payments |\n|---|---|---|---|---|\n")
+		b.WriteString("| Plan | Price | Creator | Payments this / last period | All payments |\n|---|---|---|---|---|\n")
 		b.WriteString(t.String() + "\n")
 	}
 	if i >= 0 {
@@ -158,9 +158,9 @@ func renderAllPlans(page int) string {
 		b.WriteString("No plans on this page.\n")
 		return b.String()
 	}
-	b.WriteString("| Plan | Price | Creator | Paid this / last period | Payments |\n|---|---|---|---|---|\n")
+	b.WriteString("| Plan | Price | Creator | Payments this / last period | All payments |\n|---|---|---|---|---|\n")
 	for _, p := range list {
-		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
+		b.WriteString("| [#" + utoa(p.ID) + " " + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
 			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + infoPayingCell(p) +
 			" | " + itoa(p.Pulls) + " |\n")
 	}
@@ -176,7 +176,7 @@ func renderPlan(id uint64, from int) string {
 	now := time.Now().Unix()
 	pe := payeeOf(p.Payee)
 	var b strings.Builder
-	b.WriteString("# " + esc(p.Title) + "\n\n")
+	b.WriteString("# Plan #" + utoa(p.ID) + ": " + esc(p.Title) + "\n\n")
 	b.WriteString("**" + price(p.Amount, p.Period) + "** to [" + p.Payee.String() + "](" + link("payee/"+p.Payee.String()) + ")")
 	if p.Period < 86400 {
 		b.WriteString(" (a test plan: the period is under a day)")
@@ -230,7 +230,8 @@ func renderPlan(id uint64, from int) string {
 	b.WriteString("2. Record the terms here:\n\n")
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func Subscribe -args " + utoa(p.ID) + " -args " + pe.CollectorAddr.String() +
 		" -args " + itoa(expires) + " " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
-	b.WriteString("The first payment is collected right after, then one every " + formatPeriod(p.Period) + ". Your page at `" + link("payer/<your address>") +
+	b.WriteString("The first payment is collected right after, then one every " + formatPeriod(p.Period) + ". If you paid for this plan before and that period has not ended " +
+		"(you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends: time you paid for is never charged twice. Your page at `" + link("payer/<your address>") +
 		"` shows how to stop.\n")
 	return b.String()
 }
@@ -245,9 +246,10 @@ func renderPayer(payer address, page int) string {
 		b.WriteString("No mandates on this page.\n")
 		return b.String()
 	}
+	now := time.Now().Unix()
 	for _, m := range list {
 		p := planOf(m.PlanID)
-		b.WriteString("## Mandate " + utoa(m.ID) + ": [" + esc(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ")\n\n")
+		b.WriteString("## Mandate " + utoa(m.ID) + ": [plan #" + utoa(p.ID) + " " + esc(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ")\n\n")
 		b.WriteString("- Status here: **" + m.Status + "**")
 		if m.Status == "active" {
 			b.WriteString(" (if you revoked the session on chain, no payment can be taken)")
@@ -256,7 +258,13 @@ func renderPayer(payer address, page int) string {
 		b.WriteString("- Session key: `" + m.Session.String() + "`\n")
 		b.WriteString("- Payments: " + itoa(m.Pulls) + ", " + formatUgnot(m.Paid) + " in total, last: " + formatTimeOrNever(m.LastPullAt) + "\n")
 		if m.Status == "active" {
-			b.WriteString("- Next payment allowed from: " + formatTime(m.NextPullAt) + " · ends: " + formatTime(m.ExpiresAt) + "\n")
+			if m.Pulls == 0 && m.PaidThrough > 0 {
+				b.WriteString("- First payment on " + formatTime(m.NextPullAt) + ": your current period is already paid (time carried over from your earlier mandate for this plan) · ends: " + formatTime(m.ExpiresAt) + "\n")
+			} else {
+				b.WriteString("- Next payment allowed from: " + formatTime(m.NextPullAt) + " · ends: " + formatTime(m.ExpiresAt) + "\n")
+			}
+		} else if m.PaidThrough > now {
+			b.WriteString("- Paid through " + formatTime(m.PaidThrough) + ": that time stays yours. A new mandate for this plan starts its payments then.\n")
 		}
 		b.WriteString("\n")
 		if m.Status != "cancelled" {
@@ -296,9 +304,9 @@ func renderPayee(payee address, page int) string {
 		b.WriteString("No plans on this page.\n")
 		return b.String()
 	}
-	b.WriteString("| Plan | Price | Paid this / last period | Payments | Last payment |\n|---|---|---|---|---|\n")
+	b.WriteString("| Plan | Price | Payments this / last period | All payments | Last payment |\n|---|---|---|---|---|\n")
 	for _, p := range list {
-		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) + " | " +
+		b.WriteString("| [#" + utoa(p.ID) + " " + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) + " | " +
 			infoPayingCell(p) + " | " + itoa(p.Pulls) + " | " + formatTimeOrNever(p.LastPullAt) + " |\n")
 	}
 	b.WriteString(pager("payee/"+payee.String(), page, len(list) == PageSize))
@@ -335,8 +343,8 @@ func renderHelp() string {
 	b.WriteString("gnokey maketx call -pkgpath " + realmPath + " -func Cancel -args YOUR_ADDRESS -args COLLECTOR_ADDRESS " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 
 	b.WriteString("## Checking a supporter (free)\n\n")
-	b.WriteString("To decide whether to deliver something to a supporter, ask how long their latest payment covers them: `PaidThrough` returns a unix time (0 if they never paid or cancelled); deliver while now is before it. ")
-	b.WriteString("Do not rely on a mandate merely existing: anyone can record one without paying. A realm cannot see a session revoked on chain either, but a revoked supporter stops paying, so `PaidThrough` stops moving and runs out within one period. The second query shows the chain's view of the session.\n\n")
+	b.WriteString("To decide whether to deliver something to a supporter, ask how long their latest payment covers them: `PaidThrough` returns a unix time (0 if they never paid); deliver while now is before it. Paid time stays the supporter's after a cancel or an expiry. ")
+	b.WriteString("Do not rely on a mandate merely existing: anyone can record one without paying. A realm cannot see a session revoked on chain either, but a revoked supporter stops paying, so `PaidThrough` stops moving and runs out within one period. It runs out at the due time and moves on only when the creator's collector takes the next payment, so allow a grace equal to how often the collector runs (an hour, say) before treating someone as lapsed. The second query shows the chain's view of the session.\n\n")
 	b.WriteString("```\ngnokey query vm/qeval -data '" + realmPath + ".PaidThrough(address(\"PAYER\"), PLAN_ID)' -remote " + Remote + "\n")
 	b.WriteString("gnokey query auth/accounts/PAYER/session/COLLECTOR_ADDRESS -remote " + Remote + "\n```\n\n")
 
@@ -352,11 +360,13 @@ func renderNotFound() string {
 	return "# Not found\n\nThere is no such page. [Back to Mandate](" + link("") + ")\n"
 }
 
-// payingText is the plan headline's count of supporters who paid.
+// payingText is the plan headline's count of payments per period. It
+// counts payments, not distinct people: a creator paying its own plan from
+// a second wallet counts too.
 func payingText(p *Plan, now int64) string {
 	current, previous := p.paidWindows(now)
 	start := now / p.Period * p.Period
-	return plural(current, "supporter", "supporters") + " paid in the current period (since " + formatTime(start) + "), " +
+	return plural(current, "payment", "payments") + " in the current period (since " + formatTime(start) + "), " +
 		strconv.Itoa(previous) + " in the one before"
 }
 
