@@ -1,0 +1,472 @@
+#!/usr/bin/env bash
+# Mandate: the whole flow with real signed transactions on a LOCAL gnodev
+# chain (chain id "dev"), including everything `gno test` cannot reach:
+# session keys, the chain's spend limit, revoke and expiry, and the transfer.
+#
+# Every step checks its result and the script stops with a non-zero exit at
+# the first mismatch. It proves:
+#    1. subscribe, then pull: payer down by amount + fee, payee up by exactly
+#       the amount, realm balance zero; the Pulled event; storage delta of
+#       the first and later pulls (later pulls must add nothing)
+#    2. a second pull in the same period is refused (by the chain's spend
+#       limit, and with a generous session by the realm's own period rule)
+#    3. a wrong amount is refused
+#    4. the session cannot send coins, call another realm, or call Offer,
+#       Subscribe, Cancel or SetCollectorKey
+#    5. a session whose allow list is wider than this realm is refused by Pull
+#    6. the collector script lists what is due (dry run) and pulls it
+#    7. chain-side expiry and realm-side expiry each stop pulls
+#    8. a hostile payee can burn at most the spend limit per period as fees
+#    9. revoke: the session can no longer sign; the realm still says active
+#       (documented), the chain's session query says not found
+#   10. the sub-path case: a session for this realm also covers a realm
+#       deployed under its path, and Pull's exact check cannot stop that
+#   11. the payee-pays-fees variant: one transaction signed by the payee
+#       (first signer, pays the fee) and the session key; payer pays exactly
+#       the amount
+#   12. cancel by the payer ends the mandate; Pull is refused after it
+#
+# How: gnodev runs the repository's realm plus two throwaway test realms
+# (gno.land/r/mandate_dev/other and gno.land/r/mandate_dev/mandate/sub) from
+# a temporary folder. Throwaway keys are created in a temporary keybase
+# (gnokey -home <mktemp dir>), funded at genesis with -add-account, and
+# deleted with everything else on exit. No mnemonic is printed or stored.
+#
+# Needs gnodev, gnokey (v1.8.0), python3, curl. Takes about 5 minutes
+# because periods are real seconds (the realm's minimum period is 60 s).
+#
+#   scripts/local-flow.sh            # log on stdout; keep files with KEEP=1
+#
+# Safety: every gnokey command passes -remote 127.0.0.1:<port> and -home
+# <temp keybase>; gnokey's own defaults (this machine's node on 26657, the
+# default key folder) are never used. CHAIN_ID must be "dev".
+set -euo pipefail
+
+CHAIN_ID="${CHAIN_ID:-dev}"
+if [ "$CHAIN_ID" != "dev" ]; then
+	echo "refusing to run: this script is for the local gnodev chain (dev) only, not $CHAIN_ID" >&2
+	exit 1
+fi
+REPO="$(cd "$(dirname "$0")/.." && pwd)"
+RPC_PORT="${RPC_PORT:-36657}"
+WEB_PORT="${WEB_PORT:-38888}"
+RPC="127.0.0.1:$RPC_PORT"
+REALM="gno.land/r/mandate_dev/mandate"
+OTHER="gno.land/r/mandate_dev/other"
+SUB="gno.land/r/mandate_dev/mandate/sub"
+TMP="$(mktemp -d)"
+KB="$TMP/kb"
+PW="throwaway-local-only"
+GNODEV_PID=""
+
+cleanup() {
+	local rc=$?
+	if [ -n "$GNODEV_PID" ]; then
+		kill "$GNODEV_PID" 2>/dev/null || true
+		wait "$GNODEV_PID" 2>/dev/null || true
+	fi
+	if [ "${KEEP:-0}" = 1 ]; then
+		rm -rf "$KB" # never keep keys
+		echo "kept logs in $TMP (keybase deleted)"
+	else
+		rm -rf "$TMP"
+	fi
+	if [ $rc -eq 0 ]; then
+		echo "cleanup done: node stopped, throwaway keys and files deleted"
+	else
+		echo "FAILED (exit $rc); node stopped, throwaway keys deleted" >&2
+	fi
+}
+trap cleanup EXIT
+
+for c in gnodev gnokey python3 curl; do
+	command -v "$c" >/dev/null || { echo "$c not found on PATH" >&2; exit 1; }
+done
+if curl -s --max-time 1 "http://$RPC/status" >/dev/null 2>&1; then
+	echo "port $RPC_PORT is busy; stop the other node first" >&2
+	exit 1
+fi
+
+step() { printf '\n## %s\n' "$*"; }
+fail() {
+	echo "MISMATCH: $*" >&2
+	exit 1
+}
+eq() { # eq <what> <expected> <actual>
+	if [ "$2" != "$3" ]; then fail "$1: expected '$2', got '$3'"; fi
+	echo "  ok: $1 = $3"
+}
+
+# ---- keys -------------------------------------------------------------------
+newkey() {
+	printf '%s\n%s\n' "$PW" "$PW" | gnokey add -home "$KB" -insecure-password-stdin -nobackup -quiet "$1" >/dev/null 2>&1 ||
+		fail "could not create throwaway key $1"
+}
+addr_of() { gnokey list -home "$KB" | awk -v k="$1" '$2 == k { for (i = 1; i <= NF; i++) if ($i == "addr:") print $(i + 1) }'; }
+pub_of() { gnokey list -home "$KB" | awk -v k="$1" '$2 == k { for (i = 1; i <= NF; i++) if ($i == "pub:") { p = $(i + 1); sub(/,$/, "", p); print p } }'; }
+
+step "throwaway keys in a temporary keybase"
+for k in payer payee stranger coll coll2 coll3 coll4 coll5; do newkey "$k"; done
+PAYER="$(addr_of payer)" PAYEE="$(addr_of payee)" STRANGER="$(addr_of stranger)"
+COLL="$(addr_of coll)" COLL2="$(addr_of coll2)" COLL3="$(addr_of coll3)" COLL4="$(addr_of coll4)" COLL5="$(addr_of coll5)"
+GPUB="$(pub_of coll)" GPUB2="$(pub_of coll2)" GPUB3="$(pub_of coll3)" GPUB4="$(pub_of coll4)" GPUB5="$(pub_of coll5)"
+echo "  payer $PAYER, payee $PAYEE, collector keys $COLL $COLL2 $COLL3 $COLL4 $COLL5 (all held by the payee)"
+
+# The realm's own address: first 20 bytes of sha256("pkgPath:" + path), bech32 "g".
+pkg_addr() {
+	python3 - "$1" <<'PY'
+import hashlib, sys
+CH = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
+def polymod(v):
+    g = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3]
+    c = 1
+    for x in v:
+        b = c >> 25
+        c = (c & 0x1ffffff) << 5 ^ x
+        for i in range(5):
+            c ^= g[i] if (b >> i) & 1 else 0
+    return c
+def bits(data):
+    acc, n, out = 0, 0, []
+    for b in data:
+        acc = (acc << 8) | b; n += 8
+        while n >= 5:
+            n -= 5; out.append((acc >> n) & 31)
+    if n: out.append((acc << (5 - n)) & 31)
+    return out
+hrp = "g"
+d = bits(hashlib.sha256(("pkgPath:" + sys.argv[1]).encode()).digest()[:20])
+e = [ord(x) >> 5 for x in hrp] + [0] + [ord(x) & 31 for x in hrp]
+m = polymod(e + d + [0] * 6) ^ 1
+print(hrp + "1" + "".join(CH[x] for x in d + [(m >> 5 * (5 - i)) & 31 for i in range(6)]))
+PY
+}
+eq "address derivation check (spike realm)" g1m5xtkrxuwggnlll5m5heuzrvwhwpusj3m8f3ez "$(pkg_addr gno.land/r/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5/mandate)"
+REALM_ADDR="$(pkg_addr "$REALM")"
+SUB_ADDR="$(pkg_addr "$SUB")"
+
+# ---- node ---------------------------------------------------------------------
+step "start gnodev (chain id dev) with the realm and two test realms"
+mkdir -p "$TMP/extra/other" "$TMP/extra/sub" "$TMP/gnohome"
+touch "$TMP/extra/gnowork.toml"
+printf 'module = "%s"\ngno = "0.9"\n' "$OTHER" >"$TMP/extra/other/gnomod.toml"
+printf 'module = "%s"\ngno = "0.9"\n' "$SUB" >"$TMP/extra/sub/gnomod.toml"
+cat >"$TMP/extra/other/other.gno" <<'EOF'
+// Package other is a throwaway realm for the local flow: it keeps any coins
+// sent with Tip. A session scoped to the mandate realm must not reach it.
+package other
+
+import "chain/runtime/unsafe"
+
+var got int64
+
+func Tip(cur realm) { got += unsafe.OriginSend().AmountOf("ugnot") }
+
+func Render(string) string { return "other" }
+EOF
+sed 's/^package other/package sub/; s/^\/\/ Package other/\/\/ Package sub/' "$TMP/extra/other/other.gno" >"$TMP/extra/sub/sub.gno"
+(cd "$REPO" && GNOHOME="$TMP/gnohome" exec gnodev local -chain-id dev -extra-root "$TMP/extra" \
+	-add-account "$PAYER=100000000ugnot" -add-account "$PAYEE=100000000ugnot" -add-account "$STRANGER=100000000ugnot" \
+	-node-rpc-listener "$RPC" -web-listener "127.0.0.1:$WEB_PORT" -no-watch -empty-blocks >"$TMP/gnodev.log" 2>&1) &
+GNODEV_PID=$!
+for _ in $(seq 90); do
+	if gnokey query vm/qeval -data "$REALM.Totals()" -remote "$RPC" -home "$KB" >/dev/null 2>&1; then break; fi
+	kill -0 "$GNODEV_PID" 2>/dev/null || fail "gnodev exited: $(tail -5 "$TMP/gnodev.log")"
+	sleep 1
+done
+status="$(curl -s "http://$RPC/status")"
+eq "chain id" dev "$(printf '%s' "$status" | python3 -c 'import json,sys; print(json.load(sys.stdin)["result"]["node_info"]["network"])')"
+
+# ---- helpers ------------------------------------------------------------------
+bal() {
+	local d
+	d="$(gnokey query "bank/balances/$1" -remote "$RPC" -home "$KB" | sed -n 's/^data: "\([0-9]*\)ugnot"$/\1/p')"
+	echo "${d:-0}"
+}
+qeval() { gnokey query vm/qeval -data "$1" -remote "$RPC" -home "$KB" | sed -n '/^data: /,$p' | sed 's/^data: //'; }
+now() { date +%s; }
+
+OUT="$TMP/out.txt"
+# tx <signer> <maketx args...>: sign with the throwaway key and broadcast.
+tx() {
+	local signer="$1"
+	shift
+	if printf '%s\n' "$PW" | gnokey maketx "$@" -broadcast -chainid dev -remote "$RPC" -home "$KB" -insecure-password-stdin "$signer" >"$OUT" 2>&1; then
+		return 0
+	fi
+	return 1
+}
+show() { grep -E '^(GAS USED|STORAGE DELTA|STORAGE FEE|TOTAL TX COST):' "$OUT" | sed 's/^/    /' || true; }
+expect_ok() { # expect_ok <what> <tx args...>
+	local what="$1"
+	shift
+	tx "$@" || true
+	grep -q '^OK!' "$OUT" || fail "$what: expected success, got: $(grep -E '^Data:|panic:' "$OUT" | head -3 | tr '\n' ' ')"
+	echo "  ok: $what"
+	show
+	realm_zero
+}
+expect_fail() { # expect_fail <what> <substring> <tx args...>
+	local what="$1" want="$2"
+	shift 2
+	if tx "$@" && grep -q '^OK!' "$OUT"; then fail "$what: expected a refusal, but it succeeded"; fi
+	grep -qF -- "$want" "$OUT" || fail "$what: expected '$want' in: $(grep -E '^Data:|panic:|Error' "$OUT" | head -3 | tr '\n' ' ')"
+	echo "  ok: $what refused ($want)"
+	grep -E '^GAS USED:' "$OUT" | sed 's/^/    /' || true
+	realm_zero
+}
+realm_zero() { [ "$(bal "$REALM_ADDR")" = 0 ] || fail "the realm holds $(bal "$REALM_ADDR")ugnot"; }
+gas_used() { sed -n 's/^GAS USED: *\([0-9]*\)$/\1/p' "$OUT"; }
+storage_delta() { local d; d="$(sed -n 's/^STORAGE DELTA: *\(-\{0,1\}[0-9]*\) bytes$/\1/p' "$OUT")"; echo "${d:-0}"; }
+
+CALL=(-gas-fee 100000ugnot -gas-wanted 30000000)
+PULLGAS=(-gas-fee 20000ugnot -gas-wanted 20000000)
+pull() { # pull <session key> <amount> -> tx args for a Pull on behalf of the payer
+	echo "call -pkgpath $REALM -func Pull -send ${2}ugnot -master $PAYER ${PULLGAS[*]}"
+}
+session_args() { # <gpub> <allow paths> <spend limit> <period> <expires-at>
+	echo "session create -pubkey $1 -allow-paths $2 -spend-limit $3 -spend-period $4 -expires-at $5 ${CALL[*]}"
+}
+
+GAS_REPORT="$TMP/gas.txt"
+: >"$GAS_REPORT"
+note_gas() { echo "$1: gas $(gas_used), storage delta $(storage_delta) bytes" | tee -a "$GAS_REPORT" | sed 's/^/    /'; }
+
+# ---- 1. plans, collector key, sessions, subscribe ---------------------------
+step "1. payee publishes plans and a collector key"
+expect_ok "Offer plan 1 (1 GNOT / 60 s)" payee call -pkgpath "$REALM" -func Offer -args "Supporter A" -args 1000000 -args 60 "${CALL[@]}"
+note_gas "Offer"
+expect_ok "Offer plan 2 (2 GNOT / 60 s)" payee call -pkgpath "$REALM" -func Offer -args "Supporter B" -args 2000000 -args 60 "${CALL[@]}"
+expect_ok "Offer plan 3 (0.5 GNOT / 60 s)" payee call -pkgpath "$REALM" -func Offer -args "Supporter C" -args 500000 -args 60 "${CALL[@]}"
+expect_ok "Offer plan 4 (0.5 GNOT / 60 s)" payee call -pkgpath "$REALM" -func Offer -args "Supporter D" -args 500000 -args 60 "${CALL[@]}"
+expect_ok "SetCollectorKey" payee call -pkgpath "$REALM" -func SetCollectorKey -args "$GPUB" "${CALL[@]}"
+note_gas "SetCollectorKey"
+eq "collector address derived by the realm" "$COLL" "$(gnokey query vm/qrender -data "$REALM:payee/$PAYEE" -remote "$RPC" -home "$KB" | sed -n 's/^Collector key: `\(g1[a-z0-9]*\)`.*/\1/p')"
+
+step "the payer creates sessions (own key) and subscribes"
+T0="$(now)"
+EXP="$((T0 + 1800))"
+# coll: the normal case, spend limit = 1 GNOT + 0.05 GNOT fee allowance.
+expect_ok "session for coll (1.05 GNOT / 60 s, exactly this realm)" payer $(session_args "$GPUB" "vm/exec:$REALM" 1050000ugnot 60 "$EXP")
+note_gas "session create"
+expect_ok "Subscribe plan 1 with coll" payer call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL" -args "$EXP" "${CALL[@]}"
+note_gas "Subscribe"
+# coll2: a far too generous chain limit, so the realm's own rules show.
+expect_ok "session for coll2 (50 GNOT / 60 s)" payer $(session_args "$GPUB2" "vm/exec:$REALM" 50000000ugnot 60 "$EXP")
+expect_ok "Subscribe plan 2 with coll2" payer call -pkgpath "$REALM" -func Subscribe -args 2 -args "$COLL2" -args "$EXP" "${CALL[@]}"
+# coll3: the chain session expires soon, the realm terms do not.
+EXP3="$((T0 + 100))"
+expect_ok "session for coll3 (chain expiry in ~100 s)" payer $(session_args "$GPUB3" "vm/exec:$REALM" 600000ugnot 60 "$EXP3")
+expect_ok "Subscribe plan 3 with coll3" payer call -pkgpath "$REALM" -func Subscribe -args 3 -args "$COLL3" -args "$EXP" "${CALL[@]}"
+# coll4: the chain session runs on, the realm terms expire soon.
+EXP4="$((T0 + 100))"
+expect_ok "session for coll4 (chain expiry in 30 min)" payer $(session_args "$GPUB4" "vm/exec:$REALM" 600000ugnot 60 "$EXP")
+expect_ok "Subscribe plan 4 with coll4, realm expiry in ~100 s" payer call -pkgpath "$REALM" -func Subscribe -args 4 -args "$COLL4" -args "$EXP4" "${CALL[@]}"
+# coll5: scoped to the whole namespace, wider than this realm.
+expect_ok "session for coll5 (vm/exec:gno.land/r/mandate_dev, too wide)" payer $(session_args "$GPUB5" "vm/exec:gno.land/r/mandate_dev" 5000000ugnot 60 "$EXP")
+eq "IsActive(payer, 1)" "(true bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 1)")"
+
+# ---- first pull -------------------------------------------------------------------
+step "first pull: coll signs for the payer, exactly 1 GNOT"
+p0="$(bal "$PAYER")" e0="$(bal "$PAYEE")"
+expect_ok "Pull plan 1" coll $(pull coll 1000000)
+note_gas "Pull (first)"
+FIRST_DELTA="$(storage_delta)"
+p1="$(bal "$PAYER")" e1="$(bal "$PAYEE")"
+eq "payee gain" 1000000 "$((e1 - e0))"
+eq "payer loss = amount + fee + storage" "$((1000000 + 20000 + FIRST_DELTA * 100))" "$((p0 - p1))"
+eq "realm balance" 0 "$(bal "$REALM_ADDR")"
+grep -q '"type":"Pulled"' "$OUT" || fail "no Pulled event"
+python3 - "$OUT" "$PAYER" "$PAYEE" "$REALM_ADDR" <<'PY' || fail "Pulled event or transfers do not match"
+import json, sys
+out, payer, payee, realm = sys.argv[1:]
+line = [l for l in open(out) if l.startswith("EVENTS:")][0]
+ev = json.loads(line.split(":", 1)[1])
+transfers = [(e.get("from"), e.get("to"), e["coins"][0]["amount"]) for e in ev if "coins" in e]
+assert transfers == [(payer, realm, 1000000), (realm, payee, 1000000)], transfers
+pulled = [e for e in ev if e.get("type") == "Pulled"][0]
+attrs = {a["key"]: a["value"] for a in pulled["attrs"]}
+assert attrs["payer"] == payer and attrs["payee"] == payee and attrs["amount"] == "1000000" and attrs["plan"] == "1", attrs
+print("  ok: transfers payer->realm->payee of 1000000 and the Pulled event", attrs)
+PY
+T1="$(now)"
+
+step "2. second pull in the same period"
+p1="$(bal "$PAYER")"
+expect_fail "second pull with the tight session (chain spend limit, before any charge)" "spend limit" coll $(pull coll 1000000)
+eq "payer unchanged" "$p1" "$(bal "$PAYER")"
+expect_ok "first pull of plan 2 (coll2)" coll2 $(pull coll2 2000000)
+expect_fail "second pull of plan 2 with the generous session (realm period rule)" "mandate: too early" coll2 $(pull coll2 2000000)
+
+expect_ok "first pull of plan 3 (coll3)" coll3 $(pull coll3 500000)
+expect_ok "first pull of plan 4 (coll4)" coll4 $(pull coll4 500000)
+
+step "4. the session cannot be used for anything else"
+p="$(bal "$PAYER")"
+expect_fail "bank send with coll2" "not permitted by session" coll2 send -to "$STRANGER" -send 1000000ugnot -master "$PAYER" "${PULLGAS[@]}"
+expect_fail "call to another realm with coll2" "not permitted by session" coll2 call -pkgpath "$OTHER" -func Tip -send 1000000ugnot -master "$PAYER" "${PULLGAS[@]}"
+eq "payer unchanged by chain-refused calls" "$p" "$(bal "$PAYER")"
+expect_fail "Offer through the session" "cannot be called with a session key" coll2 call -pkgpath "$REALM" -func Offer -args x -args 1000000 -args 60 -master "$PAYER" "${PULLGAS[@]}"
+expect_fail "Subscribe through the session" "cannot be called with a session key" coll2 call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL5" -args "$EXP" -master "$PAYER" "${PULLGAS[@]}"
+expect_fail "Cancel through the session" "cannot be called with a session key" coll2 call -pkgpath "$REALM" -func Cancel -args "$PAYER" -args "$COLL2" -master "$PAYER" "${PULLGAS[@]}"
+expect_fail "SetCollectorKey through the session" "cannot be called with a session key" coll2 call -pkgpath "$REALM" -func SetCollectorKey -args "$GPUB5" -master "$PAYER" "${PULLGAS[@]}"
+eq "IsActive(payer, 2) still true" "(true bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 2)")"
+if tx coll2 session create -pubkey "$GPUB5" -allow-paths '*' -expires-at 30m -master "$PAYER" "${CALL[@]}"; then fail "a session created a session"; fi
+grep -q "cannot be used with session" "$OUT" || fail "unexpected: $(head -3 "$OUT")"
+echo "  ok: a session cannot create a session (gnokey refuses; the chain always denies auth/* from sessions)"
+
+step "5. a session wider than this realm is refused by Pull"
+expect_fail "Pull with coll5 (scope vm/exec:gno.land/r/mandate_dev)" "the session must be scoped to exactly" coll5 $(pull coll5 1000000)
+expect_ok "coll5 can call another realm in that namespace: why the payer page insists on the exact scope" coll5 call -pkgpath "$OTHER" -func Tip -send 100000ugnot -master "$PAYER" "${PULLGAS[@]}"
+
+# ---- the next period ---------------------------------------------------------------
+wait_until() { local t="$1"; local d=$((t - $(now))); if [ "$d" -gt 0 ]; then echo "  (waiting ${d}s for block time to pass $t)"; sleep "$d"; fi; }
+step "6. next period: the collector script (dry run, then for real)"
+wait_until "$((T1 + 62))"
+if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -realm "$REALM" -chainid dev 2>&1)"; then fail "collector ran without -remote"; fi
+grep -q "missing -remote" <<<"$out" || fail "unexpected: $out"
+echo "  ok: the collector refuses to run without -remote"
+if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -remote "$RPC" -realm "$REALM" -chainid onyx-1 2>&1)"; then fail "collector accepted onyx-1 with a local remote"; fi
+echo "  ok: the collector refuses onyx-1 with a non-Onyx remote"
+if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -remote "$RPC" -realm "$REALM" -chainid gnoland1 2>&1)"; then fail "collector accepted another chain id"; fi
+echo "  ok: the collector refuses any other chain id"
+out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -remote "$RPC" -chainid dev -realm "$REALM" -dry-run -insecure-password-stdin)"
+echo "$out" | sed 's/^/    /'
+grep -q "would pull mandate 1: 1000000ugnot from $PAYER" <<<"$out" || fail "dry run does not list mandate 1 as due"
+p="$(bal "$PAYER")" e="$(bal "$PAYEE")"
+out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -remote "$RPC" -chainid dev -realm "$REALM" -insecure-password-stdin)"
+echo "$out" | sed 's/^/    /'
+grep -q "pulling mandate 1" <<<"$out" || fail "collector did not pull mandate 1"
+SECOND_DELTA="$(sed -n 's/^ *STORAGE DELTA: *\(-\{0,1\}[0-9]*\) bytes$/\1/p' <<<"$out")"
+SECOND_DELTA="${SECOND_DELTA:-0}"
+eq "payee gain from the collector's pull" 1000000 "$(($(bal "$PAYEE") - e))"
+eq "payer loss (amount + fee, no storage)" 1020000 "$((p - $(bal "$PAYER")))"
+eq "storage delta of the second pull of a mandate" 0 "$SECOND_DELTA"
+echo "first pull storage delta: $FIRST_DELTA bytes; second pull: $SECOND_DELTA bytes" >>"$GAS_REPORT"
+realm_zero
+T2="$(now)"
+
+step "3. wrong amounts (generous session, new period, so the realm's amount check is what refuses)"
+expect_fail "3 GNOT instead of 2" "mandate: send exactly 2000000ugnot" coll2 $(pull coll2 3000000)
+expect_fail "1 GNOT instead of 2" "mandate: send exactly 2000000ugnot" coll2 $(pull coll2 1000000)
+expect_fail "no coins" "mandate: send exactly 2000000ugnot" coll2 call -pkgpath "$REALM" -func Pull -master "$PAYER" "${PULLGAS[@]}"
+expect_ok "correct second pull of plan 2" coll2 $(pull coll2 2000000)
+note_gas "Pull (later)"
+eq "storage delta of a later pull" 0 "$(storage_delta)"
+
+step "10. sub-path: a session for this realm also covers $SUB"
+p="$(bal "$PAYER")"
+expect_ok "coll2 calls $SUB.Tip with 1 GNOT of the payer's coins" coll2 call -pkgpath "$SUB" -func Tip -send 1000000ugnot -master "$PAYER" "${PULLGAS[@]}"
+eq "payer lost 1 GNOT + fee + storage outside the mandate's rules" "$((1020000 + $(storage_delta) * 100))" "$((p - $(bal "$PAYER")))"
+eq "the sub-realm kept it" 1000000 "$(bal "$SUB_ADDR")"
+echo "  => Pull's exact allow-list check cannot help here: Pull is never called. What protects payers is that"
+echo "     nothing is ever deployed under the realm's path (stated in the realm doc, README and design.md)."
+
+step "9. revoke"
+expect_ok "payer revokes coll2's session" payer session revoke -pubkey "$GPUB2" "${CALL[@]}"
+p="$(bal "$PAYER")"
+wait_until "$((T2 + 62))"
+if tx coll2 $(pull coll2 2000000) && grep -q '^OK!' "$OUT"; then fail "pull after revoke succeeded"; fi
+echo "  ok: pull after revoke refused: $(grep -E '^Data:' "$OUT" | head -1)"
+eq "payer unchanged" "$p" "$(bal "$PAYER")"
+eq "IsActive(payer, 2) is still true: the realm cannot see a revoke" "(true bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 2)")"
+if gnokey query "auth/accounts/$PAYER/session/$COLL2" -remote "$RPC" -home "$KB" >"$OUT" 2>&1; then fail "session query still finds the revoked session"; fi
+grep -q SessionNotFound "$OUT" || fail "unexpected: $(head -3 "$OUT")"
+echo "  ok: auth/accounts/<payer>/session/<coll2> says SessionNotFound: the check an off-chain service must add"
+
+step "7. expiry"
+wait_until "$((T0 + 105))"
+expect_fail "coll3: chain session expired" "session expired" coll3 $(pull coll3 500000)
+expect_fail "coll4: realm terms expired" "mandate: expired" coll4 $(pull coll4 500000)
+eq "IsActive(payer, 4)" "(false bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 4)")"
+
+step "8. hostile payee: burn the allowance as fees"
+wait_until "$((T2 + 62))"
+p="$(bal "$PAYER")" e="$(bal "$PAYEE")"
+# A doomed Pull (no coins) with a fee equal to the whole spend limit, simulation skipped.
+tx coll call -pkgpath "$REALM" -func Pull -master "$PAYER" -gas-fee 1050000ugnot -gas-wanted 8000000 -simulate skip || true
+grep -q "mandate: send exactly" "$OUT" || fail "unexpected: $(grep -E '^Data:' "$OUT" | head -2)"
+burn=$((p - $(bal "$PAYER")))
+eq "payer paid the whole spend limit as a fee, and not one ugnot more" 1050000 "$burn"
+eq "payee gained nothing" "$e" "$(bal "$PAYEE")"
+p="$(bal "$PAYER")"
+if tx coll call -pkgpath "$REALM" -func Pull -master "$PAYER" -gas-fee 1000ugnot -gas-wanted 8000000 -simulate skip && grep -q '^OK!' "$OUT"; then fail "second burn succeeded"; fi
+eq "a further fee in the same period is refused before any charge" "$p" "$(bal "$PAYER")"
+expect_fail "and so is the honest pull for this period" "spend limit" coll $(pull coll 1000000)
+realm_zero
+T3="$(now)"
+
+step "11. payee pays the fees: one transaction, two signers"
+wait_until "$((T3 + 62))"
+# The burn's failed tx did not change the mandate, so plan 1 is due again.
+p="$(bal "$PAYER")" e="$(bal "$PAYEE")"
+printf '%s\n' "$PW" | gnokey maketx call -pkgpath "$OTHER" -func Tip -gas-fee 300000ugnot -gas-wanted 20000000 -broadcast=false -chainid dev -remote "$RPC" -home "$KB" -insecure-password-stdin payee >"$TMP/m1.json" 2>/dev/null
+printf '%s\n' "$PW" | gnokey maketx call -pkgpath "$REALM" -func Pull -send 1000000ugnot -master "$PAYER" -gas-fee 300000ugnot -gas-wanted 20000000 -broadcast=false -chainid dev -remote "$RPC" -home "$KB" -insecure-password-stdin coll >"$TMP/m2.json" 2>/dev/null
+python3 - "$TMP" <<'PY'
+import json, sys
+d = sys.argv[1]
+def load(p):
+    s = open(p).read()
+    return json.loads(s[s.index("{"):])
+a, b = load(d + "/m1.json"), load(d + "/m2.json")
+tx = a
+tx["msg"] = a["msg"] + b["msg"]
+tx["signatures"] = None
+json.dump(tx, open(d + "/multi.json", "w"))
+PY
+acct() { # prints "<account_number> <sequence>" from an auth/accounts query, at any nesting depth
+	python3 -c '
+import json, sys
+def find(d):
+    if isinstance(d, dict):
+        if "account_number" in d:
+            return d
+        for v in d.values():
+            r = find(v)
+            if r:
+                return r
+d = find(json.loads(sys.stdin.read().split("data:", 1)[1]))
+print(d["account_number"], d.get("sequence", "0"))'
+}
+read -r PE_NUM PE_SEQ <<<"$(gnokey query "auth/accounts/$PAYEE" -remote "$RPC" -home "$KB" | acct)"
+read -r S_NUM S_SEQ <<<"$(gnokey query "auth/accounts/$PAYER/session/$COLL" -remote "$RPC" -home "$KB" | acct)"
+echo "  payee account $PE_NUM/$PE_SEQ, session account $S_NUM/$S_SEQ"
+printf '%s\n' "$PW" | gnokey sign -tx-path "$TMP/multi.json" -chainid dev -account-number "$PE_NUM" -account-sequence "$PE_SEQ" -output-document "$TMP/sig1.json" -home "$KB" -insecure-password-stdin payee >/dev/null 2>&1 || fail "payee could not sign"
+printf '%s\n' "$PW" | gnokey sign -tx-path "$TMP/multi.json" -chainid dev -account-number "$S_NUM" -account-sequence "$S_SEQ" -session -output-document "$TMP/sig2.json" -home "$KB" -insecure-password-stdin coll >/dev/null 2>&1 || fail "session key could not sign"
+python3 - "$TMP" <<'PY'
+import json, sys
+d = sys.argv[1]
+tx = json.load(open(d + "/multi.json"))
+sigs = [json.load(open(d + "/sig%d.json" % i)) for i in (1, 2)]
+tx["signatures"] = sigs
+json.dump(tx, open(d + "/multi.json", "w"))
+PY
+gnokey broadcast "$TMP/multi.json" -remote "$RPC" -home "$KB" >"$OUT" 2>&1 || true
+grep -q '^OK!' "$OUT" || fail "two-signer tx failed: $(grep -E '^Data:' "$OUT" | head -2)"
+show
+eq "payer paid exactly the amount (no fee, no storage)" 1000000 "$((p - $(bal "$PAYER")))"
+eq "payee got the amount minus the fee it paid" "$((1000000 - 300000 - $(storage_delta) * 100))" "$(($(bal "$PAYEE") - e))"
+realm_zero
+
+step "12. cancel by the payer"
+wait_until "$(($(now) + 62))"
+expect_ok "payer cancels plan 1's mandate (own key)" payer call -pkgpath "$REALM" -func Cancel -args "$PAYER" -args "$COLL" "${CALL[@]}"
+note_gas "Cancel"
+expect_fail "pull after cancel" "mandate: cancelled" coll $(pull coll 1000000)
+eq "IsActive(payer, 1)" "(false bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 1)")"
+
+step "pages in gnoweb"
+page="$(curl -s "http://127.0.0.1:$WEB_PORT/r/mandate_dev/mandate:plan/1")"
+grep -q "Supporter A" <<<"$page" || fail "plan page does not render"
+md="$(gnokey query vm/qrender -data "$REALM:payer/$PAYER" -remote "$RPC" -home "$KB")"
+grep -q "Status here: \*\*cancelled\*\*" <<<"$md" || fail "payer page does not show the cancelled mandate"
+grep -q "Status here: \*\*active\*\*" <<<"$md" || fail "payer page does not show active mandates"
+echo "  ok: plan and payer pages render"
+
+step "totals and gas"
+qeval "$REALM.Totals()" | tr '\n' ' ' | sed 's/^/  Totals: /'
+echo
+sed 's/^/  /' "$GAS_REPORT"
+eq "realm balance at the end" 0 "$(bal "$REALM_ADDR")"
+echo
+echo "ALL CHECKS PASSED"

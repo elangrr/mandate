@@ -1,0 +1,31 @@
+Mandate
+Copyright 2026 Fluxen
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+That licence covers only the code written for Mandate in this repository.
+
+The copy of Mandate published on the Gno.land network is, in addition,
+made available under the GNO Network General Public License, version 6,
+including its Additional Terms on Strong Attribution, as the network's
+Network Interaction Terms (section 5, TERMS.md in github.com/gnolang/gno)
+provide for all code published for execution on the network.
+
+Third-party software
+--------------------
+
+Mandate imports the following packages on chain. They are not copied into
+this repository; they are deployed on Gno.land and imported from the chain.
+They come from github.com/gnolang/gno and remain under their own licence, the
+GNO Network General Public License, version 6, including its attribution
+terms. Mandate's Apache 2.0 licence does not relicense them.
+
+  - gno.land/p/nt/avl/v0               (sorted tree used for storage)
+  - gno.land/p/nt/markdown/sanitize/v0 (Markdown escaping)
+  - gno.land/p/nt/uassert/v0           (tests only)
+  - gno.land/p/nt/testutils/v0         (tests only)
+  - the Gno standard library (chain, chain/banker, chain/runtime, strings, ...)
+
+Source and licence: https://github.com/gnolang/gno (see LICENSE.md there)
+and https://gno.land/license.
+
+Built on gno.land (https://gno.land).

@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Mandate: Adena session test</title>
+<style>
+  :root { --bg: #fafaf8; --fg: #1b1b1a; --muted: #5d5d58; --line: #d9d8d2; --card: #ffffff; --accent: #2a5bd7; --ok: #1d7a3a; --bad: #b3261e; --code: #f1f0ec; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #151515; --fg: #ecebe6; --muted: #a3a29c; --line: #34342f; --card: #1d1d1b; --accent: #8fb0ff; --ok: #6fcf8f; --bad: #ff8a80; --code: #262624; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 28px 0 8px; }
+  p, li { color: var(--fg); overflow-wrap: anywhere; }
+  .entry header span { overflow-wrap: anywhere; min-width: 0; }
+  .muted { color: var(--muted); }
+  .note { border: 1px solid var(--line); background: var(--card); border-radius: 8px; padding: 12px 16px; }
+  .warn { border-left: 4px solid var(--accent); }
+  ol { padding-left: 1.3rem; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 8px 0; }
+  button { font: inherit; padding: 8px 14px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  @media (prefers-color-scheme: dark) { button.primary { color: #10131a; } }
+  button:disabled { opacity: .5; cursor: default; }
+  label { display: block; font-size: .9rem; color: var(--muted); margin-top: 8px; }
+  input { width: 100%; font: 14px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; padding: 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--card); color: var(--fg); }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  code, pre { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
+  code { background: var(--code); padding: 1px 4px; border-radius: 4px; overflow-wrap: anywhere; }
+  #status { font-weight: 600; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  #log { display: flex; flex-direction: column; gap: 10px; }
+  .entry { border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  .entry header { display: flex; justify-content: space-between; gap: 8px; align-items: center; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: .9rem; }
+  .entry pre { margin: 0; padding: 10px; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; overflow: auto; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Mandate: Adena session test</h1>
+  <p class="muted">One question: can a web page ask the Adena wallet to create a session for <em>someone else's</em> key? Mandate needs exactly that.</p>
+
+  <div class="note warn">
+    <strong>Test GNOT on the Onyx test network only.</strong> This page talks to Adena on chain <code>onyx-1</code> and reads from <code>https://rpc.onyx.testnets.gno.land:443</code>. It never asks for a password or a seed phrase, loads nothing from the internet, and stores nothing. The test key it generates is thrown away: its private half is never shown or kept, so the session it creates can never be used. The spend limit is 0.001 GNOT and the session expires after 10 minutes, and you revoke it at the end.
+  </div>
+
+  <h2>What to do</h2>
+  <ol>
+    <li>Use a browser with the Adena extension, unlocked, with an account that has a little test GNOT on Onyx (the Onyx faucet gives some).</li>
+    <li>Press <strong>Connect</strong> and approve in Adena.</li>
+    <li>Press <strong>Show account and network</strong>. If the network is not <code>onyx-1</code>, press <strong>Switch to onyx-1</strong>.</li>
+    <li>Press <strong>New test key</strong>, then <strong>Create test session</strong>, and approve the transaction in Adena (it costs a small fee).</li>
+    <li>Press <strong>List my sessions</strong>: the test session's address should be there.</li>
+    <li>Press <strong>Revoke test session</strong> and approve, then <strong>List my sessions</strong> again: it should be gone.</li>
+    <li>Press <strong>Copy everything</strong> at the bottom and paste it back to whoever asked you to run this.</li>
+  </ol>
+
+  <h2>1. Wallet</h2>
+  <div class="row">
+    <button id="connect" class="primary">Connect</button>
+    <button id="account">Show account and network</button>
+    <button id="switch">Switch to onyx-1</button>
+  </div>
+  <p>Status: <span id="status" class="muted">not connected</span></p>
+
+  <h2>2. Test session</h2>
+  <div class="row">
+    <button id="newkey">New test key</button>
+    <span class="muted">or paste a public key (gpub1…, 33-byte base64 or hex) below</span>
+  </div>
+  <label for="pub">Session public key</label>
+  <input id="pub" spellcheck="false" autocomplete="off" placeholder="gpub1…">
+  <p class="muted" id="pubinfo">No key yet.</p>
+  <div class="grid">
+    <div>
+      <label for="allow">Allow path (one realm; harmless: nothing can sign with the test key)</label>
+      <input id="allow" spellcheck="false" value="vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate">
+    </div>
+    <div>
+      <label for="limit">Spend limit</label>
+      <input id="limit" spellcheck="false" value="1000ugnot">
+    </div>
+    <div>
+      <label for="period">Spend period (seconds)</label>
+      <input id="period" spellcheck="false" value="60">
+    </div>
+    <div>
+      <label for="expiry">Expires after (seconds from now)</label>
+      <input id="expiry" spellcheck="false" value="600">
+    </div>
+  </div>
+  <div class="row">
+    <button id="create" class="primary">Create test session</button>
+    <button id="list">List my sessions</button>
+    <button id="revoke">Revoke test session</button>
+  </div>
+
+  <h2>3. Every request and response</h2>
+  <div class="row">
+    <button id="copyall" class="primary">Copy everything</button>
+    <button id="clear">Clear</button>
+  </div>
+  <div id="log"></div>
+</main>
+
+<script>
+/* BUILDERS START: pure functions, unit-tested by web/adena-test.test.mjs */
+var MandateAdena = (function () {
+  "use strict";
+  var ONYX = { chainId: "onyx-1", chainName: "Gno.land Onyx testnet", rpcUrl: "https://rpc.onyx.testnets.gno.land:443" };
+  var PUBKEY_TYPE = "/tm.PubKeySecp256k1";
+  var CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
+
+  // ---- bytes, base64, hex
+  function toHex(b) { var s = ""; for (var i = 0; i < b.length; i++) s += (b[i] < 16 ? "0" : "") + b[i].toString(16); return s; }
+  function fromHex(h) {
+    if (!/^([0-9a-fA-F]{2})*$/.test(h)) throw new Error("not hex");
+    var out = new Uint8Array(h.length / 2);
+    for (var i = 0; i < out.length; i++) out[i] = parseInt(h.substr(i * 2, 2), 16);
+    return out;
+  }
+  var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  function toBase64(b) {
+    var s = "", i;
+    for (i = 0; i + 2 < b.length; i += 3) { var n = (b[i] << 16) | (b[i + 1] << 8) | b[i + 2]; s += B64[n >> 18] + B64[(n >> 12) & 63] + B64[(n >> 6) & 63] + B64[n & 63]; }
+    if (b.length - i === 1) { var m = b[i] << 16; s += B64[m >> 18] + B64[(m >> 12) & 63] + "=="; }
+    else if (b.length - i === 2) { var k = (b[i] << 16) | (b[i + 1] << 8); s += B64[k >> 18] + B64[(k >> 12) & 63] + B64[(k >> 6) & 63] + "="; }
+    return s;
+  }
+  function fromBase64(s) {
+    if (!/^[A-Za-z0-9+/]*={0,2}$/.test(s) || s.length % 4 !== 0) throw new Error("not base64");
+    var clean = s.replace(/=+$/, ""), out = [], acc = 0, bits = 0;
+    for (var i = 0; i < clean.length; i++) { acc = (acc << 6) | B64.indexOf(clean[i]); bits += 6; if (bits >= 8) { bits -= 8; out.push((acc >> bits) & 255); } }
+    return new Uint8Array(out);
+  }
+
+  // ---- bech32 (BIP-173)
+  function polymod(v) {
+    var g = [0x3b6a57b2, 0x26508e6d, 0x1ea119fa, 0x3d4233dd, 0x2a1462b3], c = 1;
+    for (var i = 0; i < v.length; i++) { var b = c >>> 25; c = ((c & 0x1ffffff) << 5) ^ v[i]; for (var j = 0; j < 5; j++) if ((b >>> j) & 1) c ^= g[j]; }
+    return c >>> 0;
+  }
+  function hrpExpand(h) { var r = [], i; for (i = 0; i < h.length; i++) r.push(h.charCodeAt(i) >> 5); r.push(0); for (i = 0; i < h.length; i++) r.push(h.charCodeAt(i) & 31); return r; }
+  function convertBits(data, from, to, pad) {
+    var acc = 0, bits = 0, out = [], max = (1 << to) - 1;
+    for (var i = 0; i < data.length; i++) { acc = (acc << from) | data[i]; bits += from; while (bits >= to) { bits -= to; out.push((acc >> bits) & max); } }
+    if (pad) { if (bits > 0) out.push((acc << (to - bits)) & max); }
+    else if (bits >= from || ((acc << (to - bits)) & max)) throw new Error("bad padding");
+    return out;
+  }
+  function bech32Encode(hrp, bytes) {
+    var d = convertBits(bytes, 8, 5, true);
+    var m = polymod(hrpExpand(hrp).concat(d, [0, 0, 0, 0, 0, 0])) ^ 1, s = hrp + "1";
+    for (var i = 0; i < d.length; i++) s += CHARSET[d[i]];
+    for (var k = 0; k < 6; k++) s += CHARSET[(m >>> (5 * (5 - k))) & 31];
+    return s;
+  }
+  function bech32Decode(str) {
+    if (str !== str.toLowerCase()) throw new Error("mixed case");
+    var p = str.lastIndexOf("1");
+    if (p < 1 || p + 7 > str.length) throw new Error("bad separator");
+    var hrp = str.slice(0, p), d = [];
+    for (var i = p + 1; i < str.length; i++) { var c = CHARSET.indexOf(str[i]); if (c < 0) throw new Error("bad character"); d.push(c); }
+    if (polymod(hrpExpand(hrp).concat(d)) !== 1) throw new Error("bad checksum");
+    return { hrp: hrp, bytes: new Uint8Array(convertBits(d.slice(0, -6), 5, 8, false)) };
+  }
+
+  // ---- SHA-256 and RIPEMD-160 (synchronous, for the address)
+  function sha256(msg) {
+    var K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174, 0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da, 0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967, 0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85, 0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070, 0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3, 0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2];
+    var H = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
+    var l = msg.length, n = ((l + 9 + 63) >> 6) << 6, m = new Uint8Array(n);
+    m.set(msg); m[l] = 0x80; var bl = l * 8; for (var i = 0; i < 4; i++) m[n - 1 - i] = (bl >>> (8 * i)) & 255;
+    var w = new Array(64);
+    for (var o = 0; o < n; o += 64) {
+      for (var t = 0; t < 16; t++) w[t] = (m[o + 4 * t] << 24) | (m[o + 4 * t + 1] << 16) | (m[o + 4 * t + 2] << 8) | m[o + 4 * t + 3];
+      for (t = 16; t < 64; t++) {
+        var x = w[t - 15], y = w[t - 2];
+        var s0 = ((x >>> 7) | (x << 25)) ^ ((x >>> 18) | (x << 14)) ^ (x >>> 3);
+        var s1 = ((y >>> 17) | (y << 15)) ^ ((y >>> 19) | (y << 13)) ^ (y >>> 10);
+        w[t] = (w[t - 16] + s0 + w[t - 7] + s1) | 0;
+      }
+      var a = H[0], b = H[1], c = H[2], d = H[3], e = H[4], f = H[5], g = H[6], h = H[7];
+      for (t = 0; t < 64; t++) {
+        var S1 = ((e >>> 6) | (e << 26)) ^ ((e >>> 11) | (e << 21)) ^ ((e >>> 25) | (e << 7));
+        var t1 = (h + S1 + ((e & f) ^ (~e & g)) + K[t] + w[t]) | 0;
+        var S0 = ((a >>> 2) | (a << 30)) ^ ((a >>> 13) | (a << 19)) ^ ((a >>> 22) | (a << 10));
+        var t2 = (S0 + ((a & b) ^ (a & c) ^ (b & c))) | 0;
+        h = g; g = f; f = e; e = (d + t1) | 0; d = c; c = b; b = a; a = (t1 + t2) | 0;
+      }
+      H[0] = (H[0] + a) | 0; H[1] = (H[1] + b) | 0; H[2] = (H[2] + c) | 0; H[3] = (H[3] + d) | 0;
+      H[4] = (H[4] + e) | 0; H[5] = (H[5] + f) | 0; H[6] = (H[6] + g) | 0; H[7] = (H[7] + h) | 0;
+    }
+    var out = new Uint8Array(32);
+    for (i = 0; i < 8; i++) { out[4 * i] = H[i] >>> 24; out[4 * i + 1] = (H[i] >>> 16) & 255; out[4 * i + 2] = (H[i] >>> 8) & 255; out[4 * i + 3] = H[i] & 255; }
+    return out;
+  }
+  function ripemd160(msg) {
+    var zl = [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,7,4,13,1,10,6,15,3,12,0,9,5,2,14,11,8,3,10,14,4,9,15,8,1,2,7,0,6,13,11,5,12,1,9,11,10,0,8,12,4,13,3,7,15,14,5,6,2,4,0,5,9,7,12,2,10,14,1,3,8,11,6,15,13];
+    var zr = [5,14,7,0,9,2,11,4,13,6,15,8,1,10,3,12,6,11,3,7,0,13,5,10,14,15,8,12,4,9,1,2,15,5,1,3,7,14,6,9,11,8,12,2,10,0,4,13,8,6,4,1,3,11,15,0,5,12,2,13,9,7,10,14,12,15,10,4,1,5,8,7,6,2,13,14,0,3,9,11];
+    var sl = [11,14,15,12,5,8,7,9,11,13,14,15,6,7,9,8,7,6,8,13,11,9,7,15,7,12,15,9,11,7,13,12,11,13,6,7,14,9,13,15,14,8,13,6,5,12,7,5,11,12,14,15,14,15,9,8,9,14,5,6,8,6,5,12,9,15,5,11,6,8,13,12,5,12,13,14,11,8,5,6];
+    var sr = [8,9,9,11,13,15,15,5,7,7,8,11,14,14,12,6,9,13,15,7,12,8,9,11,7,7,12,7,6,15,13,11,9,7,15,11,8,6,6,14,12,13,5,14,13,13,7,5,15,5,8,11,14,14,6,14,6,9,12,9,12,5,15,8,8,5,12,9,12,5,14,6,8,13,6,5,15,13,11,11];
+    var hl = [0x00000000, 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xa953fd4e], hr = [0x50a28be6, 0x5c4dd124, 0x6d703ef3, 0x7a6d76e9, 0x00000000];
+    function f(j, x, y, z) { return j < 16 ? x ^ y ^ z : j < 32 ? (x & y) | (~x & z) : j < 48 ? (x | ~y) ^ z : j < 64 ? (x & z) | (y & ~z) : x ^ (y | ~z); }
+    function rotl(x, n) { return (x << n) | (x >>> (32 - n)); }
+    var l = msg.length, n = ((l + 9 + 63) >> 6) << 6, m = new Uint8Array(n);
+    m.set(msg); m[l] = 0x80; var bl = l * 8; for (var i = 0; i < 4; i++) m[n - 8 + i] = (bl >>> (8 * i)) & 255;
+    var h0 = 0x67452301, h1 = 0xefcdab89, h2 = 0x98badcfe, h3 = 0x10325476, h4 = 0xc3d2e1f0, X = new Array(16);
+    for (var o = 0; o < n; o += 64) {
+      for (var t = 0; t < 16; t++) X[t] = m[o + 4 * t] | (m[o + 4 * t + 1] << 8) | (m[o + 4 * t + 2] << 16) | (m[o + 4 * t + 3] << 24);
+      var al = h0, bl2 = h1, cl = h2, dl = h3, el = h4, ar = h0, br = h1, cr = h2, dr = h3, er = h4, T;
+      for (var j = 0; j < 80; j++) {
+        var r = j >> 4;
+        T = (rotl((al + f(j, bl2, cl, dl) + X[zl[j]] + hl[r]) | 0, sl[j]) + el) | 0;
+        al = el; el = dl; dl = rotl(cl, 10); cl = bl2; bl2 = T;
+        T = (rotl((ar + f(79 - j, br, cr, dr) + X[zr[j]] + hr[r]) | 0, sr[j]) + er) | 0;
+        ar = er; er = dr; dr = rotl(cr, 10); cr = br; br = T;
+      }
+      T = (h1 + cl + dr) | 0; h1 = (h2 + dl + er) | 0; h2 = (h3 + el + ar) | 0; h3 = (h4 + al + br) | 0; h4 = (h0 + bl2 + cr) | 0; h0 = T;
+    }
+    var out = new Uint8Array(20), hs = [h0, h1, h2, h3, h4];
+    for (i = 0; i < 5; i++) for (var k = 0; k < 4; k++) out[4 * i + k] = (hs[i] >>> (8 * k)) & 255;
+    return out;
+  }
+
+  // ---- secp256k1: only public key derivation, for a throwaway test key.
+  var P = BigInt("0xfffffffffffffffffffffffffffffffffffffffffffffffffffffffefffffc2f");
+  var N = BigInt("0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141");
+  var G = [BigInt("0x79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"), BigInt("0x483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8")];
+  function mod(a, m) { var r = a % m; return r < 0n ? r + m : r; }
+  function inv(a) { var r = 1n, b = mod(a, P), e = P - 2n; while (e > 0n) { if (e & 1n) r = r * b % P; b = b * b % P; e >>= 1n; } return r; }
+  function add(p, q) {
+    if (!p) return q; if (!q) return p;
+    var l;
+    if (p[0] === q[0]) { if (mod(p[1] + q[1], P) === 0n) return null; l = mod(3n * p[0] * p[0] * inv(2n * p[1]), P); }
+    else l = mod((q[1] - p[1]) * inv(q[0] - p[0]), P);
+    var x = mod(l * l - p[0] - q[0], P);
+    return [x, mod(l * (p[0] - x) - p[1], P)];
+  }
+  function pubFromPriv(priv) { // priv: Uint8Array(32) -> compressed pubkey Uint8Array(33)
+    var k = BigInt("0x" + toHex(priv));
+    if (k <= 0n || k >= N) throw new Error("private key out of range");
+    var r = null, q = G;
+    while (k > 0n) { if (k & 1n) r = add(r, q); q = add(q, q); k >>= 1n; }
+    var x = r[0].toString(16).padStart(64, "0"), out = new Uint8Array(33);
+    out[0] = (r[1] & 1n) ? 3 : 2; out.set(fromHex(x), 1);
+    return out;
+  }
+  function newTestPubKey(randomBytes) { // randomBytes(n) -> Uint8Array; the private half is dropped here
+    for (;;) { try { return pubFromPriv(randomBytes(32)); } catch (e) { /* out of range: draw again */ } }
+  }
+
+  // ---- keys and addresses
+  function anyValue(pub33) { var v = new Uint8Array(35); v[0] = 0x0a; v[1] = 0x21; v.set(pub33, 2); return v; } // proto PubKeySecp256k1{key}
+  function gpubFromPub(pub33) {
+    var t = new TextEncoder().encode(PUBKEY_TYPE), v = anyValue(pub33);
+    var b = new Uint8Array(2 + t.length + 2 + v.length);
+    b[0] = 0x0a; b[1] = t.length; b.set(t, 2); b[2 + t.length] = 0x12; b[3 + t.length] = v.length; b.set(v, 4 + t.length);
+    return bech32Encode("gpub", b);
+  }
+  function addressFromPub(pub33) { return bech32Encode("g", ripemd160(sha256(pub33))); }
+  function checkPub(b) {
+    if (b.length !== 33 || (b[0] !== 2 && b[0] !== 3)) throw new Error("not a 33-byte compressed secp256k1 public key");
+    return b;
+  }
+  function parsePubKey(input) {
+    var s = String(input || "").trim();
+    if (s.indexOf("gpub1") === 0) {
+      var d = bech32Decode(s), t = new TextEncoder().encode(PUBKEY_TYPE), b = d.bytes;
+      if (d.hrp !== "gpub" || b.length !== 4 + t.length + 35 || b[0] !== 0x0a || b[1] !== t.length) throw new Error("not a secp256k1 gpub key");
+      for (var i = 0; i < t.length; i++) if (b[2 + i] !== t[i]) throw new Error("not a secp256k1 gpub key");
+      var o = 2 + t.length;
+      if (b[o] !== 0x12 || b[o + 1] !== 35 || b[o + 2] !== 0x0a || b[o + 3] !== 0x21) throw new Error("not a secp256k1 gpub key");
+      return checkPub(b.slice(o + 4));
+    }
+    if (/^[0-9a-fA-F]{66}$/.test(s)) return checkPub(fromHex(s));
+    return checkPub(fromBase64(s));
+  }
+
+  // ---- the messages, in the shape Adena's DoContract accepts (adena-wallet
+  // v1.22.5: inject/executor/executor.ts validateMessages,
+  // common/validation/validation-message.ts, adena-module utils/messages.ts
+  // encodeMessageValue). JSON-safe: integers as decimal strings, the key as
+  // a protobuf Any whose value is base64 of PubKeySecp256k1{key}.
+  function sessionKeyAny(pub33) { return { type_url: PUBKEY_TYPE, value: toBase64(anyValue(checkPub(pub33))) }; }
+  function checkAddr(a) { if (!/^g1[02-9ac-hj-np-z]{38}$/.test(a)) throw new Error("not a g1 address: " + a); return a; }
+  function checkInt(name, v, min) {
+    var s = String(v).trim();
+    if (!/^[0-9]+$/.test(s) || Number(s) < min) throw new Error(name + " must be a whole number of at least " + min);
+    return String(BigInt(s));
+  }
+  function buildCreateSession(o) {
+    var paths = (o.allowPaths || []).map(function (p) { return String(p).trim(); });
+    if (!paths.length || paths.some(function (p) { return !/^(\*|[a-z]+\/[a-z_]+(:[a-z0-9_./-]+)?)$/.test(p); })) throw new Error("bad allow path");
+    if (!/^[1-9][0-9]*ugnot$/.test(o.spendLimit)) throw new Error("spend limit must look like 1000ugnot");
+    return {
+      type: "/auth.m_create_session",
+      value: {
+        creator: checkAddr(o.creator),
+        session_key: sessionKeyAny(o.pub),
+        expires_at: checkInt("expiry", o.expiresAt, 1),
+        allow_paths: paths,
+        spend_limit: o.spendLimit,
+        spend_period: checkInt("spend period", o.spendPeriod, 1)
+      }
+    };
+  }
+  function buildRevokeSession(o) {
+    return { type: "/auth.m_revoke_session", value: { creator: checkAddr(o.creator), session_key: sessionKeyAny(o.pub) } };
+  }
+  function doContractParams(messages, memo) { return { messages: messages, memo: memo || "" }; }
+  function sessionsQueryURL(rpc, addr) { return rpc + "/abci_query?path=" + encodeURIComponent('"auth/accounts/' + checkAddr(addr) + '/sessions"'); }
+  function decodeAbciQuery(json) { // -> {log, text} from a JSON-RPC abci_query response
+    var r = json && json.result && json.result.response;
+    if (!r) throw new Error("no abci response");
+    var rb = r.ResponseBase || r, text = "";
+    if (rb.Data) text = new TextDecoder().decode(fromBase64(rb.Data));
+    else if (r.value) text = new TextDecoder().decode(fromBase64(r.value));
+    return { error: rb.Error || null, log: rb.Log || r.log || "", text: text };
+  }
+
+  return {
+    ONYX: ONYX, toHex: toHex, fromHex: fromHex, toBase64: toBase64, fromBase64: fromBase64,
+    bech32Encode: bech32Encode, bech32Decode: bech32Decode, sha256: sha256, ripemd160: ripemd160,
+    pubFromPriv: pubFromPriv, newTestPubKey: newTestPubKey, gpubFromPub: gpubFromPub, addressFromPub: addressFromPub,
+    parsePubKey: parsePubKey, sessionKeyAny: sessionKeyAny, buildCreateSession: buildCreateSession,
+    buildRevokeSession: buildRevokeSession, doContractParams: doContractParams,
+    sessionsQueryURL: sessionsQueryURL, decodeAbciQuery: decodeAbciQuery
+  };
+})();
+/* BUILDERS END */
+</script>
+
+<script>
+(function () {
+  "use strict";
+  var M = MandateAdena, account = null, entries = [];
+  var $ = function (id) { return document.getElementById(id); };
+
+  function stamp() { return new Date().toISOString(); }
+  function show(title, data, cls) {
+    var text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    entries.push("### " + stamp() + " " + title + "\n" + text);
+    var e = document.createElement("div"); e.className = "entry";
+    var h = document.createElement("header");
+    var t = document.createElement("span"); t.textContent = stamp() + "  " + title; if (cls) t.className = cls;
+    var b = document.createElement("button"); b.textContent = "Copy";
+    b.addEventListener("click", function () { copy(text, b); });
+    h.appendChild(t); h.appendChild(b);
+    var pre = document.createElement("pre"); pre.textContent = text;
+    e.appendChild(h); e.appendChild(pre);
+    $("log").prepend(e);
+  }
+  function copy(text, btn) {
+    var done = function () { var o = btn.textContent; btn.textContent = "Copied"; setTimeout(function () { btn.textContent = o; }, 1200); };
+    if (navigator.clipboard && window.isSecureContext) { navigator.clipboard.writeText(text).then(done, function () { fallback(text); done(); }); }
+    else { fallback(text); done(); }
+  }
+  function fallback(text) {
+    var ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); } catch (e) { /* the text is selected for manual copy */ }
+    document.body.removeChild(ta);
+  }
+  function setStatus(text, cls) { var s = $("status"); s.textContent = text; s.className = cls || ""; }
+  function adena() {
+    if (!window.adena) { show("Adena not found", "window.adena is missing: install or unlock the Adena extension, then reload this page.", "bad"); setStatus("Adena not found", "bad"); return null; }
+    return window.adena;
+  }
+  async function call(title, fn, req) {
+    var w = adena(); if (!w) return null;
+    show(title + ": request", req === undefined ? "(no arguments)" : req);
+    try { var res = await fn(w); show(title + ": response", res, res && res.status === "success" ? "ok" : "bad"); return res; }
+    catch (e) { show(title + ": error", String(e && e.stack || e), "bad"); return null; }
+  }
+  function currentPub() { return M.parsePubKey($("pub").value); }
+  function updatePubInfo() {
+    try { var p = currentPub(); $("pubinfo").textContent = "Session address: " + M.addressFromPub(p) + "  ·  " + M.gpubFromPub(p); $("pubinfo").className = "muted"; }
+    catch (e) { $("pubinfo").textContent = $("pub").value ? "Not a usable key: " + e.message : "No key yet."; $("pubinfo").className = $("pub").value ? "bad" : "muted"; }
+  }
+
+  show("Page loaded", { userAgent: navigator.userAgent, adenaPresent: !!window.adena, adenaVersion: window.adena && window.adena.version || null, origin: location.origin });
+
+  $("connect").addEventListener("click", async function () {
+    var r = await call("AddEstablish", function (w) { return w.AddEstablish("Mandate Adena test"); }, ["Mandate Adena test"]);
+    if (r && (r.status === "success" || r.type === "ALREADY_CONNECTED")) setStatus("connected", "ok");
+  });
+  $("account").addEventListener("click", async function () {
+    var a = await call("GetAccount", function (w) { return w.GetAccount(); });
+    if (a && a.data) account = a.data;
+    var n = await call("GetNetwork", function (w) { return w.GetNetwork(); });
+    var chain = (n && n.data && n.data.chainId) || (account && account.chainId) || "?";
+    if (account) setStatus(account.address + " on " + chain, chain === "onyx-1" ? "ok" : "bad");
+  });
+  $("switch").addEventListener("click", async function () {
+    var r = await call("SwitchNetwork", function (w) { return w.SwitchNetwork("onyx-1"); }, ["onyx-1"]);
+    if (r && r.status !== "success") {
+      await call("AddNetwork", function (w) { return w.AddNetwork(M.ONYX); }, M.ONYX);
+      await call("SwitchNetwork (again)", function (w) { return w.SwitchNetwork("onyx-1"); }, ["onyx-1"]);
+    }
+  });
+  $("newkey").addEventListener("click", function () {
+    var pub = M.newTestPubKey(function (n) { return crypto.getRandomValues(new Uint8Array(n)); });
+    $("pub").value = M.gpubFromPub(pub);
+    updatePubInfo();
+    show("New test key (public half only; the private half was never kept)", { gpub: $("pub").value, address: M.addressFromPub(pub), compressedHex: M.toHex(pub) });
+  });
+  $("pub").addEventListener("input", updatePubInfo);
+
+  function needAccount() {
+    if (!account) { show("Account needed", "Press 'Show account and network' first.", "bad"); return false; }
+    return true;
+  }
+  $("create").addEventListener("click", async function () {
+    if (!needAccount()) return;
+    var params;
+    try {
+      var msg = M.buildCreateSession({
+        creator: account.address, pub: currentPub(),
+        expiresAt: Math.floor(Date.now() / 1000) + Number($("expiry").value),
+        allowPaths: [$("allow").value], spendLimit: $("limit").value.trim(), spendPeriod: $("period").value
+      });
+      params = M.doContractParams([msg], "Mandate Adena test: create session");
+    } catch (e) { show("Create session: not sent", String(e.message || e), "bad"); return; }
+    await call("DoContract (MsgCreateSession)", function (w) { return w.DoContract(params); }, params);
+  });
+  $("revoke").addEventListener("click", async function () {
+    if (!needAccount()) return;
+    var params;
+    try { params = M.doContractParams([M.buildRevokeSession({ creator: account.address, pub: currentPub() })], "Mandate Adena test: revoke session"); }
+    catch (e) { show("Revoke session: not sent", String(e.message || e), "bad"); return; }
+    await call("DoContract (MsgRevokeSession)", function (w) { return w.DoContract(params); }, params);
+  });
+  $("list").addEventListener("click", async function () {
+    if (!needAccount()) return;
+    var url = M.sessionsQueryURL(M.ONYX.rpcUrl, account.address);
+    show("List sessions: request (read-only, Onyx RPC)", "GET " + url);
+    try {
+      var res = await fetch(url, { method: "GET", credentials: "omit", referrerPolicy: "no-referrer" });
+      var json = await res.json();
+      show("List sessions: raw response", json);
+      show("List sessions: decoded", M.decodeAbciQuery(json));
+    } catch (e) { show("List sessions: error", String(e && e.stack || e), "bad"); }
+  });
+  $("copyall").addEventListener("click", function () { copy(entries.join("\n\n"), $("copyall")); });
+  $("clear").addEventListener("click", function () { entries = []; $("log").textContent = ""; });
+})();
+</script>
+</body>
+</html>
