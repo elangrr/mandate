@@ -32,7 +32,10 @@
 #       state file and the run lock
 #   14. leaving and coming back within a paid period is not charged twice
 #   15. the chain's limits (30-day spend period) and a 30-day plan end to
-#       end with the pages' exact commands
+#       end with the pages' exact commands; MandatePruned on chain
+#   16. a collector key that received 1 ugnot blocks new sessions (the
+#       chain's rule), the pages and the collector say so, and rotating the
+#       key works end to end
 #
 # How: gnodev runs the repository's realm plus two throwaway test realms
 # (gno.land/r/mandate_dev/other and gno.land/r/mandate_dev/mandate/sub) from
@@ -66,6 +69,7 @@ REALM="gno.land/r/mandate_dev/mandate"
 OTHER="gno.land/r/mandate_dev/other"
 SUB="gno.land/r/mandate_dev/mandate/sub"
 TMP="$(mktemp -d)"
+export XDG_STATE_HOME="$TMP/xdg" # the collector keeps its lock and state here, not in your home
 KB="$TMP/kb"
 PW="throwaway-local-only"
 GNODEV_PID=""
@@ -123,7 +127,10 @@ for k in payer payee stranger coll coll2 coll3 coll4 coll5; do newkey "$k"; done
 SUPPORTERS=() FUND=()
 for i in $(seq 1 32) low wide revoked poor; do newkey "s$i"; SUPPORTERS+=("s$i"); done
 newkey smax # step 15
-FUND+=(-add-account "$(addr_of smax)=10000000ugnot")
+newkey sprune # step 15
+newkey sjoin # step 16
+newkey collnew # step 16: a fresh collector key, never funded
+FUND+=(-add-account "$(addr_of smax)=10000000ugnot" -add-account "$(addr_of sprune)=10000000ugnot" -add-account "$(addr_of sjoin)=10000000ugnot")
 for k in "${SUPPORTERS[@]}"; do
 	if [ "$k" = spoor ]; then FUND+=(-add-account "$(addr_of "$k")=1000000ugnot"); else FUND+=(-add-account "$(addr_of "$k")=10000000ugnot"); fi
 done
@@ -370,6 +377,16 @@ wait_until() { # wait until the latest block's time is at or after $1
 	done
 	fail "the chain's block time did not reach $t"
 }
+ev_attr() { # <event type> <attr key>: from the last transaction's events
+	python3 - "$OUT" "$1" "$2" <<'PY2'
+import json, sys
+out, typ, key = sys.argv[1:]
+line = [l for l in open(out) if l.startswith("EVENTS:")]
+ev = json.loads(line[0].split(":", 1)[1]) if line else []
+vals = [a["value"] for e in ev if e.get("type") == typ for a in e.get("attrs", []) if a["key"] == key]
+print(vals[0] if vals else "none")
+PY2
+}
 fee_of() { sed -n 's/^Pull fee: \([0-9]*\)ugnot .*/\1/p' <<<"$1"; }
 step "6. next period: the collector script (dry run, then for real)"
 wait_until "$((T1 + 62))"
@@ -575,8 +592,14 @@ eq "and nothing more on the next run" "$POORFEE" "$((p - $(bal "$(addr_of spoor)
 echo "  ok: a pull included in a block that failed is put off to the next period: the payer paid one fee, not one per run"
 grep -q '^999999 ' "$TMP/collect.state" && fail "state file kept a mandate that is no longer listed"
 for f in "$TMP"/collect.state.*; do [ -e "$f" ] && [ "$f" != "$TMP/collect.state.lock" ] && fail "a temporary state file was left: $f"; done
-out="$(flock "$TMP/collect.state.lock" -c "printf '%s\n' '$PW' | '$REPO/scripts/collect.sh' -home '$KB' -key coll -payee '$PAYEE' -remote '$RPC' -chainid dev -realm '$REALM' -state '$TMP/collect.state' -insecure-password-stdin -dry-run" 2>&1)" || true
-grep -q "holds $TMP/collect.state.lock; nothing done" <<<"$out" || fail "a run started while another holds the lock went ahead: $out"
+RUNLOCK="$XDG_STATE_HOME/mandate-collector/$COLL-$(printf '%s' "$REALM" | tr '/.' '__').lock"
+[ -e "$RUNLOCK" ] || fail "the collector's lock is not at $RUNLOCK"
+set +e
+out="$(flock "$RUNLOCK" -c "printf '%s\n' '$PW' | '$REPO/scripts/collect.sh' -home '$KB' -key coll -payee '$PAYEE' -remote '$RPC' -chainid dev -realm '$REALM' -insecure-password-stdin -dry-run -lock-wait 2" 2>&1)"
+rc=$?
+set -e
+eq "exit status of a run that cannot get the lock" 3 "$rc"
+grep -q "nothing done" <<<"$out" || fail "unexpected: $out"
 echo "  ok: a second run while another holds the lock does nothing"
 echo "  ok: state file pruned to listed mandates ($(wc -l <"$TMP/collect.state") lines), no temporary file left"
 eq "realm balance" 0 "$(bal "$REALM_ADDR")"
@@ -589,9 +612,12 @@ PT1="$(pt_of "$S1")" PT2="$(pt_of "$S2")"
 # s1 comes back with a session for another key: the chain's spend window for
 # it is fresh, so only the realm's carried-over time stops a second charge.
 expect_ok "s1 cancels its paid mandate" s1 call -pkgpath "$REALM" -func Cancel -args "$S1" -args "$COLL" "${CALL[@]}"
+eq "the Cancelled event says how long the paid time was kept" "$PT1" "$(ev_attr Cancelled kept)"
 eq "PaidThrough kept after the cancel" "$PT1" "$(pt_of "$S1")"
 expect_ok "s1 gives a fresh session to coll2 (1.1 GNOT / 60 s)" s1 $(session_args "$GPUB2" "vm/exec:$REALM" 1100000ugnot 60 "$EXP13")
 expect_ok "s1 subscribes again, with coll2" s1 call -pkgpath "$REALM" -func Subscribe -args 5 -args "$COLL2" -args "$EXP13" "${CALL[@]}"
+eq "the Subscribed event says the time carried over" "$PT1" "$(ev_attr Subscribed carried)"
+eq "and the first due time" "$PT1" "$(ev_attr Subscribed first)"
 note_gas "Subscribe (returning payer, paid time carried over)"
 md="$(gnokey query vm/qrender -data "$REALM:payer/$S1" -remote "$RPC" -home "$KB")"
 grep -q "your current period is already paid" <<<"$md" || fail "payer page does not say the period is paid"
@@ -649,6 +675,54 @@ echo "  ok: paid through $PTMAX, 30 days after the pull"
 payer_page="$(gnokey query vm/qrender -data "$REALM:payer/$SMAX" -remote "$RPC" -home "$KB")"
 run_page_cmd "revoke from the payer page" smax YOUR_KEY "$(grep -m1 '^gnokey maketx session revoke -pubkey '"$GPUB" <<<"$payer_page")"
 run_page_cmd "Cancel from the payer page" smax YOUR_KEY "$(grep -m1 -- "-func Cancel -args $SMAX -args $COLL" <<<"$payer_page")"
+eq "realm balance" 0 "$(bal "$REALM_ADDR")"
+
+# An expired mandate that is still paid ahead, dropped at its payer's next
+# Subscribe: the MandatePruned event says what was kept.
+run_page_cmd "sprune: session from the 30-day plan's page" sprune YOUR_KEY "$(grep -m1 '^gnokey maketx session create' <<<"$plan_page")"
+SPRUNE="$(addr_of sprune)"
+SHORT="$(( $(chain_time) + 40 ))"
+expect_ok "sprune subscribes to the 30-day plan, ending in 40 s" sprune call -pkgpath "$REALM" -func Subscribe -args "$MAXPLAN" -args "$COLL" -args "$SHORT" "${CALL[@]}"
+expect_ok "its first pull" coll call -pkgpath "$REALM" -func Pull -send 1000000ugnot -master "$SPRUNE" "${PULLGAS[@]}"
+PTP="$(qeval "$REALM.PaidThrough(address(\"$SPRUNE\"), $MAXPLAN)" | sed -n 's/^(\([0-9]*\) int64)$/\1/p')"
+wait_until "$((SHORT + 1))"
+expect_ok "sprune subscribes to plan 5 (its expired mandate is dropped)" sprune call -pkgpath "$REALM" -func Subscribe -args 5 -args "$COLL" -args "$EXP13" "${CALL[@]}"
+eq "the MandatePruned event says what was kept" "$PTP" "$(ev_attr MandatePruned kept)"
+eq "and it is kept" "($PTP int64)" "$(qeval "$REALM.PaidThrough(address(\"$SPRUNE\"), $MAXPLAN)")"
+
+step "16. a collector key that receives coins blocks new sessions; rotating the key"
+SJOIN="$(addr_of sjoin)" COLLNEW="$(addr_of collnew)" GPUBNEW="$(pub_of collnew)"
+expect_ok "anyone sends 1 ugnot to the published collector key's address" stranger send -to "$COLL" -send 1ugnot "${CALL[@]}"
+plan5="$(gnokey query vm/qrender -data "$REALM:plan/5" -remote "$RPC" -home "$KB")"
+grep -q "New supporters cannot join right now" <<<"$plan5" || fail "the plan page does not warn (read-only banker in Render)"
+grep -q "gnokey maketx session create" <<<"$plan5" && fail "the plan page still prints a command the chain would refuse"
+echo "  ok: the plan page warns instead of printing the commands (Render reads balances)"
+expect_fail "a new supporter's session for that key (the chain refuses it)" "session key address collides with existing account" sjoin $(session_args "$GPUB" "vm/exec:$REALM" 1100000ugnot 60 "$EXP13")
+expect_fail "republishing the funded key" "has received coins" payee call -pkgpath "$REALM" -func SetCollectorKey -args "$GPUB" "${CALL[@]}"
+wait_until "$(( $(chain_time) + 61 ))"
+collect13
+grep -q "is an account on chain" <<<"$out" || fail "the collector did not warn about its key"
+grep -q "pulling mandate" <<<"$out" || fail "the old key no longer collected anything"
+echo "  ok: existing sessions for the old key still pull, and the collector warns"
+expect_ok "the creator publishes a fresh collector key" payee call -pkgpath "$REALM" -func SetCollectorKey -args "$GPUBNEW" "${CALL[@]}"
+eq "CollectorKeySet carries the public key" "$GPUBNEW" "$(ev_attr CollectorKeySet pubkey)"
+eq "and its address" "$COLLNEW" "$(ev_attr CollectorKeySet address)"
+plan5="$(gnokey query vm/qrender -data "$REALM:plan/5" -remote "$RPC" -home "$KB")"
+run_page_cmd "a new supporter: session for the new key from the plan page" sjoin YOUR_KEY "$(grep -m1 '^gnokey maketx session create' <<<"$plan5")"
+run_page_cmd "and Subscribe from the plan page" sjoin YOUR_KEY "$(grep -m1 -- '-func Subscribe' <<<"$plan5")"
+set +e
+out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key collnew -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -insecure-password-stdin 2>&1)"
+rc=$?
+set -e
+echo "$out" | sed 's/^/    /'
+eq "the new key's collector exit status" 0 "$rc"
+grep -q "pulling mandate [0-9]*: 1000000ugnot from $SJOIN" <<<"$out" || fail "the new key's collector did not pull the new supporter"
+grep -q "is an account on chain" <<<"$out" && fail "the new key was wrongly reported as an account"
+PTJ="$(qeval "$REALM.PaidThrough(address(\"$SJOIN\"), 5)" | sed -n 's/^(\([0-9]*\) int64)$/\1/p')"
+[ "${PTJ:-0}" -gt "$(chain_time)" ] || fail "the new supporter is not paid"
+collect13
+grep -q "active mandates for this key" <<<"$out" || fail "the old key's collector stopped listing its mandates"
+echo "  ok: rotation: new supporters use the new key (collected by its own collector), old mandates stay with the old key"
 eq "realm balance" 0 "$(bal "$REALM_ADDR")"
 
 step "pages in gnoweb"

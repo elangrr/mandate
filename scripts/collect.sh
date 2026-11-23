@@ -4,7 +4,8 @@
 #   scripts/collect.sh -home <keybase dir> -key <collector key name> \
 #       -payee <payee address> -remote <rpc url> -chainid <chain id> \
 #       -realm <realm path> [-dry-run] [-state <file>] \
-#       [-max-checks 500] [-max-pulls 200] [-gas-fee <n>ugnot]
+#       [-max-checks 500] [-max-pulls 200] [-gas-fee <n>ugnot] \
+#       [-timeout 120] [-lock-wait 60]
 #
 # What a run does, all reads being free queries:
 #   1. lists the payee's plans (CollectorPlans) and, for each, walks its
@@ -31,13 +32,15 @@
 #      error, a timeout) cost nothing and is tried again on the next run.
 #      -simulate skip (for tests only) sends without gnokey's simulation.
 #
-# With -state <file>, what a run learned is kept for the next one (the file
-# only holds mandates still listed, so it does not grow). It is replaced
+# What a run learned is kept for the next one in a state file (default: in
+# the state folder above, per key and realm; -state <file> to choose). It
+# only holds mandates still listed, so it does not grow, and is replaced
 # atomically through a private temporary file next to it.
 #
 # Exit status: 0 when every due mandate was pulled or skipped for a reason
 # on the payer's side (a revoked session is not an error), 1 when a pull
-# failed for another reason or a read failed, 2 for bad arguments.
+# failed for another reason or a read failed, 2 for bad arguments, 3 when
+# another run held the lock for longer than -lock-wait.
 #
 # The Pull fee follows the chain: today's minimum for -gas-wanted (from
 # auth/gasprice, which the chain raises when blocks fill) plus a quarter,
@@ -45,9 +48,15 @@
 # never below the minimum (such a mandate is skipped with the reason).
 # -gas-fee sets a fixed fee instead.
 #
-# Runs never overlap: a run takes a lock (next to the -state file, or in
-# the temp folder per collector key) and a second run that finds it taken
-# does nothing and exits 0.
+# Runs never overlap: a run takes a lock per collector key and realm in
+# the user's own state folder (${XDG_STATE_HOME:-~/.local/state}/
+# mandate-collector), waits at most -lock-wait seconds for it, and exits 3
+# if it cannot get it. Every gnokey call is limited to -timeout seconds.
+# When gnokey gives no clear answer for a pull (a timeout, a lost
+# connection), the realm is asked whether it went through before deciding.
+# Each run also checks whether the collector key's address has become an
+# account (it received coins): the chain then refuses every new session for
+# the key, and the run warns with what to do.
 #
 # Needs gnokey (v1.8.0), python3 and flock.
 #
@@ -79,7 +88,7 @@ usage() {
 }
 
 HOME_DIR="" KEY="" REMOTE="" CHAIN="" REALM="" PAYEE="" STATE="" DRY=0 PWSTDIN=0
-GAS_FEE="" GAS_WANTED="20000000" MAX_CHECKS=500 MAX_PULLS=200 SIMULATE=test
+GAS_FEE="" GAS_WANTED="20000000" GK_TIMEOUT=120 LOCK_WAIT=60 MAX_CHECKS=500 MAX_PULLS=200 SIMULATE=test
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-home) HOME_DIR="${2:-}"; shift 2 ;;
@@ -94,6 +103,8 @@ while [ $# -gt 0 ]; do
 	-gas-fee) GAS_FEE="${2:-}"; shift 2 ;;
 	-gas-wanted) GAS_WANTED="${2:-}"; shift 2 ;;
 	-simulate) SIMULATE="${2:-}"; shift 2 ;;
+	-timeout) GK_TIMEOUT="${2:-}"; shift 2 ;;
+	-lock-wait) LOCK_WAIT="${2:-}"; shift 2 ;;
 	-dry-run) DRY=1; shift ;;
 	-insecure-password-stdin) PWSTDIN=1; shift ;;
 	-h | -help | --help) usage ;;
@@ -125,32 +136,57 @@ onyx-1)
 	exit 2
 	;;
 esac
-if ! [[ "$REALM" =~ ^gno\.land/r/[a-z0-9_]+(/[a-z0-9_]+)*$ ]]; then echo "not a realm path: $REALM" >&2; exit 2; fi
+if ! [[ "$REALM" =~ ^gno\.land/r/[a-z0-9_-]+(/[a-z0-9_]+)*$ ]]; then echo "not a realm path: $REALM" >&2; exit 2; fi
 if ! [[ "$PAYEE" =~ ^g1[02-9ac-hj-np-z]{38}$ ]]; then echo "not an address: $PAYEE" >&2; exit 2; fi
 if [ ! -d "$HOME_DIR" ]; then echo "no keybase folder at -home $HOME_DIR" >&2; exit 2; fi
-if ! [[ ( -z "$GAS_FEE" || "$GAS_FEE" =~ ^[0-9]+ugnot$ ) && "$GAS_WANTED" =~ ^[0-9]+$ && "$MAX_CHECKS" =~ ^[0-9]+$ && "$MAX_PULLS" =~ ^[0-9]+$ && "$SIMULATE" =~ ^(test|skip)$ ]]; then
+if ! [[ ( -z "$GAS_FEE" || "$GAS_FEE" =~ ^[0-9]+ugnot$ ) && "$GAS_WANTED" =~ ^[0-9]+$ && "$MAX_CHECKS" =~ ^[0-9]+$ && "$MAX_PULLS" =~ ^[0-9]+$ && "$SIMULATE" =~ ^(test|skip)$ && "$GK_TIMEOUT" =~ ^[1-9][0-9]*$ && "$LOCK_WAIT" =~ ^[0-9]+$ ]]; then
 	echo "bad -gas-fee, -gas-wanted, -max-checks, -max-pulls or -simulate" >&2
 	exit 2
 fi
 command -v gnokey >/dev/null || { echo "gnokey not found on PATH" >&2; exit 1; }
 command -v flock >/dev/null || { echo "flock not found on PATH (util-linux)" >&2; exit 1; }
+command -v timeout >/dev/null || { echo "timeout not found on PATH (coreutils)" >&2; exit 1; }
+# Every gnokey call has a time limit, and no child process inherits the
+# run lock (fd 9), so a hung call cannot hold it after this script ends.
+gk() { timeout --kill-after=5 "$GK_TIMEOUT" gnokey "$@" 9>&-; }
 
 PW=""
 if [ "$PWSTDIN" = 1 ]; then IFS= read -r PW || true; fi
 
-ADDR="$(gnokey list -home "$HOME_DIR" | awk -v k="$KEY" '$2 == k { for (i = 1; i <= NF; i++) if ($i == "addr:") print $(i + 1) }')"
+ADDR="$(gk list -home "$HOME_DIR" | awk -v k="$KEY" '$2 == k { for (i = 1; i <= NF; i++) if ($i == "addr:") print $(i + 1) }')"
 if ! [[ "$ADDR" =~ ^g1[a-z0-9]{38}$ ]]; then echo "no key named '$KEY' in $HOME_DIR" >&2; exit 2; fi
 echo "collector key $KEY ($ADDR) for payee $PAYEE on $CHAIN via $REMOTE"
 
-# One run at a time per collector key (and per state file): two overlapping
-# runs (a slow run and the next cron tick) would race on the state file and
-# sign the same pulls twice. A run that finds the lock taken does nothing.
-LOCK="${STATE:+$STATE.lock}"
-LOCK="${LOCK:-${TMPDIR:-/tmp}/mandate-collect-$ADDR.lock}"
+# One run at a time per collector key and realm, whatever -state says: two
+# overlapping runs (a slow run and the next cron tick) would race on the
+# state file and sign the same pulls twice. The lock and the default state
+# file live in the user's own state folder, not a shared temp folder. A run
+# that cannot get the lock within -lock-wait seconds (default 60) exits 3,
+# so monitoring notices a run that hangs.
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mandate-collector"
+mkdir -p "$STATE_DIR" && chmod 700 "$STATE_DIR" || { echo "cannot create $STATE_DIR" >&2; exit 1; }
+RUN_ID="$ADDR-$(printf '%s' "$REALM" | tr '/.' '__')"
+LOCK="$STATE_DIR/$RUN_ID.lock"
+STATE="${STATE:-$STATE_DIR/$RUN_ID.state}"
 exec 9>>"$LOCK"
-if ! flock -n 9; then
-	echo "another run for this key holds $LOCK; nothing done"
-	exit 0
+if ! flock -w "$LOCK_WAIT" 9; then
+	echo "another run for this key and realm has held $LOCK for more than $LOCK_WAIT s; nothing done" >&2
+	exit 3
+fi
+
+# The collector key's address must never be an account: the chain refuses
+# to create a session for a key whose address is one (it becomes one for
+# good when it receives any coin), so no new supporter could join.
+if acct="$(gk query "auth/accounts/$ADDR" -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" && grep -q "\"address\": \"$ADDR\"" <<<"$acct"; then
+	cat >&2 <<EOF
+WARNING: the collector key's address $ADDR is an account on chain (it has
+received coins). The chain refuses every new session for this key, so NO NEW
+SUPPORTER CAN JOIN until you publish a new collector key:
+  1. make a new key (gnokey add) and publish it with SetCollectorKey;
+  2. keep running this collector for the existing mandates (they still work),
+     and run a second collector with the new key;
+  3. never send coins to a collector key.
+EOF
 fi
 
 # qtext <expr>: a realm function returning a string, printed with real newlines.
@@ -161,7 +197,7 @@ trap 'rm -f "${TMPFILES[@]}"' EXIT
 qtext() {
 	local out data
 	echo >>"$QCOUNT"
-	out="$(gnokey query vm/qeval -data "$REALM.$1" -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || { echo "query failed: $out" >&2; return 1; }
+	out="$(gk query vm/qeval -data "$REALM.$1" -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || { echo "query failed: $out" >&2; return 1; }
 	data="$(printf '%s\n' "$out" | sed -n 's/^data: ("\(.*\)" string)$/\1/p')"
 	if [ -z "$data" ]; then echo "unexpected query output: $out" >&2; return 1; fi
 	printf '%b' "$data"
@@ -201,7 +237,8 @@ for plan in "${PLANS[@]+"${PLANS[@]}"}"; do
 			if [ "$due" != due ]; then waiting=$((waiting + 1)); continue; fi
 			# paid=1: this payer has paid for the plan (pulled, or carried paid
 			# time into this mandate), so it is not a possible junk entry.
-			if [ "$paid" = 1 ]; then PROVEN+=("$id $payer $amount ${PERIOD[$plan]}"); else UNPROVEN+=("$id $payer $amount ${PERIOD[$plan]}"); fi
+			row="$id $payer $amount ${PERIOD[$plan]} $plan $nextpull"
+			if [ "$paid" = 1 ]; then PROVEN+=("$row"); else UNPROVEN+=("$row"); fi
 		done <<<"$(qtext "CollectorScan($plan, address(\"$ADDR\"), $from)")"
 		[ -n "$next" ] || break
 		from="$next"
@@ -218,11 +255,11 @@ echo "${#PLANS[@]} plans, $listed active mandates for this key ($waiting not due
 # skip costs the payer nothing, a refused pull can cost them the fee.
 session_check() { # <payer> <amount>
 	local out
-	out="$(gnokey query "auth/accounts/$1/session/$ADDR" -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || {
+	out="$(gk query "auth/accounts/$1/session/$ADDR" -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || {
 		if grep -q SessionNotFound <<<"$out"; then echo no-session; else echo "query-failed"; fi
 		return 0
 	}
-	printf '%s\n' "$out" | python3 -c '
+	printf '%s\n' "$out" | python3 9>&- -c '
 import json, sys
 realm, amount, storage, minfee, target, now = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6])
 d = json.loads(sys.stdin.read().split("data:", 1)[1])
@@ -252,7 +289,7 @@ else:
 # What one pull can cost the payer on top of the amount: the fee, plus the
 # storage deposit of a first pull (the realm keeps it under STORAGE_BOUND
 # bytes), priced at the chain's storage price.
-PRICE_OUT="$(gnokey query params/vm:p:storage_price -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || { echo "could not read the storage price: $PRICE_OUT" >&2; exit 1; }
+PRICE_OUT="$(gk query params/vm:p:storage_price -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || { echo "could not read the storage price: $PRICE_OUT" >&2; exit 1; }
 STORAGE_PRICE="$(sed -n 's/^data: "\([0-9]*\)ugnot"$/\1/p' <<<"$PRICE_OUT")"
 [[ "$STORAGE_PRICE" =~ ^[0-9]+$ ]] || { echo "unexpected storage price: $PRICE_OUT" >&2; exit 1; }
 STORAGE_BOUND=100
@@ -263,8 +300,8 @@ STORAGE_BOUND=100
 if [ -n "$GAS_FEE" ]; then
 	MIN_FEE="${GAS_FEE%ugnot}" TARGET_FEE="${GAS_FEE%ugnot}"
 else
-	GP_OUT="$(gnokey query auth/gasprice -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || { echo "could not read the gas price: $GP_OUT" >&2; exit 1; }
-	read -r MIN_FEE TARGET_FEE < <(printf '%s\n' "$GP_OUT" | python3 -c '
+	GP_OUT="$(gk query auth/gasprice -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || { echo "could not read the gas price: $GP_OUT" >&2; exit 1; }
+	read -r MIN_FEE TARGET_FEE < <(printf '%s\n' "$GP_OUT" | python3 9>&- -c '
 import json, sys
 wanted = int(sys.argv[1])
 d = json.loads(sys.stdin.read().split("data:", 1)[1])
@@ -326,7 +363,7 @@ TODO=() checks=0 deferred=0 later=0 qfail=0
 declare -A SKIPS=()
 consider() { # <row> <never paid 0|1>
 	local id payer amount period why
-	read -r id payer amount period <<<"$1"
+	read -r id payer amount period _ <<<"$1"
 	if [ "${RETRY[$id]:-0}" -gt "$NOW" ]; then later=$((later + 1)); return; fi
 	if [ "$2" = 1 ]; then
 		if [ "$checks" -ge "$MAX_CHECKS" ]; then deferred=$((deferred + 1)); return; fi
@@ -366,7 +403,7 @@ save_state
 # error; anything else is.
 failed=0 refused=0 pulled=0 over=0 deferred_now=0
 for row in "${TODO[@]+"${TODO[@]}"}"; do
-	read -r id payer amount period fee <<<"$row"
+	read -r id payer amount period plan nextpull fee <<<"$row"
 	if [ "$pulled" -ge "$MAX_PULLS" ]; then over=$((over + 1)); continue; fi
 	pulled=$((pulled + 1))
 	if [ "$DRY" = 1 ]; then
@@ -377,9 +414,9 @@ for row in "${TODO[@]+"${TODO[@]}"}"; do
 	args=(maketx call -pkgpath "$REALM" -func Pull -send "${amount}ugnot" -master "$payer"
 		-gas-fee "${fee}ugnot" -gas-wanted "$GAS_WANTED" -simulate "$SIMULATE" -broadcast -chainid "$CHAIN" -remote "$REMOTE" -home "$HOME_DIR")
 	if [ "$PWSTDIN" = 1 ]; then
-		out="$(printf '%s\n' "$PW" | gnokey "${args[@]}" -insecure-password-stdin "$KEY" 2>&1)" || true
+		out="$(printf '%s\n' "$PW" | gk "${args[@]}" -insecure-password-stdin "$KEY" 2>&1)" || true
 	else
-		out="$(gnokey "${args[@]}" "$KEY" 2>&1)" || true
+		out="$(gk "${args[@]}" "$KEY" 2>&1)" || true
 	fi
 	if printf '%s\n' "$out" | grep -q '^OK!'; then
 		printf '%s\n' "$out" | grep -E '^(GAS USED|STORAGE DELTA|TX HASH):' | sed 's/^/    /'
@@ -387,6 +424,16 @@ for row in "${TODO[@]+"${TODO[@]}"}"; do
 		continue
 	fi
 	msg="$(printf '%s\n' "$out" | grep -E '^Data:|panic:|error' | head -2 | tr '\n' ' ')"
+	# No block height means the result is unknown (a timeout or a lost
+	# connection can hide a pull that went through): ask the realm.
+	if ! grep -qE '^HEIGHT: *[1-9]' <<<"$out"; then
+		np="$(gk query vm/qeval -data "$REALM.NextPullAt(address(\"$payer\"), $plan)" -remote "$REMOTE" -home "$HOME_DIR" 2>/dev/null | sed -n 's/^data: (\([0-9]*\) int64)$/\1/p')"
+		if [[ "$np" =~ ^[0-9]+$ ]] && [ "$np" -gt "$nextpull" ]; then
+			echo "    no clear answer from gnokey, but the realm shows the pull went through (next pull now $np)"
+			unset 'RETRY[$id]'
+			continue
+		fi
+	fi
 	# gnokey prints the block height of a delivered transaction; a refusal in
 	# simulation or in the mempool shows height 0 or none at all.
 	if grep -qE '^HEIGHT: *[1-9]' <<<"$out"; then
