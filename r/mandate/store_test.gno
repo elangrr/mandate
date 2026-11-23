@@ -129,7 +129,7 @@ func TestDerivedFields(cur realm, t *testing.T) {
 
 // Supporters are listed and counted only once they have paid; junk
 // mandates that never pay are neither listed nor counted, and cannot hide
-// a real supporter: the page walks ScanLimit entries and links onwards.
+// a real supporter: only mandates that paid enter the list the page reads.
 func TestPayingSupporters(cur realm, t *testing.T) {
 	resetState()
 	pid := offer(cur, payee, "Real plan", gnot, MinPeriod)
@@ -150,15 +150,10 @@ func TestPayingSupporters(cur realm, t *testing.T) {
 	uassert.True(t, strings.HasSuffix(CollectorScan(pid, sessA, 400), "end\n"))
 	page := renders(t, "plan/"+utoa(pid))
 	has(t, page, "1 paying supporter ·", "count")
-	has(t, page, "400 mandates have not paid yet (not listed)", "unpaid count")
+	has(t, page, "200 active mandates have not paid yet (not listed), among the latest 200", "unpaid count, bounded")
 	hasNot(t, page, short(testutils.TestAddress("md_j0")), "junk not listed")
-	hasNot(t, page, short(real), "real one is beyond the first window")
-	has(t, page, "[More supporters]("+base+":plan/"+utoa(pid)+"?from=200)", "cursor link")
-	p2 := renders(t, "plan/"+utoa(pid)+"?from=200")
-	has(t, p2, "?from=0)", "second cursor")
-	p3 := renders(t, "plan/"+utoa(pid)+"?from=0")
-	has(t, p3, "| ["+short(real)+"]", "real supporter reached")
-	hasNot(t, p3, "More supporters", "list exhausted")
+	has(t, page, "| ["+short(real)+"]", "real supporter listed at once: junk never enters the paid-once list")
+	hasNot(t, page, "More supporters", "nothing more to walk")
 	// a cancel takes the supporter out of the count
 	cancel(cur, real, real, sessA)
 	p, _ = GetPlan(pid)
@@ -187,8 +182,23 @@ func TestOfferSpam(cur realm, t *testing.T) {
 	home := renders(t, "")
 	hasNot(t, home, "spam", "no spam on home")
 	has(t, home, "No plan has a paying supporter yet among those looked at.", "first window empty")
-	has(t, home, "[More plans with supporters]("+base+"?from=5)", "cursor")
-	has(t, renders(t, "?from=5"), "[Real plan]", "paid plan reached")
+	// follow the "more" links: 206 plans, 50 per page
+	page, from, found := home, "", false
+	for i := 0; i < 6 && !found; i++ {
+		if strings.Contains(page, "[Real plan]") {
+			found = true
+			break
+		}
+		k := strings.Index(page, "[More plans with supporters]("+base+"?from=")
+		if k < 0 {
+			break
+		}
+		rest := page[k+len("[More plans with supporters]("+base+"?from="):]
+		from = rest[:strings.Index(rest, ")")]
+		page = renders(t, "?from="+from)
+	}
+	uassert.True(t, found, "paid plan reached through the cursor")
+	uassert.Equal(t, "5", from) // 205 -> 155 -> 105 -> 55 -> 5
 }
 
 // At most MaxActivePerPayer active mandates; a cancelled or expired one
@@ -293,4 +303,124 @@ func TestPayerIsolation(cur realm, t *testing.T) {
 	uassert.Equal(t, before, victim())
 	uassert.Equal(t, 0, len(payerOf(stranger).Active)) // cancels left nothing behind
 	uassert.Equal(t, 40, len(MandatesOf(stranger, 1))+len(MandatesOf(stranger, 2)))
+}
+
+// Counts are computed when read: an expired mandate is neither a paying
+// supporter nor "not yet paid", and a payer who comes back after expiry or
+// cancel counts once. Every view must agree: GetPlan, the plan headline,
+// the supporter list, SupportersOf, the home page and the payee table.
+func checkCounts(t *testing.T, pid uint64, paying, unpaid int, what string) {
+	t.Helper()
+	p, _ := GetPlan(pid)
+	uassert.Equal(t, paying, p.Paying, what+": GetPlan")
+	uassert.True(t, p.PayingExact, what+": exact")
+	pp := renders(t, "plan/"+utoa(pid))
+	if paying == 1 {
+		has(t, pp, "· 1 paying supporter ·", what+": headline")
+	} else {
+		has(t, pp, "· "+itoa(int64(paying))+" paying supporters ·", what+": headline")
+	}
+	listed, _ := payingFrom(planOf(pid), -1, now())
+	uassert.Equal(t, paying, len(listed), what+": listed")
+	active := len(SupportersOf(pid, 1))
+	uassert.Equal(t, paying+unpaid, active, what+": SupportersOf")
+	if unpaid == 1 {
+		has(t, pp, "1 active mandate has not paid yet", what+": unpaid")
+	} else {
+		has(t, pp, itoa(int64(unpaid))+" active mandates have not paid yet", what+": unpaid")
+	}
+	home := renders(t, "")
+	pe := renders(t, "payee/"+payee.String())
+	row := "| [Plan](" + base + ":plan/" + utoa(pid) + ") | 1 GNOT every minute | "
+	if paying > 0 {
+		has(t, home, "[Plan]("+base+":plan/"+utoa(pid)+")", what+": on home")
+	} else {
+		hasNot(t, home, "[Plan]("+base+":plan/"+utoa(pid)+")", what+": not on home")
+	}
+	has(t, pe, row+itoa(int64(paying))+" |", what+": payee table")
+}
+
+func TestExpirySequences(cur realm, t *testing.T) {
+	period := MinPeriod
+	short := func() int64 { return now() + 2*period } // expires in 2 minutes
+	expire := func() { testing.SkipHeights(25) }      // 125 s
+
+	// 1. pay, expire: not a supporter any more, not "unpaid" either
+	resetState()
+	pid := offer(cur, payee, "Plan", gnot, period)
+	subscribe(cur, payer, pid, sessA, short())
+	checkCounts(t, pid, 0, 1, "subscribed, not paid")
+	pullOK(payer, sessA, gnot)
+	checkCounts(t, pid, 1, 0, "paid")
+	expire()
+	checkCounts(t, pid, 0, 0, "expired")
+	// 2. come back after expiry and pay: counted once
+	subscribe(cur, payer, pid, sessA, now()+day)
+	checkCounts(t, pid, 0, 1, "re-subscribed after expiry")
+	pullOK(payer, sessA, gnot)
+	checkCounts(t, pid, 1, 0, "paid again after expiry")
+	uassert.Equal(t, 2, planOf(pid).PaidOnce.N)
+
+	// 3. expire, then cancel the expired (unpruned) mandate, then come back
+	resetState()
+	pid = offer(cur, payee, "Plan", gnot, period)
+	subscribe(cur, payer, pid, sessA, short())
+	pullOK(payer, sessA, gnot)
+	expire()
+	cancel(cur, payer, payer, sessA)
+	checkCounts(t, pid, 0, 0, "expired then cancelled")
+	subscribe(cur, payer, pid, sessA, now()+day)
+	pullOK(payer, sessA, gnot)
+	checkCounts(t, pid, 1, 0, "back after expire+cancel")
+
+	// 4. expire, re-subscribe (prunes), cancel, come back again
+	resetState()
+	pid = offer(cur, payee, "Plan", gnot, period)
+	subscribe(cur, payer, pid, sessA, short())
+	pullOK(payer, sessA, gnot)
+	expire()
+	subscribe(cur, payer, pid, sessB, now()+day)
+	pullOK(payer, sessB, gnot)
+	checkCounts(t, pid, 1, 0, "expired, re-subscribed with another key, paid")
+	cancel(cur, payer, payer, sessB)
+	checkCounts(t, pid, 0, 0, "then cancelled")
+	subscribe(cur, payer, pid, sessA, now()+day)
+	pullOK(payer, sessA, gnot)
+	checkCounts(t, pid, 1, 0, "and back once more")
+	uassert.Equal(t, 3, planOf(pid).PaidOnce.N)
+
+	// 5. cancel a paying mandate, come back: counted once
+	resetState()
+	pid = offer(cur, payee, "Plan", gnot, period)
+	subscribe(cur, payer, pid, sessA, now()+day)
+	pullOK(payer, sessA, gnot)
+	cancel(cur, payer, payer, sessA)
+	checkCounts(t, pid, 0, 0, "cancelled")
+	subscribe(cur, payer, pid, sessA, now()+day)
+	checkCounts(t, pid, 0, 1, "back, not paid yet")
+	pullOK(payer, sessA, gnot)
+	checkCounts(t, pid, 1, 0, "back and paid")
+	testing.SkipHeights(13) // next period: a second payment adds nothing to the lists
+	pullOK(payer, sessA, gnot)
+	checkCounts(t, pid, 1, 0, "paid twice")
+	uassert.Equal(t, 2, planOf(pid).PaidOnce.N)
+
+	// 5b. never paid, then expired: not "not yet paid" any more
+	resetState()
+	pid = offer(cur, payee, "Plan", gnot, period)
+	subscribe(cur, payer, pid, sessA, short())
+	checkCounts(t, pid, 0, 1, "unpaid")
+	expire()
+	checkCounts(t, pid, 0, 0, "unpaid, expired")
+
+	// 6. two payers, one expires: the other still counts
+	resetState()
+	pid = offer(cur, payee, "Plan", gnot, period)
+	subscribe(cur, payer, pid, sessA, short())
+	subscribe(cur, payer2, pid, sessA, now()+day)
+	pullOK(payer, sessA, gnot)
+	pullOK(payer2, sessA, gnot)
+	checkCounts(t, pid, 2, 0, "two paying")
+	expire()
+	checkCounts(t, pid, 1, 0, "one expired")
 }

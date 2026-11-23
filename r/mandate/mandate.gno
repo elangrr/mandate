@@ -73,13 +73,16 @@ const (
 	// cap on a session is about 4 years.
 	MaxTerm int64 = 366 * 24 * 60 * 60
 	// FeeAllowance is what the pages add to the session's spend limit for
-	// fees (0.05 GNOT). The chain accepts a fee when fee / gas wanted is at
-	// least the current gas price (1 ugnot per 1,000 gas on Onyx, raised by
-	// the chain when blocks are full). With the pages' 20M gas wanted, the
-	// minimum fee is 20,000 ugnot, so the allowance covers a gas price up to
-	// 2.5x Onyx's current one (2.4x on a mandate's first pull, which also
-	// pays a storage deposit of about 20 bytes, 2,000 ugnot).
-	FeeAllowance int64 = 50_000
+	// fees and storage (0.1 GNOT). The chain accepts a fee when fee / gas
+	// wanted is at least the current gas price (1 ugnot per 1,000 gas on
+	// Onyx, raised by the chain when blocks are full), and counts the Pull's
+	// storage deposit against the same limit. With the pages' 20M gas wanted
+	// the minimum fee is 20,000 ugnot. A mandate's first pull also adds it to
+	// the plan's paid-once list: up to 446 bytes (44,600 ugnot) when that
+	// starts a new array, as for a plan's first paying supporter. So the
+	// allowance covers a gas price up to 2.7x Onyx's current one on such a
+	// pull, and about 5x on every other pull.
+	FeeAllowance int64 = 100_000
 	// MaxTitleLen is the longest plan title, in characters.
 	MaxTitleLen = 80
 	// PageSize is the number of rows per list page and per read call.
@@ -99,7 +102,7 @@ type Plan struct {
 
 	Supporters supporterList // every mandate for this plan, oldest first
 	Cancelled  int           // how many of them were cancelled
-	Paying     int           // how many have paid at least once and are not cancelled
+	PaidOnce   supporterList // mandates that have paid at least once (added at their first pull)
 	Pulls      int64         // successful pulls (paid = Pulls * Amount)
 	LastPullAt int64         // unix seconds, 0 = never
 
@@ -363,7 +366,9 @@ func checkPull(isSession bool, sess address, paths []string, payer address, sent
 func recordPull(m *Mandate, p *Plan, now int64) {
 	m.NextPullAt = now + p.Period
 	if m.Pulls == 0 {
-		p.Paying++ // counted as a supporter from the first payment on
+		// A supporter from the first payment on. Counts are computed when read
+		// (only mandates still active count), so expiry needs no transaction.
+		p.PaidOnce.add(entry{Payer: m.Payer, ID: m.ID})
 	}
 	m.Pulls++
 	p.Pulls++
@@ -404,9 +409,6 @@ func Cancel(cur realm, payer address, sessionAddr address) {
 	m.CancelledAt = time.Now().Unix()
 	m.CancelledBy = caller
 	p.Cancelled++
-	if m.Pulls > 0 {
-		p.Paying--
-	}
 	chain.Emit("Cancelled",
 		"mandate", utoa(m.ID),
 		"plan", utoa(p.ID),

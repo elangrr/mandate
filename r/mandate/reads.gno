@@ -11,18 +11,23 @@ import (
 
 // PlanInfo is a copy of a plan.
 type PlanInfo struct {
-	ID         uint64
-	Payee      address
-	Title      string
-	Amount     int64
-	Period     int64
-	CreatedAt  int64
-	Mandates   int // mandates ever created for this plan
-	Cancelled  int // how many of them were cancelled
-	Paying     int // how many have paid at least once and are not cancelled
-	Pulls      int64
-	Paid       int64
-	LastPullAt int64
+	ID        uint64
+	Payee     address
+	Title     string
+	Amount    int64
+	Period    int64
+	CreatedAt int64
+	Mandates  int // mandates ever created for this plan
+	Cancelled int // how many of them were cancelled
+	// Paying is how many mandates have paid at least once and are still
+	// active (not cancelled, replaced or expired) right now, counted among
+	// the latest ScanLimit that ever paid; PayingExact is false when there
+	// were more to look at.
+	Paying      int
+	PayingExact bool
+	Pulls       int64
+	Paid        int64
+	LastPullAt  int64
 }
 
 // MandateInfo is a copy of a mandate with the realm's view of it.
@@ -278,22 +283,72 @@ func CollectorScan(planID uint64, sessionAddr address, from int) string {
 	return b.String()
 }
 
-// payingFrom walks at most ScanLimit entries of the plan's supporter list,
+// payingFrom walks at most ScanLimit entries of the plan's paid-once list,
 // newest first, starting at index `from` (or the newest when from < 0), and
-// returns up to PageSize active mandates that have paid at least once, and
-// the index to continue from (-1 when the list is exhausted).
+// returns up to PageSize mandates that are still active, and the index to
+// continue from (-1 when the list is exhausted).
 func payingFrom(p *Plan, from int, now int64) ([]*Mandate, int) {
-	if from < 0 || from >= p.Supporters.N {
-		from = p.Supporters.N - 1
+	if from < 0 || from >= p.PaidOnce.N {
+		from = p.PaidOnce.N - 1
 	}
 	out := []*Mandate{}
 	i := from
 	for walked := 0; i >= 0 && walked < ScanLimit && len(out) < PageSize; i, walked = i-1, walked+1 {
-		if m := activeMandate(p.Supporters.at(i)); m != nil && m.Pulls > 0 && m.isActive(now) {
+		if m := activeMandate(p.PaidOnce.at(i)); m != nil && m.isActive(now) {
 			out = append(out, m)
 		}
 	}
 	return out, i
+}
+
+// countPaying counts the plan's mandates that have paid and are still
+// active now, among the latest ScanLimit that ever paid, and says whether
+// that covered them all. Only mandates that paid enter that list, so junk
+// cannot crowd it: growing it costs a real payment to the plan's payee.
+// A payer has at most one active mandate per plan, so nobody counts twice.
+func countPaying(p *Plan, now int64) (int, bool) {
+	n := 0
+	lo := p.PaidOnce.N - ScanLimit
+	if lo < 0 {
+		lo = 0
+	}
+	for i := p.PaidOnce.N - 1; i >= lo; i-- {
+		if m := activeMandate(p.PaidOnce.at(i)); m != nil && m.isActive(now) {
+			n++
+		}
+	}
+	return n, lo == 0
+}
+
+// hasPaying reports whether the plan has at least one paying, active
+// mandate now (stops at the first one found).
+func hasPaying(p *Plan, now int64) bool {
+	lo := p.PaidOnce.N - ScanLimit
+	if lo < 0 {
+		lo = 0
+	}
+	for i := p.PaidOnce.N - 1; i >= lo; i-- {
+		if m := activeMandate(p.PaidOnce.at(i)); m != nil && m.isActive(now) {
+			return true
+		}
+	}
+	return false
+}
+
+// countUnpaid counts active mandates that have never paid, among the
+// plan's latest ScanLimit mandates, and says whether that covered them all.
+func countUnpaid(p *Plan, now int64) (int, bool) {
+	n := 0
+	lo := p.Supporters.N - ScanLimit
+	if lo < 0 {
+		lo = 0
+	}
+	for i := p.Supporters.N - 1; i >= lo; i-- {
+		if m := activeMandate(p.Supporters.at(i)); m != nil && m.Pulls == 0 && m.isActive(now) {
+			n++
+		}
+	}
+	return n, lo == 0
 }
 
 func infos(list []*Mandate) []MandateInfo {
@@ -306,19 +361,21 @@ func infos(list []*Mandate) []MandateInfo {
 }
 
 func (p *Plan) info() PlanInfo {
+	paying, exact := countPaying(p, time.Now().Unix())
 	return PlanInfo{
-		ID:         p.ID,
-		Payee:      p.Payee,
-		Title:      p.Title,
-		Amount:     p.Amount,
-		Period:     p.Period,
-		CreatedAt:  p.CreatedAt,
-		Mandates:   p.Supporters.N,
-		Cancelled:  p.Cancelled,
-		Paying:     p.Paying,
-		Pulls:      p.Pulls,
-		Paid:       p.Pulls * p.Amount,
-		LastPullAt: p.LastPullAt,
+		ID:          p.ID,
+		Payee:       p.Payee,
+		Title:       p.Title,
+		Amount:      p.Amount,
+		Period:      p.Period,
+		CreatedAt:   p.CreatedAt,
+		Mandates:    p.Supporters.N,
+		Cancelled:   p.Cancelled,
+		Paying:      paying,
+		PayingExact: exact,
+		Pulls:       p.Pulls,
+		Paid:        p.Pulls * p.Amount,
+		LastPullAt:  p.LastPullAt,
 	}
 }
 

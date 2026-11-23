@@ -96,15 +96,19 @@ func renderHome(from int) string {
 	b.WriteString("- No admin, no pause, no upgrade. The realm never holds funds: each payment goes straight to the creator in the same transaction.\n\n")
 	b.WriteString("[How to use it, with every command](" + link("help") + ")\n\n")
 	b.WriteString("## Numbers\n\n")
-	b.WriteString("| Plans | Mandates | Payments | Paid out |\n|---|---|---|---|\n")
+	b.WriteString("| Plans | Mandates ever recorded | Payments | Paid out |\n|---|---|---|---|\n")
 	b.WriteString("| " + strconv.Itoa(nPlans) + " | " + strconv.Itoa(nMandates) + " | " + itoa(pulls) + " | " + formatUgnot(paid) + " |\n\n")
 	b.WriteString("## Supporter pages\n\n")
 	b.WriteString(plansWithSupporters(from))
 	return b.String()
 }
 
+// homeScanPlans is how many plans one home page walks: each check reads the
+// plan's paid-once list until it finds an active payer.
+const homeScanPlans = 50
+
 // plansWithSupporters lists, newest first, the plans that have at least one
-// paying supporter, walking at most ScanLimit plans per page: plans nobody
+// paying supporter right now, walking at most homeScanPlans plans per page: plans nobody
 // pays for (spam included) never fill this list, and a "more" link
 // continues the walk.
 func plansWithSupporters(from int) string {
@@ -115,15 +119,16 @@ func plansWithSupporters(from int) string {
 	}
 	rows := 0
 	i := from
+	now := time.Now().Unix()
 	var t strings.Builder
-	for walked := 0; i >= 0 && walked < ScanLimit && rows < PageSize; i, walked = i-1, walked+1 {
+	for walked := 0; i >= 0 && walked < homeScanPlans && rows < PageSize; i, walked = i-1, walked+1 {
 		_, v := plans.GetByIndex(i)
 		p := v.(*Plan)
-		if p.Paying == 0 {
+		if !hasPaying(p, now) {
 			continue
 		}
 		t.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
-			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + strconv.Itoa(p.Paying) +
+			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + payingCell(p, now) +
 			" | " + itoa(p.Pulls) + " |\n")
 		rows++
 	}
@@ -155,7 +160,7 @@ func renderAllPlans(page int) string {
 	b.WriteString("| Plan | Price | Creator | Supporters | Payments |\n|---|---|---|---|---|\n")
 	for _, p := range list {
 		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
-			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + strconv.Itoa(p.Paying) +
+			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + infoPayingCell(p) +
 			" | " + itoa(p.Pulls) + " |\n")
 	}
 	b.WriteString(pager("plans", page, len(list) == PageSize))
@@ -176,7 +181,7 @@ func renderPlan(id uint64, from int) string {
 		b.WriteString(" (a test plan: the period is under a day)")
 	}
 	b.WriteString("\n\n")
-	b.WriteString("Plan " + utoa(p.ID) + " · published " + formatTime(p.CreatedAt) + " · " + plural(p.Paying, "paying supporter", "paying supporters") + " · " +
+	b.WriteString("Plan " + utoa(p.ID) + " · published " + formatTime(p.CreatedAt) + " · " + payingText(p, now) + " · " +
 		plural(int(p.Pulls), "payment", "payments") + ", " + formatUgnot(p.Pulls*p.Amount) + " in total · last payment: " + formatTimeOrNever(p.LastPullAt) + "\n\n")
 	b.WriteString("Plans never change. New terms are published as a new plan.\n\n")
 
@@ -199,10 +204,14 @@ func renderPlan(id uint64, from int) string {
 	if next >= 0 {
 		b.WriteString("[More supporters](" + link("plan/"+utoa(id)) + "?from=" + strconv.Itoa(next) + ")\n\n")
 	}
-	unpaid := p.Supporters.N - p.Cancelled - p.Paying
-	b.WriteString("Supporters are listed and counted from their first payment on, newest first. ")
-	b.WriteString("Cancelled and expired mandates are not listed; a supporter who revoked the session on chain stays listed until the mandate is cancelled or expires. ")
-	b.WriteString(plural(unpaid, "mandate has", "mandates have") + " not paid yet (not listed).\n\n")
+	unpaid, exact := countUnpaid(p, now)
+	b.WriteString("Supporters are listed and counted from their first payment on, newest first, while their mandate is active. ")
+	b.WriteString("Cancelled and expired mandates are not listed or counted; a supporter who revoked the session on chain stays listed until the mandate is cancelled or expires. ")
+	b.WriteString(plural(unpaid, "active mandate has", "active mandates have") + " not paid yet (not listed)")
+	if !exact {
+		b.WriteString(", among the latest " + strconv.Itoa(ScanLimit))
+	}
+	b.WriteString(".\n\n")
 
 	b.WriteString("## Support this plan\n\n")
 	spend := p.Amount + FeeAllowance
@@ -289,7 +298,7 @@ func renderPayee(payee address, page int) string {
 	b.WriteString("| Plan | Price | Supporters | Payments | Last payment |\n|---|---|---|---|---|\n")
 	for _, p := range list {
 		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) + " | " +
-			strconv.Itoa(p.Paying) + " | " + itoa(p.Pulls) + " | " + formatTimeOrNever(p.LastPullAt) + " |\n")
+			infoPayingCell(p) + " | " + itoa(p.Pulls) + " | " + formatTimeOrNever(p.LastPullAt) + " |\n")
 	}
 	b.WriteString(pager("payee/"+payee.String(), page, len(list) == PageSize))
 	return b.String()
@@ -339,6 +348,31 @@ func renderHelp() string {
 
 func renderNotFound() string {
 	return "# Not found\n\nThere is no such page. [Back to Mandate](" + link("") + ")\n"
+}
+
+// payingText is the plan headline's supporter count.
+func payingText(p *Plan, now int64) string {
+	n, exact := countPaying(p, now)
+	if exact {
+		return plural(n, "paying supporter", "paying supporters")
+	}
+	return "at least " + strconv.Itoa(n) + " paying supporters (counted among the latest " + strconv.Itoa(ScanLimit) + " who ever paid)"
+}
+
+// payingCell is the supporter count in tables.
+func payingCell(p *Plan, now int64) string {
+	n, exact := countPaying(p, now)
+	if exact {
+		return strconv.Itoa(n)
+	}
+	return strconv.Itoa(n) + "+"
+}
+
+func infoPayingCell(p PlanInfo) string {
+	if p.PayingExact {
+		return strconv.Itoa(p.Paying)
+	}
+	return strconv.Itoa(p.Paying) + "+"
 }
 
 // intParam returns the integer value of key in the query, or def.

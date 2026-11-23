@@ -49,8 +49,11 @@ if [ "$CHAIN_ID" != "dev" ]; then
 	exit 1
 fi
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-RPC_PORT="${RPC_PORT:-36657}"
-WEB_PORT="${WEB_PORT:-38888}"
+# Ports: a free one each unless RPC_PORT / WEB_PORT are set (so this can run
+# next to another local node); a port that is set and busy is refused below.
+free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
+RPC_PORT="${RPC_PORT:-$(free_port)}"
+WEB_PORT="${WEB_PORT:-$(free_port)}"
 RPC="127.0.0.1:$RPC_PORT"
 REALM="gno.land/r/mandate_dev/mandate"
 OTHER="gno.land/r/mandate_dev/other"
@@ -247,8 +250,8 @@ eq "collector address derived by the realm" "$COLL" "$(gnokey query vm/qrender -
 step "the payer creates sessions (own key) and subscribes"
 T0="$(now)"
 EXP="$((T0 + 1800))"
-# coll: the normal case, spend limit = 1 GNOT + 0.05 GNOT fee allowance.
-expect_ok "session for coll (1.05 GNOT / 60 s, exactly this realm)" payer $(session_args "$GPUB" "vm/exec:$REALM" 1050000ugnot 60 "$EXP")
+# coll: the normal case, spend limit = 1 GNOT + 0.1 GNOT fee allowance.
+expect_ok "session for coll (1.1 GNOT / 60 s, exactly this realm)" payer $(session_args "$GPUB" "vm/exec:$REALM" 1100000ugnot 60 "$EXP")
 note_gas "session create"
 expect_ok "Subscribe plan 1 with coll" payer call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL" -args "$EXP" "${CALL[@]}"
 note_gas "Subscribe (new payer, new key)"
@@ -401,10 +404,10 @@ step "8. hostile payee: burn the allowance as fees"
 wait_until "$((T2 + 62))"
 p="$(bal "$PAYER")" e="$(bal "$PAYEE")"
 # A doomed Pull (no coins) with a fee equal to the whole spend limit, simulation skipped.
-tx coll call -pkgpath "$REALM" -func Pull -master "$PAYER" -gas-fee 1050000ugnot -gas-wanted 8000000 -simulate skip || true
+tx coll call -pkgpath "$REALM" -func Pull -master "$PAYER" -gas-fee 1100000ugnot -gas-wanted 8000000 -simulate skip || true
 grep -q "mandate: send exactly" "$OUT" || fail "unexpected: $(grep -E '^Data:' "$OUT" | head -2)"
 burn=$((p - $(bal "$PAYER")))
-eq "payer paid the whole spend limit as a fee, and not one ugnot more" 1050000 "$burn"
+eq "payer paid the whole spend limit as a fee, and not one ugnot more" 1100000 "$burn"
 eq "payee gained nothing" "$e" "$(bal "$PAYEE")"
 p="$(bal "$PAYER")"
 if tx coll call -pkgpath "$REALM" -func Pull -master "$PAYER" -gas-fee 1000ugnot -gas-wanted 8000000 -simulate skip && grep -q '^OK!' "$OUT"; then fail "second burn succeeded"; fi

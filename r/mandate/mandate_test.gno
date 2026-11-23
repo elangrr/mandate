@@ -109,7 +109,7 @@ func snapshot() string {
 	}
 	plans.Iterate("", "", func(_ string, v any) bool {
 		p := v.(*Plan)
-		b.WriteString(p.Title + itoa(p.Amount) + itoa(p.Period) + itoa(int64(p.Supporters.N)) + "c" + itoa(int64(p.Cancelled)) + "p" + itoa(int64(p.Paying)) +
+		b.WriteString(p.Title + itoa(p.Amount) + itoa(p.Period) + itoa(int64(p.Supporters.N)) + "c" + itoa(int64(p.Cancelled)) + "p" + itoa(int64(p.PaidOnce.N)) +
 			itoa(p.Pulls) + itoa(p.LastPullAt) + "\n")
 		for i := 0; i < p.Supporters.N; i++ {
 			e := p.Supporters.at(i)

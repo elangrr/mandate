@@ -60,7 +60,7 @@ Each fact was checked in the source of gno v1.8.0 (commit fc79041f4, `github.com
   - Adena accepted a page's `/auth.m_create_session` request, showed its approval, signed and broadcast it.
   - The chain refused it with `InsufficientFeeError`: Gas-Wanted 2,000,000,000, Gas-Fee 100,000ugnot.
   - The cause and the fix are below.
-- **Confirmed on Onyx with the fix** (2026-11-23, Firefox, Adena 1.22.5): `DoContract` with `/auth.m_create_session` and gasWanted 5,000,000 / gasFee 10,000 returned TRANSACTION_SUCCESS, and a read-only sessions query showed the session with exactly the requested spend limit, period, allow path and expiry. `/auth.m_revoke_session` with the same gas also succeeded, and the sessions query then returned none.
+- **Confirmed on Onyx with the fix** (2026-11-23, Firefox, Adena 1.22.5): `DoContract` with `/auth.m_create_session` and gasWanted 5,000,000 / gasFee 10,000 returned TRANSACTION_SUCCESS, and a read-only sessions query showed the session with exactly the requested spend limit, period, allow path and expiry. `/auth.m_revoke_session` with the same gas also succeeded, and the sessions query then returned none. Transactions: create d353b2dcd83279fb23e76eb33556deaade25a22e3cfc9a7a72e94d767035cc3b, revoke ff3f0a74a829d15a2b5c50153673fca01100e3daa9c776f1165b95bd4b1fef66 (Onyx).
 
 ### What a page must send so Adena signs a session transaction with sane gas
 

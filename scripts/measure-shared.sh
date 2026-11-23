@@ -33,8 +33,11 @@ MODE="${1:-baseline}"
 N="${2:-0}"
 case "$MODE" in baseline | loop | depth | junk) ;; *) echo "mode: baseline | loop N | depth N | junk N" >&2; exit 2 ;; esac
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
-RPC_PORT="${RPC_PORT:-36657}"
-WEB_PORT="${WEB_PORT:-38888}"
+# Ports: a free one each unless RPC_PORT / WEB_PORT are set (so this can run
+# next to another local node); a port that is set and busy is refused below.
+free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()'; }
+RPC_PORT="${RPC_PORT:-$(free_port)}"
+WEB_PORT="${WEB_PORT:-$(free_port)}"
 RPC="127.0.0.1:$RPC_PORT"
 REALM="gno.land/r/mandate_dev/mandate"
 TMP="$(mktemp -d)"
@@ -239,7 +242,7 @@ tx victim session create -pubkey "$GPUB" -allow-paths "vm/exec:$REALM" -spend-li
 tx victim call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL" -args "$EXP" "${CALL[@]}"
 SUB1=$(gas) SUB1D=$(delta)
 tx coll call -pkgpath "$REALM" -func Pull -send 1000000ugnot -master "$VICTIM" -gas-fee 1000000ugnot -gas-wanted 100000000
-PULL1=$(gas)
+PULL1=$(gas) PULL1D=$(delta)
 FRESH="$(python3 -c 'import hashlib
 CH="qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 def pm(v):
@@ -290,7 +293,7 @@ PULL2=$(gas) PULL2D=$(delta)
 
 echo
 echo "RESULT mode=$MODE n=$N attacker_deposits_ugnot=$ATT_DEPOSITS"
-echo "RESULT victim_subscribe_first=$SUB1 (storage $SUB1D B) victim_pull_first=$PULL1 victim_pull_later=$PULL2 victim_subscribe_returning=$SUB2 victim_cancel=$CAN"
+echo "RESULT victim_subscribe_first=$SUB1 (storage $SUB1D B) victim_pull_first=$PULL1 (storage $PULL1D B) victim_pull_later=$PULL2 victim_subscribe_returning=$SUB2 victim_cancel=$CAN"
 
 if [ "$MODE" = junk ]; then
 	echo

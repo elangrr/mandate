@@ -19,7 +19,7 @@ Status: milestone 1, tested on a local chain. Not deployed yet. The realm will l
 
                                  create a session for key K:
                                    only vm/exec:<this realm>,
-                                   at most 1.05 GNOT per 7 days,  ─▶ session (supporter, K)
+                                   at most 1.1 GNOT per 7 days,   ─▶ session (supporter, K)
                                    expires in a year
                                  Subscribe(plan 1, addr(K), expiry) ▶ mandate recorded
 
@@ -38,7 +38,7 @@ Three parts:
 ## The honest limits
 
 - **It is direct debit, not escrow.** Nothing is locked up front. A supporter can revoke, cancel or empty their account at any time; a creator is only paid when a pull succeeds. Payments are taken at the start of each period, so a creator is exposed for one period at most.
-- **The cap includes fees.** The session's spend limit is the price plus a fee allowance of 0.05 GNOT per period. A dishonest creator could burn that allowance as network fees (which go to the network, not to them). They can never take more than the limit, or pull more often.
+- **The cap includes fees.** The session's spend limit is the price plus a fee allowance of 0.1 GNOT per period (fees and the first payment's storage deposit). A dishonest creator could burn that allowance as network fees (which go to the network, not to them). They can never take more than the limit, or pull more often.
 - **At most 16 mandates per wallet**, because the chain allows 16 sessions per account.
 - **Revoke any time.** Revoking the session on chain stops every payment at once. The realm cannot see a revoke, so it still shows the mandate as active until it is cancelled or expires; services must also check the session on chain (`auth/accounts/<payer>/session/<key>`, a free query).
 - **Nothing is ever deployed under the realm's path.** A session for `vm/exec:<realm>` also allows every realm under that path (the chain matches by prefix). The realm's deployer must never deploy anything at `gno.land/r/<namespace>/mandate/...`; this repository never will.
@@ -58,7 +58,7 @@ gnokey maketx call -pkgpath gno.land/r/<ns>/mandate -func SetCollectorKey -args 
 
 # supporter, own key: the plan page shows these two filled in
 gnokey maketx session create -pubkey <collector gpub> -allow-paths vm/exec:gno.land/r/<ns>/mandate \
-    -spend-limit 1050000ugnot -spend-period 604800 -expires-at <unix> ...
+    -spend-limit 1100000ugnot -spend-period 604800 -expires-at <unix> ...
 gnokey maketx call -pkgpath gno.land/r/<ns>/mandate -func Subscribe -args 1 -args <collector address> -args <unix> ...
 
 # creator's collector
