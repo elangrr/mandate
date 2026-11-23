@@ -230,7 +230,7 @@ realm_zero() { [ "$(bal "$REALM_ADDR")" = 0 ] || fail "the realm holds $(bal "$R
 gas_used() { sed -n 's/^GAS USED: *\([0-9]*\)$/\1/p' "$OUT"; }
 storage_delta() { local d; d="$(sed -n 's/^STORAGE DELTA: *\(-\{0,1\}[0-9]*\) bytes$/\1/p' "$OUT")"; echo "${d:-0}"; }
 
-CALL=(-gas-fee 100000ugnot -gas-wanted 30000000)
+CALL=(-gas-fee 100000ugnot -gas-wanted 40000000) # as the pages give it
 PULLGAS=(-gas-fee 20000ugnot -gas-wanted 20000000)
 pull() { # pull <session key> <amount> -> tx args for a Pull on behalf of the payer
 	echo "call -pkgpath $REALM -func Pull -send ${2}ugnot -master $PAYER ${PULLGAS[*]}"

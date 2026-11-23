@@ -37,9 +37,10 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 | Minimum period | 60 seconds | Block times are seconds; the chain's spend period is in seconds. Short periods exist for demos and tests; plan pages flag anything under a day as a test plan. |
 | Maximum period | 366 days | A yearly plan plus slack. |
 | Maximum term | 366 days from Subscribe | A payer renews at most once a year. The chain's own cap on a session is about 4 years. |
-| Fee allowance (pages) | 0.1 GNOT | Added to the session's spend limit; it pays the Pull's fee and storage deposit. A Pull costs the payer at most the fee (20,000 ugnot at today's Onyx gas price for the collector's 20M gas wanted) plus at most 100 bytes of storage (10,000 ugnot at Onyx's 100 ugnot per byte): 30,000 ugnot. 0.1 GNOT leaves a margin of 70,000 ugnot, enough for a gas price 4.5 times today's. M1.4 proposes 0.05 GNOT (margin 20,000 ugnot, a gas price twice today's); see "Pull's budget". |
+| Fee allowance (pages) | 0.1 GNOT | Added to the session's spend limit; it pays the Pull's fee and storage deposit. A Pull costs the payer at most the fee (20,000 ugnot at today's Onyx gas price for the collector's 20M gas wanted) plus at most 100 bytes of storage (10,000 ugnot at Onyx's 100 ugnot per byte): 30,000 ugnot. 0.1 GNOT leaves a margin of 70,000 ugnot; why it was kept rather than lowered is in "Pull's budget". |
+| Own-key calls (pages) | 100,000 ugnot for 40M gas wanted | Offer, SetCollectorKey, session create and revoke, Subscribe, Cancel. The heaviest measured is the Subscribe that creates a chunk, every 32nd of a plan: up to 22.5M on a local chain ("Lists at their boundaries"); Onyx charges more per object. Raised from 30M in M1.4. |
 | Pull fee (pages, collector) | 20,000 ugnot for 20M gas wanted | Exactly today's Onyx price. Measured use on a local chain: 8.5–9.5M gas in the flow, 11.6M at the oldest entry of a 1,058-entry plan, 12.3M at 10,274 entries (it grows with the log of the store's size). Reads on Onyx cost more per object, because the chain prices a read by the depth of its store (`expectedDepth100`, `tm2/pkg/store/iavl/store.go:45`) and Onyx's store is far larger. |
-| Title | 1–80 characters, one line | Same rules as QuestMaster: UTF-8, no control characters, no U+2028/U+2029. |
+| Title | 1–80 characters, one line | UTF-8, no control characters, no U+2028/U+2029, and since M1.4 no format characters (Unicode category Cf: direction controls, zero-width characters, the joiner included), which can make a title display differently from what it says. So emoji joined with the zero-width joiner (families, some flags) are refused; the creator help says so. |
 | Page size | 20 rows | Every list read and every page is paged. |
 | Mandates per wallet | 16 active at a time | The chain's limit on sessions per account (`tm2/pkg/std/account.go:303`). Since M1.3 the realm refuses a 17th active mandate too, which bounds each payer's own record. Cancelled and expired ones free their slot. |
 
@@ -94,7 +95,7 @@ For comparison, the same 1,240 GNOT put into one M1.1 bucket pushed the victim's
 What is left is the depth of the payer tree:
 - Pull grows by about 0.2M gas per doubling of the number of payers.
 - Subscribe and Cancel grow by about 0.65M per doubling, because they write the payer's record back into the tree.
-- At 100,000 payers that projects to about 11M for Pull and about 18M for Cancel, well inside the pages' 20M and 30M gas wanted.
+- At 100,000 payers that projects to about 11M for Pull and about 18M for Cancel, well inside the pages' 20M and 40M gas wanted.
 - Each doubling costs the attacker as many new payers as already exist, at about 0.53 GNOT each.
 
 **Storing payer records by value** (decided in M1.3) saves about 400 B per new payer, but every Subscribe and Cancel writes the record back and so rewrites the tree path. Measured cost of that depth:
@@ -102,7 +103,7 @@ What is left is the depth of the payer tree:
 - **At 2,300 payers:** 15.9M and 14.4M.
 - **At 10,000 payers:** 17.5M and 16.0M.
 - **Pull only reads the record:** +0.2M gas per doubling, against +0.65M per doubling for Subscribe and Cancel.
-- **Projection:** at 100,000 payers, about 18M for Cancel, inside the pages' 30M gas wanted.
+- **Projection:** at 100,000 payers, about 18M for Cancel, inside the pages' 40M gas wanted.
 
 A Subscribe to a plan whose newest chunk is partly full costs a little more: up to about 0.3M gas here, bounded by the 32-entry chunk. Since M1.4 the lists have two levels (below), so no append grows with the plan's history; measured at 32,800 entries in "Lists at their boundaries".
 
@@ -212,7 +213,7 @@ The worst first payment is the plan's very first (its counters go from zero), 68
 
 **Worst case per period:** fee 20,000 ugnot (the collector's 20M gas wanted at today's Onyx price of 1 ugnot per 1,000 gas) + 100 B × 100 ugnot (Onyx's storage price, read-only query) = **30,000 ugnot**.
 
-**Fee allowance:** today 0.1 GNOT, a margin of 70,000 ugnot (the gas price may rise to 4.5 times today's before an honest pull no longer fits). **Proposal: 0.05 GNOT**, the smallest round value with a sensible margin: 20,000 ugnot, so a gas price twice today's still fits (2 × 20,000 + 10,000 = 50,000). It halves what a hostile creator can burn per period (threat 5). Below that, one gas price step on a busy Onyx would block every pull. Not changed in M1.4; it is the owner's call.
+**Fee allowance: kept at 0.1 GNOT (decided in M1.4).** The worst pull measured locally costs 30,000 ugnot, so 0.05 GNOT would have fitted today with a margin for a gas price twice today's. It was kept at 0.1 because a pull that cannot be paid is the product failing, while the allowance only bounds a loss nobody profits from (fees go to the network, threat 5): Pull has not been measured on Onyx yet, whose deeper store charges more gas per object than the 10–13M measured here (if a Pull needs 30M gas wanted, the worst case is already 40,000 ugnot); the chain raises the gas price when blocks fill; and the constant cannot be changed after deployment. At 0.1 GNOT the margin is 70,000 ugnot: a gas price 4.5 times today's at 20M gas wanted, or about 3 times today's at 30M.
 
 ## Lists at their boundaries and at size (M1.4)
 
