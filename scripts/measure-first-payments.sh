@@ -4,6 +4,7 @@
 #
 #   scripts/measure-first-payments.sh [N] [allowance ugnot]   # default 64, the pages' allowance
 #   SIMULATE=skip scripts/measure-first-payments.sh ...      # broadcast without gnokey's simulation
+#   FIRST_POS=32 scripts/measure-first-payments.sh 32        # pull position 32 first (the plan's first payment), then the rest
 #
 # One plan (1 GNOT every 60 s). N payers, each with a session exactly as the
 # pages tell supporters to create it (spend limit = price + allowance, spend
@@ -153,7 +154,7 @@ while read -r payer; do
 		err="$(grep -oE 'session spend limit[^,]*|not allowed[^,]*|Data: [^ ]+[^\n]{0,80}' "$OUT" | head -1)"
 	fi
 	printf '%-5s %-8s %-11s %-9s %-12s %s\n' "$pos" "$res" "${gas:-0}" "${delta:-0}" "$lost" "$err"
-done <"$TMP/payers.txt"
+done < <(if [ -n "${FIRST_POS:-}" ]; then sed -n "${FIRST_POS}p" "$TMP/payers.txt"; sed "${FIRST_POS}d" "$TMP/payers.txt"; else cat "$TMP/payers.txt"; fi)
 echo
 echo "RESULT n=$N allowance=$ALLOWANCE ok=$okc failed=$failc max_first_pull_storage=${maxdelta}B"
 # The bound the collector and the fee allowance are sized for (scripts/collect.sh STORAGE_BOUND).

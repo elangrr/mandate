@@ -7,7 +7,9 @@
 # SIZE mandates on plan 1 are loaded as genesis transactions (one payer each;
 # public keys only), the first of them with a real session for the collector
 # key. Then, live and signed:
-#   - LIVE new payers (default 36) subscribe to plan 1 one after another, so
+#   - LIVE new payers (default 36) subscribe to plan 1 one after another
+#     (on the first chunk boundary and on the super-chunk boundary, the
+#     subscriber is a payer who already holds 15 active mandates), so
 #     the plan's list grows from SIZE to SIZE+LIVE: pick SIZE just below a
 #     multiple of 1024 to cross a chunk boundary (every 32) and a
 #     super-chunk boundary (at 1024k+32);
@@ -50,9 +52,13 @@ fail() { echo "MISMATCH: $*" >&2; exit 1; }
 
 newkey() { printf '%s\n%s\n' "$PW" "$PW" | gnokey add -home "$KB" -insecure-password-stdin -nobackup -quiet "$1" >/dev/null 2>&1; }
 field() { gnokey list -home "$KB" | awk -v k="$1" -v f="$2" '$2 == k { for (i = 1; i <= NF; i++) if ($i == f) { p = $(i + 1); sub(/,$/, "", p); print p } }'; }
-for k in payee coll prober; do newkey "$k"; done
+for k in payee coll prober h1 h2; do newkey "$k"; done
 for i in $(seq 1 "$LIVE"); do newkey "l$i"; done
 PAYEE="$(field payee addr:)" COLL="$(field coll addr:)" GPUB="$(field coll pub:)" PAYEE_GPUB="$(field payee pub:)" PROBER="$(field prober addr:)"
+# h1 and h2 already hold 15 active mandates each (genesis), so their Subscribe
+# on plan 1 is the 16th: the most a payer record can hold. h1 subscribes on
+# the first chunk boundary the walk crosses, h2 on the super-chunk boundary.
+H1="$(field h1 addr:)" H1PUB="$(field h1 pub:)" H2="$(field h2 addr:)" H2PUB="$(field h2 pub:)"
 EXP="$(($(date +%s) + 7200))"
 LIVEADDRS=""
 for i in $(seq 1 "$LIVE"); do LIVEADDRS="$LIVEADDRS $(field "l$i" addr:)"; done
@@ -78,10 +84,11 @@ func Supporters(cur realm, plan uint64)  { sink += len(mandate.SupportersOf(plan
 func Scan(cur realm, plan uint64, s address) { sink += len(mandate.CollectorScan(plan, s, 0)) }
 EOF
 
-python3 - "$TMP" "$SIZE" "$PLANS" "$REALM" "$PAYEE" "$PAYEE_GPUB" "$GPUB" "$COLL" "$EXP" "$PROBER" $LIVEADDRS <<'PY'
+python3 - "$TMP" "$SIZE" "$PLANS" "$REALM" "$PAYEE" "$PAYEE_GPUB" "$GPUB" "$COLL" "$EXP" "$PROBER" "$H1:$H1PUB" "$H2:$H2PUB" $LIVEADDRS <<'PY'
 import base64, hashlib, json, secrets, sys
 d, size, nplans, realm, payee, payee_gpub, gpub, coll, exp, prober = sys.argv[1:11]
-live = sys.argv[11:]
+heavy = [x.split(":") for x in sys.argv[11:13]]
+live = sys.argv[13:]
 size, nplans = int(size), int(nplans)
 CH = "qpzry9x8gf2tvdw0s3jn54khce6mua7l"
 def pm(v):
@@ -136,6 +143,17 @@ ppub = unbech(payee_gpub)[-33:]; spub = unbech(gpub)[-33:]
 txs = [tx(ppub, [call(payee, "Offer", ["Plan %d" % (i + 1), "1000000", "60"])]) for i in range(nplans)]
 txs.append(tx(ppub, [call(payee, "SetCollectorKey", [gpub])]))
 bal = [payee + "=1000000000ugnot", prober + "=1000000000ugnot"] + [a + "=100000000ugnot" for a in live]
+# 15 more plans; h1 and h2 each hold an active mandate on every one of them
+# (each with its own session address, as the realm requires).
+first_extra = nplans + 1
+for i in range(15):
+    txs.append(tx(ppub, [call(payee, "Offer", ["Extra %d" % i, "1000000", "60"])]))
+for a, gp in heavy:
+    hpub = unbech(gp)[-33:]
+    bal.append(a + "=100000000ugnot")
+    for i in range(15):
+        sess = bech("g", secrets.token_bytes(20))
+        txs.append(tx(hpub, [call(a, "Subscribe", [str(first_extra + i), sess, exp])]))
 first = None
 for i in range(size):
     pub = mul(secrets.randbelow(2**255) + 1); a = addr_of(pub)
@@ -166,6 +184,11 @@ failed="$(grep -c 'unable to deliver tx' "$TMP/gnodev.log" || true)"
 echo "genesis: plan 1 with $SIZE mandates, $PLANS plans; node up after $(($(date +%s) - started)) s"
 
 OUT="$TMP/out.txt"
+CHUNK_N=-1 SUPER_N=-1
+for n in $(seq "$SIZE" $((SIZE + LIVE - 1))); do
+	if [ $(((n + 1) % 1024)) = 32 ] && [ "$SUPER_N" = -1 ]; then SUPER_N=$n
+	elif [ $(((n + 1) % 32)) = 0 ] && [ "$CHUNK_N" = -1 ]; then CHUNK_N=$n; fi
+done
 tx() { local s="$1"; shift; printf '%s\n' "$PW" | gnokey maketx "$@" -broadcast -chainid dev -remote "$RPC" -home "$KB" -insecure-password-stdin "$s" >"$OUT" 2>&1 || true; grep -q '^OK!' "$OUT" || fail "$s $*: $(grep -E '^Data:' "$OUT" | head -2)"; }
 gas() { sed -n 's/^GAS USED: *\([0-9]*\)$/\1/p' "$OUT"; }
 delta() { local d; d="$(sed -n 's/^STORAGE DELTA: *\(-\{0,1\}[0-9]*\) bytes$/\1/p' "$OUT")"; echo "${d:-0}"; }
@@ -175,10 +198,12 @@ echo
 echo "Subscribe as the list grows (N = entries before this one):"
 n=$SIZE
 for i in $(seq 1 "$LIVE"); do
-	tx "l$i" call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL" -args "$EXP" "${CALL[@]}"
-	tag=""
+	who="l$i" tag=""
 	[ $(((n + 1) % 32)) = 0 ] && tag=" (chunk created)"
 	[ $(((n + 1) % 1024)) = 32 ] && tag=" (chunk and super-chunk created)"
+	[ "$n" = "$CHUNK_N" ] && who=h1 tag="$tag (payer with 15 active mandates)"
+	[ "$n" = "$SUPER_N" ] && who=h2 tag="$tag (payer with 15 active mandates)"
+	tx "$who" call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL" -args "$EXP" "${CALL[@]}"
 	echo "RESULT subscribe N=$n gas=$(gas) storage=$(delta)B$tag"
 	n=$((n + 1))
 done

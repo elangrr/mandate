@@ -4,7 +4,7 @@
 #   scripts/collect.sh -home <keybase dir> -key <collector key name> \
 #       -payee <payee address> -remote <rpc url> -chainid <chain id> \
 #       -realm <realm path> [-dry-run] [-state <file>] \
-#       [-max-checks 100] [-max-pulls 200]
+#       [-max-checks 500] [-max-pulls 200]
 #
 # What a run does, all reads being free queries:
 #   1. lists the payee's plans (CollectorPlans) and, for each, walks its
@@ -19,10 +19,17 @@
 #      spent its budget for the current spend period, or expires within a
 #      minute. Anyone can record a mandate without a session, so never-paid
 #      mandates may be junk: at most -max-checks of them are read per run,
-#      never-read first (newest first), then oldest read first;
-#   3. pulls at most -max-pulls mandates. A pull the chain or the realm
-#      refuses is remembered and not tried again before the plan's next
-#      period (each refused try can cost the payer the fee).
+#      never-read first (newest first), then oldest read first. The default,
+#      500, takes about a minute and a half per run; an attacker must record
+#      more than 500 new never-paid mandates (about 265 GNOT of deposits)
+#      before every run to keep a real first payment waiting, so run the
+#      collector often (every 10 minutes, say) rather than lowering it;
+#   3. pulls at most -max-pulls mandates. A pull that was included in a
+#      block and failed charged the payer the fee: it is remembered and not
+#      tried again before the plan's next period. A pull that never reached
+#      a block (refused in gnokey's simulation or by the mempool, a network
+#      error, a timeout) cost nothing and is tried again on the next run.
+#      -simulate skip (for tests only) sends without gnokey's simulation.
 #
 # With -state <file>, what a run learned is kept for the next one (the file
 # only holds mandates still listed, so it does not grow). It is replaced
@@ -61,7 +68,7 @@ usage() {
 }
 
 HOME_DIR="" KEY="" REMOTE="" CHAIN="" REALM="" PAYEE="" STATE="" DRY=0 PWSTDIN=0
-GAS_FEE="20000ugnot" GAS_WANTED="20000000" MAX_CHECKS=100 MAX_PULLS=200
+GAS_FEE="20000ugnot" GAS_WANTED="20000000" MAX_CHECKS=500 MAX_PULLS=200 SIMULATE=test
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-home) HOME_DIR="${2:-}"; shift 2 ;;
@@ -75,6 +82,7 @@ while [ $# -gt 0 ]; do
 	-max-pulls) MAX_PULLS="${2:-}"; shift 2 ;;
 	-gas-fee) GAS_FEE="${2:-}"; shift 2 ;;
 	-gas-wanted) GAS_WANTED="${2:-}"; shift 2 ;;
+	-simulate) SIMULATE="${2:-}"; shift 2 ;;
 	-dry-run) DRY=1; shift ;;
 	-insecure-password-stdin) PWSTDIN=1; shift ;;
 	-h | -help | --help) usage ;;
@@ -109,8 +117,8 @@ esac
 if ! [[ "$REALM" =~ ^gno\.land/r/[a-z0-9_]+(/[a-z0-9_]+)*$ ]]; then echo "not a realm path: $REALM" >&2; exit 2; fi
 if ! [[ "$PAYEE" =~ ^g1[02-9ac-hj-np-z]{38}$ ]]; then echo "not an address: $PAYEE" >&2; exit 2; fi
 if [ ! -d "$HOME_DIR" ]; then echo "no keybase folder at -home $HOME_DIR" >&2; exit 2; fi
-if ! [[ "$GAS_FEE" =~ ^[0-9]+ugnot$ && "$GAS_WANTED" =~ ^[0-9]+$ && "$MAX_CHECKS" =~ ^[0-9]+$ && "$MAX_PULLS" =~ ^[0-9]+$ ]]; then
-	echo "bad -gas-fee, -gas-wanted, -max-checks or -max-pulls" >&2
+if ! [[ "$GAS_FEE" =~ ^[0-9]+ugnot$ && "$GAS_WANTED" =~ ^[0-9]+$ && "$MAX_CHECKS" =~ ^[0-9]+$ && "$MAX_PULLS" =~ ^[0-9]+$ && "$SIMULATE" =~ ^(test|skip)$ ]]; then
+	echo "bad -gas-fee, -gas-wanted, -max-checks, -max-pulls or -simulate" >&2
 	exit 2
 fi
 command -v gnokey >/dev/null || { echo "gnokey not found on PATH" >&2; exit 1; }
@@ -224,9 +232,9 @@ PULL_COST=$((${GAS_FEE%ugnot} + STORAGE_BOUND * STORAGE_PRICE))
 # State between runs (-state): one line per mandate, "<id> <last check> <retry after>".
 #   last check:  when a never-paid mandate's session was last read, so the
 #                -max-checks budget rotates over them;
-#   retry after: a pull for it was refused by the chain or the realm; it is
-#                not tried again before its plan's next period, since the
-#                payer may pay a fee for each refused try.
+#   retry after: a pull for it was included in a block and failed (the payer
+#                paid the fee); it is not tried again before its plan's next
+#                period.
 # Only mandates seen in this run's listing are kept, so the file stays as
 # long as the list of active mandates for this key.
 NOW="$(date +%s)"
@@ -298,10 +306,15 @@ for k in "${!SKIPS[@]}"; do skipped_total=$((skipped_total + SKIPS[$k])); done
 echo "sessions read: $skipped_total skipped, $checks of them never paid, $deferred never-paid left for later runs, $later waiting after a refused pull"
 save_state
 
-# Pull. A refusal the payer caused (revoked or expired session, budget used,
-# mandate cancelled meanwhile) is recorded and is not an error; anything
-# else is.
-failed=0 refused=0 pulled=0 over=0
+# Pull. Only a transaction that was included in a block and failed is put
+# off to the plan's next period: it charged the payer the fee, and trying
+# again soon would charge it again. Anything that never reached a block (a
+# refusal in gnokey's simulation, a mempool refusal, a network error or a
+# timeout) cost the payer nothing and is tried again on the next run. For
+# the exit status, a refusal the payer caused (revoked or expired session,
+# budget used, not enough coins, mandate cancelled meanwhile) is not an
+# error; anything else is.
+failed=0 refused=0 pulled=0 over=0 deferred_now=0
 for row in "${TODO[@]+"${TODO[@]}"}"; do
 	read -r id payer amount period <<<"$row"
 	if [ "$pulled" -ge "$MAX_PULLS" ]; then over=$((over + 1)); continue; fi
@@ -312,7 +325,7 @@ for row in "${TODO[@]+"${TODO[@]}"}"; do
 	fi
 	echo "  pulling mandate $id: ${amount}ugnot from $payer"
 	args=(maketx call -pkgpath "$REALM" -func Pull -send "${amount}ugnot" -master "$payer"
-		-gas-fee "$GAS_FEE" -gas-wanted "$GAS_WANTED" -broadcast -chainid "$CHAIN" -remote "$REMOTE" -home "$HOME_DIR")
+		-gas-fee "$GAS_FEE" -gas-wanted "$GAS_WANTED" -simulate "$SIMULATE" -broadcast -chainid "$CHAIN" -remote "$REMOTE" -home "$HOME_DIR")
 	if [ "$PWSTDIN" = 1 ]; then
 		out="$(printf '%s\n' "$PW" | gnokey "${args[@]}" -insecure-password-stdin "$KEY" 2>&1)" || true
 	else
@@ -323,19 +336,27 @@ for row in "${TODO[@]+"${TODO[@]}"}"; do
 		unset 'RETRY[$id]'
 		continue
 	fi
-	RETRY[$id]=$((NOW + period))
-	msg="$(printf '%s\n' "$out" | grep -E '^Data:|panic:' | head -2 | tr '\n' ' ')"
+	msg="$(printf '%s\n' "$out" | grep -E '^Data:|panic:|error' | head -2 | tr '\n' ' ')"
+	# gnokey prints the block height of a delivered transaction; a refusal in
+	# simulation or in the mempool shows height 0 or none at all.
+	if grep -qE '^HEIGHT: *[1-9]' <<<"$out"; then
+		RETRY[$id]=$((NOW + period))
+		deferred_now=$((deferred_now + 1))
+		when="included in a block and failed, the fee was charged: not tried again before the next period"
+	else
+		when="not sent, nothing charged: tried again on the next run"
+	fi
 	if grep -qiE 'session not found|session expired|spend limit|insufficient (funds|coins)|mandate: (no active mandate|expired|too early)' <<<"$out"; then
 		refused=$((refused + 1))
-		echo "    refused (payer side, not retried before the next period): $msg"
+		echo "    refused on the payer's side ($when): $msg"
 	else
 		failed=$((failed + 1))
-		echo "    FAILED: $msg"
+		echo "    FAILED ($when): $msg"
 	fi
 done
 save_state
 [ "$over" -gt 0 ] && echo "$over due mandates left for the next run (-max-pulls $MAX_PULLS)"
-echo "done: $pulled pulled or tried, $refused refused on the payer's side, $failed failed"
+echo "done: $pulled pulled or tried, $refused refused on the payer's side, $failed failed, $deferred_now put off to the next period"
 # Exit status: 0 when every due mandate was pulled or skipped for a reason on
 # the payer's side (a revoked session is not an error); 1 when a pull failed
 # for another reason or a session could not be read.

@@ -230,7 +230,7 @@ realm_zero() { [ "$(bal "$REALM_ADDR")" = 0 ] || fail "the realm holds $(bal "$R
 gas_used() { sed -n 's/^GAS USED: *\([0-9]*\)$/\1/p' "$OUT"; }
 storage_delta() { local d; d="$(sed -n 's/^STORAGE DELTA: *\(-\{0,1\}[0-9]*\) bytes$/\1/p' "$OUT")"; echo "${d:-0}"; }
 
-CALL=(-gas-fee 100000ugnot -gas-wanted 40000000) # as the pages give it
+CALL=(-gas-fee 100000ugnot -gas-wanted 60000000) # as the pages give it
 PULLGAS=(-gas-fee 20000ugnot -gas-wanted 20000000)
 pull() { # pull <session key> <amount> -> tx args for a Pull on behalf of the payer
 	echo "call -pkgpath $REALM -func Pull -send ${2}ugnot -master $PAYER ${PULLGAS[*]}"
@@ -519,23 +519,68 @@ echo "  ok: all 32 first payments went through, the 32nd included (PaidThrough >
 grep -q "skipping mandate [0-9]* ($(addr_of slow)): the session's spend limit is below" <<<"$out" || fail "low spend limit not skipped"
 grep -q "skipping mandate [0-9]* ($(addr_of swide)): the session is not scoped to exactly" <<<"$out" || fail "wide session not skipped"
 grep -q "skipping mandate [0-9]* ($(addr_of srevoked)): no session for this key" <<<"$out" || fail "revoked session not skipped"
-grep -q "refused (payer side, not retried before the next period)" <<<"$out" || fail "the poor supporter's pull was not reported as refused"
-grep -q "done: 33 pulled or tried, 1 refused on the payer's side, 0 failed" <<<"$out" || fail "unexpected collector summary"
-echo "  ok: low limit, wide scope and revoked sessions skipped with their reason; the refused pull recorded"
-info="$(qeval "$REALM.GetPlan(5)")"
-grep -q "PaidThisPeriod.*32\|(32 int)" <<<"$info" || echo "    note: GetPlan(5): $(tr '\n' ' ' <<<"$info" | cut -c1-300)"
+grep -q "refused on the payer's side (not sent, nothing charged: tried again on the next run)" <<<"$out" || fail "the poor supporter's pull was not reported as refused in simulation"
+grep -q "done: 33 pulled or tried, 1 refused on the payer's side, 0 failed, 0 put off to the next period" <<<"$out" || fail "unexpected collector summary"
+echo "  ok: low limit, wide scope and revoked sessions skipped with their reason; the poor supporter's pull refused in simulation, nothing charged"
+collect13() { # extra collector args; sets out and rc
+	set +e
+	out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -state "$TMP/collect.state" -insecure-password-stdin "$@" 2>&1)"
+	rc=$?
+	set -e
+	echo "$out" | sed 's/^/    /'
+}
 p="$(bal "$(addr_of spoor)")"
-set +e
-out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -state "$TMP/collect.state" -insecure-password-stdin 2>&1)"
-rc=$?
-set -e
-echo "$out" | sed 's/^/    /'
+collect13
 eq "second run exit status" 0 "$rc"
-grep -q "1 waiting after a refused pull" <<<"$out" || fail "the refused pull was retried in the same period"
-eq "the poor supporter paid nothing more" "$p" "$(bal "$(addr_of spoor)")"
+grep -q "done: 1 pulled or tried, 1 refused on the payer's side, 0 failed, 0 put off to the next period" <<<"$out" || fail "a pull refused in simulation was not tried again on the next run"
+eq "the poor supporter paid nothing for two refusals in simulation" "$p" "$(bal "$(addr_of spoor)")"
+echo "  ok: a pull that never reached a block is tried again on the next run, at no cost"
+collect13 -simulate skip
+eq "third run (no simulation) exit status" 0 "$rc"
+grep -q "refused on the payer's side (included in a block and failed, the fee was charged: not tried again before the next period)" <<<"$out" || fail "the included failure was not recognised"
+eq "the poor supporter paid one fee" 20000 "$((p - $(bal "$(addr_of spoor)")))"
+collect13
+grep -q "1 waiting after a refused pull" <<<"$out" || fail "an included failure was retried in the same period"
+eq "and nothing more on the next run" 20000 "$((p - $(bal "$(addr_of spoor)")))"
+echo "  ok: a pull included in a block that failed is put off to the next period: the payer paid one fee, not one per run"
 grep -q '^999999 ' "$TMP/collect.state" && fail "state file kept a mandate that is no longer listed"
 for f in "$TMP"/collect.state.*; do [ -e "$f" ] && fail "a temporary state file was left: $f"; done
 echo "  ok: state file pruned to listed mandates ($(wc -l <"$TMP/collect.state") lines), no temporary file left"
+eq "realm balance" 0 "$(bal "$REALM_ADDR")"
+
+step "14. leaving and coming back within a paid period is not charged twice"
+S1="$(addr_of s1)" S2="$(addr_of s2)"
+pt_of() { qeval "$REALM.PaidThrough(address(\"$1\"), 5)" | sed -n 's/^(\([0-9]*\) int64)$/\1/p'; }
+PT1="$(pt_of "$S1")" PT2="$(pt_of "$S2")"
+[ "${PT1:-0}" -gt "$(now)" ] && [ "${PT2:-0}" -gt "$(now)" ] || fail "s1 and s2 are not paid ahead ($PT1, $PT2)"
+# s1 comes back with a session for another key: the chain's spend window for
+# it is fresh, so only the realm's carried-over time stops a second charge.
+expect_ok "s1 cancels its paid mandate" s1 call -pkgpath "$REALM" -func Cancel -args "$S1" -args "$COLL" "${CALL[@]}"
+eq "PaidThrough kept after the cancel" "$PT1" "$(pt_of "$S1")"
+expect_ok "s1 gives a fresh session to coll2 (1.1 GNOT / 60 s)" s1 $(session_args "$GPUB2" "vm/exec:$REALM" 1100000ugnot 60 "$EXP13")
+expect_ok "s1 subscribes again, with coll2" s1 call -pkgpath "$REALM" -func Subscribe -args 5 -args "$COLL2" -args "$EXP13" "${CALL[@]}"
+note_gas "Subscribe (returning payer, paid time carried over)"
+md="$(gnokey query vm/qrender -data "$REALM:payer/$S1" -remote "$RPC" -home "$KB")"
+grep -q "your current period is already paid" <<<"$md" || fail "payer page does not say the period is paid"
+p="$(bal "$S1")"
+expect_fail "an immediate pull with the fresh session (the chain would allow it)" "mandate: too early" coll2 call -pkgpath "$REALM" -func Pull -send 1000000ugnot -master "$S1" "${PULLGAS[@]}"
+eq "s1 paid nothing for it (refused in simulation)" "$p" "$(bal "$S1")"
+# s2 comes back with the same key; the collector must wait.
+expect_ok "s2 cancels its paid mandate" s2 call -pkgpath "$REALM" -func Cancel -args "$S2" -args "$COLL" "${CALL[@]}"
+expect_ok "s2 subscribes again, same key" s2 call -pkgpath "$REALM" -func Subscribe -args 5 -args "$COLL" -args "$EXP13" "${CALL[@]}"
+p2="$(bal "$S2")"
+collect13
+grep -q "pulling mandate [0-9]*: 1000000ugnot from $S2" <<<"$out" && fail "the collector pulled s2 inside its paid period"
+echo "  ok: the collector waits for s2's paid period to end"
+wait_until "$((PT1 > PT2 ? PT1 + 1 : PT2 + 1))"
+expect_ok "s1's first pull of the new mandate, when the paid period has ended" coll2 call -pkgpath "$REALM" -func Pull -send 1000000ugnot -master "$S1" "${PULLGAS[@]}"
+CARRY_DELTA="$(storage_delta)"
+note_gas "Pull (first, after carried-over time)"
+eq "s1 paid exactly one price and one fee, plus that pull's storage" "$((1000000 + 20000 + CARRY_DELTA * 100))" "$((p - $(bal "$S1")))"
+[ "$CARRY_DELTA" -le 100 ] || fail "that first pull added more than 100 B"
+collect13
+grep -q "pulling mandate [0-9]*: 1000000ugnot from $S2" <<<"$out" || fail "the collector did not pull s2 when its paid period ended"
+eq "s2 paid exactly one price and one fee, plus that pull's storage" "$((1000000 + 20000 + $(awk -v a="$S2" '$0 ~ "from " a {f=1; next} f && /STORAGE DELTA/ {print $3; exit}' <<<"$out") * 100))" "$((p2 - $(bal "$S2")))"
 eq "realm balance" 0 "$(bal "$REALM_ADDR")"
 
 step "pages in gnoweb"
