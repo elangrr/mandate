@@ -405,6 +405,13 @@ func checkCounts(t *testing.T, pid uint64, listed, unpaid int, what string) {
 	has(t, pp, ", "+itoa(int64(prev))+" in the one before", what+": headline previous")
 	list, _ := payingFrom(planOf(pid), -1, now())
 	uassert.Equal(t, listed, len(list), what+": listed")
+	ps, _ := PayingSupporters(pid, -1)
+	uassert.Equal(t, listed, len(ps), what+": PayingSupporters")
+	c1, c2, un, exact := PlanCounts(pid)
+	uassert.Equal(t, cur, c1, what+": PlanCounts this period")
+	uassert.Equal(t, prev, c2, what+": PlanCounts last period")
+	uassert.Equal(t, unpaid, un, what+": PlanCounts unpaid")
+	uassert.True(t, exact, what+": PlanCounts exact")
 	active := len(SupportersOf(pid, 1))
 	uassert.Equal(t, listed+unpaid, active, what+": SupportersOf")
 	if unpaid == 1 {
@@ -901,4 +908,31 @@ func TestPruneReturnsOwnPlanTime(cur realm, t *testing.T) {
 	m, _ := MandateOf(payer, testutils.TestAddress("md_p2"))
 	uassert.Equal(t, pUntil, m.NextPullAt, "P's paid time came back from the prune, not evicted by X's")
 	uassert.True(t, PaidThrough(payer, x) > now(), "X's paid time kept")
+}
+
+// PlanCounts and PayingSupporters agree with the page past the read limits,
+// and say when a count is not exact.
+func TestPlanCountsBeyondLimit(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
+	real := testutils.TestAddress("md_real")
+	subscribe(cur, real, pid, sessA, now()+day)
+	pullOK(real, sessA, gnot)
+	for i := 0; i < ScanLimit+5; i++ {
+		subscribe(cur, testutils.TestAddress("md_b"+itoa(int64(i))), pid, sessA, now()+day)
+	}
+	c1, c2, un, exact := PlanCounts(pid)
+	uassert.Equal(t, 1, c1)
+	uassert.Equal(t, 0, c2)
+	uassert.Equal(t, ScanLimit, un, "unpaid counted among the latest ScanLimit")
+	uassert.False(t, exact, "more entries than that")
+	has(t, renders(t, "plan/"+utoa(pid)), itoa(int64(ScanLimit))+" active mandates have not paid yet (not listed), among the latest", "page agrees")
+	ps, next := PayingSupporters(pid, -1)
+	uassert.Equal(t, 1, len(ps), "the real supporter behind the junk")
+	uassert.Equal(t, real.String(), ps[0].Payer.String())
+	uassert.Equal(t, -1, next)
+	a, b, u, e := PlanCounts(pid + 1)
+	uassert.True(t, a == 0 && b == 0 && u == 0 && e, "missing plan")
+	ps, next = PayingSupporters(pid+1, -1)
+	uassert.True(t, len(ps) == 0 && next == -1, "missing plan list")
 }

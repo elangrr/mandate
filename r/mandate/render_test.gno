@@ -229,5 +229,14 @@ func TestRenderPaging(cur realm, t *testing.T) {
 	has(t, plan, "| ["+short(testutils.TestAddress("md_r20"))+"]", "newest first")
 	has(t, plan, "[More supporters]("+base+":plan/1?from=0)", "plan cursor")
 	has(t, renders(t, "plan/1?from=0"), "| ["+short(testutils.TestAddress("md_r0"))+"]", "oldest on the next page")
+	// PayingSupporters pages the same way: 20 newest, then the oldest one
+	ps, next := PayingSupporters(1, -1)
+	uassert.Equal(t, PageSize, len(ps))
+	uassert.Equal(t, testutils.TestAddress("md_r20").String(), ps[0].Payer.String())
+	uassert.Equal(t, 0, next)
+	ps, next = PayingSupporters(1, next)
+	uassert.Equal(t, 1, len(ps))
+	uassert.Equal(t, testutils.TestAddress("md_r0").String(), ps[0].Payer.String())
+	uassert.Equal(t, -1, next)
 	has(t, renders(t, "payee/"+payee.String()), "[Next page]("+base+":payee/"+payee.String()+"?page=2)", "payee next")
 }

@@ -390,6 +390,44 @@ func payingFrom(p *Plan, from int, now int64) ([]*Mandate, int) {
 	return out, i
 }
 
+// PayingSupporters lists a plan's supporters the way its gnoweb page does:
+// mandates that have paid at least once and are active now, newest first,
+// at most PageSize per call. Pass from = -1 for the newest; the second
+// result is where to continue. A client must stop when it is -1 (the list
+// is exhausted): -1 passed back in starts again from the newest, so a
+// client that feeds the cursor back unchecked loops for ever. Each call
+// walks at most WalkLimit entries and looks up at most ScanLimit of them,
+// so a call may return fewer than PageSize (even none) and still a cursor.
+func PayingSupporters(planID uint64, from int) ([]MandateInfo, int) {
+	p := planOf(planID)
+	if p == nil {
+		return []MandateInfo{}, -1
+	}
+	now := time.Now().Unix()
+	list, next := payingFrom(p, from, now)
+	out := make([]MandateInfo, 0, len(list))
+	for _, m := range list {
+		out = append(out, m.info(now))
+	}
+	return out, next
+}
+
+// PlanCounts returns the numbers the gnoweb plan page shows: how many
+// supporters paid in the plan's current period window and in the one
+// before (as in GetPlan), and how many active mandates have never paid,
+// among the latest ScanLimit entries (unpaidExact is false when there were
+// more entries than that).
+func PlanCounts(planID uint64) (paidThisPeriod, paidLastPeriod, unpaid int, unpaidExact bool) {
+	p := planOf(planID)
+	if p == nil {
+		return 0, 0, 0, true
+	}
+	now := time.Now().Unix()
+	paidThisPeriod, paidLastPeriod = p.paidWindows(now)
+	unpaid, unpaidExact = countUnpaid(p, now)
+	return
+}
+
 // countUnpaid counts active mandates that have never paid, among the
 // plan's latest ScanLimit mandates, and says whether that covered them all.
 func countUnpaid(p *Plan, now int64) (int, bool) {
