@@ -161,7 +161,8 @@ func TestPayingSupporters(cur realm, t *testing.T) {
 	uassert.True(t, strings.HasSuffix(scan, "\nnext 200\n"), "scan cursor")
 	uassert.Equal(t, ScanLimit+1, len(strings.Split(strings.TrimSuffix(scan, "\n"), "\n")))
 	uassert.True(t, strings.HasSuffix(CollectorScan(pid, sessA, 400), "end\n"))
-	uassert.Equal(t, "end\n", CollectorScan(pid, sessA, 1<<62)) // the cursor is clamped
+	uassert.Equal(t, "end\n", CollectorScan(pid, sessA, 1<<62))
+	uassert.Equal(t, "end\n", CollectorScan(pid, sessA, int(^uint(0)>>1))) // clamped: from+ScanLimit would overflow
 	page := renders(t, "plan/"+utoa(pid))
 	has(t, page, "1 supporter paid in the current period", "count")
 	has(t, page, "200 active mandates have not paid yet (not listed), among the latest 200", "unpaid count, bounded")
