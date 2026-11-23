@@ -23,7 +23,7 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 ```
 
 - **Plans** are immutable. New terms mean a new plan.
-- **Billing in advance.** The first payment is due as soon as the mandate is recorded and is collected by the first Pull, not by Subscribe (Subscribe refuses coins: the realm takes money only in Pull). Each later Pull is allowed from one period after the previous one: `next = time of last pull + period`. This is the same rule the chain uses for the session's spend period (`tm2/pkg/sdk/auth/spend.go`: the window resets at the first spend after `reset + period`), so a pull the realm allows is never refused by the chain for budget unless fees were burned in the same window. A missed period is never collected later (no arrears).
+- **Billing in advance.** The first payment is due as soon as the mandate is recorded and is collected by the first Pull, not by Subscribe (Subscribe refuses coins: the realm takes money only in Pull). Each later Pull is allowed from one period after the previous one: `next = time of last pull + period`. This is the same rule the chain uses for the session's spend period (`tm2/pkg/sdk/auth/spend.go`: the window resets at the first spend after `reset + period`), so a pull the realm allows is never refused by the chain for budget as long as the session's limit covers the price plus the pull's fee and storage deposit and no fees were burned in the same window. The chain counts the storage deposit against the spend limit after the call, so Pull is built never to create an object: its deposit is at most a few dozen bytes at every position in every list (see "Pull's budget" below). Until M1.4, the first payment of a plan's 32nd and later supporters created an object and was refused by the chain with the pages' sessions (audit HIGH-1, reproduced on a local chain). A missed period is never collected later (no arrears).
 - **Expiry.** Required, in unix seconds, at most 366 days ahead. Pulls are refused from that second on. The plan page suggests one year and the same expiry for the chain session.
 - **Mandate key.** A mandate is found by (payer, session address). Pull takes the payer from `OriginCaller` (the session's master account) and the session address from `GetSessionInfo`, so it needs no arguments. A payer can have at most one active mandate per plan and per session key; after a cancel or expiry the same key can be used again (a new mandate is recorded and the old one stays in the history).
 - **Collector key.** The payee publishes the bech32 public key once; the realm derives its address with `chain.PubKeyAddress`, so the address on the plan page always matches the key. Payers may also give a session to another key the payee hands them (the realm then does not know its public key and the payer page shows how to look it up).
@@ -37,8 +37,8 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 | Minimum period | 60 seconds | Block times are seconds; the chain's spend period is in seconds. Short periods exist for demos and tests; plan pages flag anything under a day as a test plan. |
 | Maximum period | 366 days | A yearly plan plus slack. |
 | Maximum term | 366 days from Subscribe | A payer renews at most once a year. The chain's own cap on a session is about 4 years. |
-| Fee allowance (pages) | 0.1 GNOT | Added to the session's spend limit; it pays the Pull's fee and storage deposit. The chain accepts a fee when fee ÷ gas wanted ≥ the current gas price (`EnsureSufficientMempoolFees`, `tm2/pkg/sdk/auth/ante.go:548`); Onyx answers `auth/gasprice` with 1 ugnot per 1,000 gas, and raises it when blocks are full. At 20M gas wanted the minimum fee is 20,000 ugnot. A mandate's first pull also adds it to the plan's paid-once list: up to 446 bytes (44,600 ugnot) when that starts a new array, measured. So the allowance covers a gas price up to 2.7x today's on such a pull, and about 5x otherwise. It was 0.05 GNOT until M1.3; the first pull no longer fitted (64,600 ugnot, refused by the chain). |
-| Pull fee (pages, collector) | 20,000 ugnot for 20M gas wanted | Exactly today's Onyx price. Measured use on a local chain is 7.6–8.2M gas; reads on Onyx cost more per object, because the chain prices a read by the depth of its store (`expectedDepth100`, `tm2/pkg/store/iavl/store.go:45`) and Onyx's store is far larger. 20M keeps about 2x headroom; the first Pull on Onyx will tell. |
+| Fee allowance (pages) | 0.1 GNOT | Added to the session's spend limit; it pays the Pull's fee and storage deposit. A Pull costs the payer at most the fee (20,000 ugnot at today's Onyx gas price for the collector's 20M gas wanted) plus at most 100 bytes of storage (10,000 ugnot at Onyx's 100 ugnot per byte): 30,000 ugnot. 0.1 GNOT leaves a margin of 70,000 ugnot, enough for a gas price 4.5 times today's. M1.4 proposes 0.05 GNOT (margin 20,000 ugnot, a gas price twice today's); see "Pull's budget". |
+| Pull fee (pages, collector) | 20,000 ugnot for 20M gas wanted | Exactly today's Onyx price. Measured use on a local chain: 8.5–9.5M gas in the flow, 11.6M at the oldest entry of a 1,058-entry plan, 12.3M at 10,274 entries (it grows with the log of the store's size). Reads on Onyx cost more per object, because the chain prices a read by the depth of its store (`expectedDepth100`, `tm2/pkg/store/iavl/store.go:45`) and Onyx's store is far larger. |
 | Title | 1–80 characters, one line | Same rules as QuestMaster: UTF-8, no control characters, no U+2028/U+2029. |
 | Page size | 20 rows | Every list read and every page is paged. |
 | Mandates per wallet | 16 active at a time | The chain's limit on sessions per account (`tm2/pkg/std/account.go:303`). Since M1.3 the realm refuses a 17th active mandate too, which bounds each payer's own record. Cancelled and expired ones free their slot. |
@@ -57,7 +57,7 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 | 6 | A session scoped wider than this realm (for example the whole namespace) | payer | Realm: Pull requires the allow list to be exactly `["vm/exec:<realm>"]`. Pages: every command scopes the session exactly. This cannot stop the wide session from being used elsewhere. | `TestPullRules` (ten wrong allow lists); flow 5 (Pull refused; the same session can tip another realm in the namespace). |
 | 7 | **A realm deployed under the realm's path** (`<realm>/sub`) | payer | The chain's scope match is prefix-based (`gno.land/pkg/gnoland/app.go:1755`), so a session for the realm also allows every realm under it, and Pull is never called. Only the namespace owner can deploy there, and sessions cannot deploy. **Rule: nothing is ever deployed under the realm's path.** Stated in the realm doc, the home page, the README and here. | Flow 10: a session for the realm sends 1 GNOT of the payer's money to a test sub-realm. This shows the hole; the defence is the deployment rule. |
 | 8 | The payer revokes, cancels, or empties the account before a pull | payee | Nothing can, by design: it is direct debit, not escrow. Billing in advance limits the payee's exposure to one period. | Flow 9 (revoke: no pull can be signed, payer unchanged), flow 12 (cancel). |
-| 9 | The realm still says "active" after an on-chain revoke | payee, services that deliver on `IsActive` | A realm cannot see a revoke. `MandateInfo.SessionQuery` gives the free query `auth/accounts/<payer>/session/<session>` a checker must also run; the pages say so. A successful Pull is the only proof of payment. | Flow 9: `IsActive` true after the revoke, the session query says `SessionNotFound`. |
+| 9 | The realm still says "active" after an on-chain revoke, or a service grants access to a mandate that never paid | payee, services that deliver on a mandate | A realm cannot see a revoke. Since M1.4 the read for services is `PaidThrough(payer, plan)`: the time until which the supporter's latest successful payment covers them (0 if none). It moves only when a Pull succeeds, so a revoked supporter runs out within one period with no extra check. `IsActive` is gone; `HasMandate` keeps its old meaning with a warning, and the help page tells services to use `PaidThrough`. `MandateInfo.SessionQuery` still gives the free session query for anyone who wants to know sooner. | Flow 9: `HasMandate` true after the revoke, the session query says `SessionNotFound`. Flow 13: `PaidThrough` > now for each of 32 paid supporters. `TestPaidThrough` (0 before paying, payment + period after, 0 after a cancel); mutations (inclusive `IsPaidUp`, PaidThrough before payment) caught. |
 | 10 | A third party pulls | payer | Chain: needs the session key's signature. Realm: the mandate is keyed by (payer, session address) and pays only the plan's payee. | `TestPullRules` (other payer, other session refused). |
 | 11 | Replay of an old signed Pull | payer | Chain: each session account has its own sequence (`auth/accounts/<payer>/session/<key>` shows it). | Not run (source only; the spike's offline-signed pull after revoke was refused as "unknown session"). |
 | 12 | The collector key leaks | payer (bounded) | The thief can only pull to the payee, on schedule, or burn fees up to the spend limit per period. The payer revokes; the payee publishes a new key. | Covered by 1–5. |
@@ -65,9 +65,9 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 | 14 | Pull called by another realm (a proxy that adds its own logic) | payer | Realm: Pull and every other crossing function require a direct call from a user (`IsUserCall`). | `TestPullEntryPoint`, `TestOfferRefusals`, `TestSubscribeRefusals`. |
 | 15 | Injection through plan titles (Markdown, HTML, links, mentions, math) | page readers | Titles are validated (one line, no control characters) and escaped with `p/nt/markdown/sanitize/v0` plus gnoweb-specific steps (`$`, `@`, leading and spaced `g1` addresses). | `TestRenderInjection` (14 hostile titles on every page that shows them); `z_pages_filetest` golden; mutations removing `$` or address escaping are caught. |
 | 16 | Expired terms | payer | Realm: `now >= ExpiresAt` refused. Chain: session expiry. | `TestPullRules` (one second before allowed, at expiry refused); flow 7 (chain expiry and realm expiry each refuse). |
-| 17 | Spam: many plans | readers | The home page lists only plans with at least one paying supporter. It walks at most 200 plans per page and links onwards, so spam can delay but never hide a paid plan. All plans are on `:plans`, paged. Each plan costs its creator about 0.38–0.58 GNOT of deposit (Offer, measured in the flow). | `TestOfferSpam` (205 spam plans: none on the home page, the paid plan reached through "more"); `TestPaging`, `TestRenderPaging`. |
-| 17a | Fake supporters: mandates recorded on a victim's plan without ever paying (anyone can Subscribe without creating a session) | readers of the supporter page | Supporters are listed and counted only while active and from their first payment on: the plan's `PaidOnce` list, counted when read. Never-paid active mandates are a number ("N active mandates have not paid yet"), never names. Expired mandates count as neither. | `TestPayingSupporters` (400 junk after a real supporter: not listed or counted; the real one is on the first page). `TestExpirySequences` (expiry, cancel, coming back in every order: GetPlan, the headline, the list, `SupportersOf`, the home page and the payee table agree). `measure-shared.sh junk 10000`: the plan page renders in 207 ms with "1 paying supporter" and "625 mandates have not paid yet". |
-| 17b | Junk mandates for a victim payee's collector key, recorded without a session, to waste the collector's work | payee | The collector reads only its payee's own plans (`CollectorPlans`, then `CollectorScan` per plan, 200 entries per call). Before signing a Pull for a mandate that never paid, it asks the chain for the session (free query) and skips it when there is none. At most `-max-checks` (default 100) checks per run: never-checked first, newest first, then the oldest-checked, kept in a state file. A real new supporter is never starved; mandates that paid before are pulled without a check. A Pull without a session cannot even be built by gnokey, so nobody pays a fee for junk. | `measure-shared.sh junk 10000` (10,000 addresses, one mandate each; the realm allows one active mandate per payer and session key): the attacker paid **5,350 GNOT** in deposits. The collector listed 10,001 mandates in 67 realm queries and took **17 s** per run with the default 100 checks; checking all 10,000 took 257 s. Flow step 6: a junk mandate is checked and skipped, the state file written. |
+| 17 | Spam: many plans | readers | The home page lists only plans that someone paid for in the plan's current or previous period (two counters per plan, updated by Pull; nothing to walk). It walks at most 200 plans per page and links onwards, so spam can delay but never hide a paid plan, and churn (supporters leaving, junk mandates) cannot hide a plan someone pays for. All plans are on `:plans`, paged. Each plan costs its creator about 0.38–0.58 GNOT of deposit (Offer, measured in the flow). | `TestOfferSpam` (205 spam plans: none on the home page, the paid plan reached through "more"); `TestHomeSurvivesChurn` (a paid plan stays on the home page while others subscribe, cancel and expire around it); `TestPaging`, `TestRenderPaging`. |
+| 17a | Fake supporters: mandates recorded on a victim's plan without ever paying (anyone can Subscribe without creating a session) | readers of the supporter page | Supporters are listed only while active and from their first payment on: each entry of the plan's list carries a status (unpaid, paid, cancelled) that Pull and Cancel flip in place. Counts are payments per period ("N supporters paid in the current period, M in the one before"), which only real payments move. Never-paid active mandates are a number ("N active mandates have not paid yet"), never names. Expired mandates count as neither. | `TestPayingSupporters` (400 junk after a real supporter: not listed or counted; the real one is on the first page). `TestPayingWalkBounded` (1,010 junk: the walk stops at 1,000 and the next page finds the real one). `TestPaymentWindows` (a payment counts in its window, then as "the one before", then not at all). `TestFixedList` (positions 0, 31, 32, 33, 1,023, 1,024 and the last, past one super-chunk). `TestExpirySequences` (expiry, cancel, coming back in every order: GetPlan, the headline, the list, `SupportersOf`, the home page and the payee table agree). `measure-shared.sh junk 10000`: the plan page renders in 207 ms with "1 paying supporter" and "625 mandates have not paid yet". |
+| 17b | Junk mandates for a victim payee's collector key, recorded without a session, to waste the collector's work; or sessions that cannot pay | payee, payer | The collector reads only its payee's own plans (`CollectorPlans`, then `CollectorScan` per plan, 200 entries per call). Since M1.4 it reads each due mandate's session on chain (free) before pulling, and skips with the reason a session that is missing or revoked, not scoped to exactly the realm, below price + fee + storage bound, already spent for this spend period, or about to expire. At most `-max-checks` (default 100) never-paid mandates are read per run, never-read first, then oldest-read, kept in a state file that holds only mandates still listed and is replaced atomically through a private temporary file. A pull that is still refused is not retried before the plan's next period, so a payer pays at most one refused fee per period. A revoked session is not an error (exit 0). | `measure-shared.sh junk 10000` (M1.3): the attacker paid **5,350 GNOT** in deposits; the collector listed 10,001 mandates in 67 realm queries and took 17 s per run with the default 100 checks. Flow step 6 (junk skipped), step 13 (32 real first payments; low limit, wide scope and revoked sessions skipped with their reason; a refused pull recorded and not retried; a stale state line pruned; no temporary file left; exit 0 both runs). |
 | 17c | Growing what other payers' calls read: shared buckets (M1.1) or anything else | every other payer | **Per-payer layout (M1.3).** Each payer's lookups live in that payer's own record, at most 16 active entries. Cancel removes the entry, and an expired one goes at the next Subscribe. Plan lists hold strings, not pointers, and an append touches only the plan and its newest chunk. What remains shared is tree depth (payers, plans, payees), which grows with log2 of the number of entries. | `measure-shared.sh` with the M1.2 attacker budget: see "Shared structures" below. Loop: one address subscribing and cancelling 2,000 or 4,000 times leaves the victim's Pull at 8.46M and 8.45M (baseline 8.29M). Depth: 2,300 new payer addresses (1,230 GNOT) raise Pull to 10.24M. `TestPayerIsolation`, `TestActiveCap`, `TestInactiveReads`. |
 | 18 | The collector script run against the wrong network | payee | `scripts/collect.sh` has no defaults, accepts only `dev` with a local remote or `onyx-1` with the Onyx RPC. | Flow 6: refused without `-remote`, with onyx-1 and a local remote, and with another chain id. |
 | 19 | The payee publishes a collector key whose address does not match | payer | The realm derives the address from the key itself (`chain.PubKeyAddress`). | `TestSetCollectorKey` (bad checksum, empty payload, wrong prefix refused; derived address checked). |
@@ -104,22 +104,23 @@ What is left is the depth of the payer tree:
 - **Pull only reads the record:** +0.2M gas per doubling, against +0.65M per doubling for Subscribe and Cancel.
 - **Projection:** at 100,000 payers, about 18M for Cancel, inside the pages' 30M gas wanted.
 
-A Subscribe to a plan whose newest chunk is partly full costs a little more: up to about 0.3M gas here, bounded by the 32-entry chunk. It does not grow with the plan's history: 4,000 entries cost the same as 2,000.
+A Subscribe to a plan whose newest chunk is partly full costs a little more: up to about 0.3M gas here, bounded by the 32-entry chunk. Since M1.4 the lists have two levels (below), so no append grows with the plan's history; measured at 32,800 entries in "Lists at their boundaries".
 
-## Stored values that depend on time (checked in M1.3)
+## Stored values that depend on time (checked in M1.3 and M1.4)
 
 Expiry needs no transaction, so nothing stored may count on it. This was checked:
-- **Removed:** the `Plan.Paying` counter.
+- **Removed:** the `Plan.Paying` counter (M1.3), and the per-read "paying supporters" count over a list (M1.4: it walked a list whose entries could expire, so a plan could drop off the home page through churn, audit LOW-1).
 - **Time-independent (they count transactions that happened):**
   - the plan's, payee's and package totals (pulls, paid, last pull, plans);
   - `Plan.Cancelled` (cancels ever);
-  - the supporter and paid-once lists (append-only history).
+  - the per-plan payment counters (M1.4): the period window of the latest payment and the payments in it and in the window before. Pull updates them; a read interprets them against the current time (`paidWindows`), so they need no transaction to stay true: a window that has passed simply reads as zero;
+  - each list entry's status (unpaid, paid, cancelled), set by Pull and Cancel.
 - **Payer.Active may hold an expired entry until the payer's next Subscribe.** Every use checks or prunes:
   - Subscribe prunes before checking duplicates and the cap;
   - Pull refuses with "expired";
   - Cancel may cancel an expired mandate, which is harmless;
-  - `IsActive`, `NextPullAt`, `CollectorScan`, `SupportersOf` and the counts check `isActive`.
-- **Computed when read:** the mandate status, `Due`, `LastPullAt` and the payer page.
+  - `HasMandate`, `NextPullAt`, `CollectorScan`, `SupportersOf` and the unpaid count check `isActive`.
+- **Computed when read:** the mandate status, `Due`, `LastPullAt`, `PaidThrough` (the latest payment + period) and the payer page.
 - **Renamed:** the home page's "Mandates" total is now "Mandates ever recorded", which is what it is.
 
 ## What `gno test` cannot reach
@@ -143,6 +144,8 @@ From `scripts/local-flow.sh` (real signed transactions). M1.1 is commit e37e544 
 | Pull, later | 7.6M | 8.6M | **0 B** | **0 B** |
 | Cancel | 5.3M | 7.6–9.3M | 64–76 B | −122 to −132 B |
 
+**M1.4** (same flow, two-level lists with in-place status): Offer 8.1M / 6,167 B; SetCollectorKey 5.1M / 194 B; Subscribe new payer, new key 8.5M / 4,625 B; returning payer, new key 9.5M / 2,759 B; **new payer, known key 8.7M / 5,278 B (0.53 GNOT, +49 B against M1.3)**; returning payer, known key 9.9M / 1,844 B; Pull first 9.5M / 18 B; Pull later 8.8M / 0 B; Cancel 8.0–9.7M / −116 to −132 B.
+
 - **"New key" no longer costs anything extra**: M1.3 has no per-key index.
 - **A new payer costs about 2.1 KB more than in M1.1**: an avl insert into the payer tree (two nodes, about 2.2 KB), and the payer's own record stored by value (no heap item). In exchange, nothing another address does can grow what this payer's calls read.
 - **Pull and Cancel cost about 1M and 2–4M more gas than in M1.1**: they look the payer up in the tree, and Cancel writes the record back.
@@ -155,23 +158,20 @@ From `scripts/local-flow.sh` (real signed transactions). M1.1 is commit e37e544 
   - `Head`: the newest mandate, with older ones linked through `prevOfPayer` (history, walked only by free reads).
 
   Cancel removes the entry. An expired entry is removed at the payer's next Subscribe. A 17th active mandate is refused.
-- **Plans' supporter lists (`supporterList`)** store one short string per mandate (the payer's 40-character address followed by the mandate id), never pointers:
-  - Rewriting an array costs about 0.37M gas for every pointer it holds to a shared ("escaped") object, measured with a probe realm (docs/notes.md). With pointers, an append cost up to 13M gas, and the list of chunks became dearer every 32 entries: 9.6M gas at 2,016 entries, about +0.11M per chunk.
-  - The newest entries live in the plan itself (`tail`); a full tail becomes a chunk. So an append rewrites the plan and its tail, and touches the list of chunks only once every 32.
-  - Strings also measured about 400 bytes less per mandate than a two-field struct, and about 80 less than a pointer.
-- **Reads resolve list entries through the payer's record**, so they cost one tree lookup per entry. Only free reads do this; they walk at most 200 entries per call and return a cursor:
-  - the supporter page;
-  - `SupportersOf`, which now returns active mandates only;
-  - `CollectorScan`.
-- **Supporters are counted and listed from their first payment on, while they are active, computed when read.** No stored counter can follow expiry, which happens without a transaction. In M1.3's first cut, a stored `Paying` counter kept counting expired mandates, and counted a payer twice after they came back.
-  - Each plan keeps a second list, `PaidOnce`, of mandates that have paid. A mandate's first pull adds it.
-  - Reads count and list the entries whose mandate is still active right now: `countPaying`, `payingFrom`, `hasPaying`.
-  - A payer has at most one active mandate per plan, so nobody counts twice. An expired or cancelled mandate is neither a supporter nor "not yet paid".
-  - "Not yet paid" is counted the same way over the plan's main list (`countUnpaid`): active mandates with no pull.
-  - Counts look at the latest 200 entries; beyond that the pages say "at least" or add "+". Only real payments grow `PaidOnce`, so junk cannot crowd it.
-  - The home page lists a plan when `hasPaying` finds one active paying mandate, walking at most 50 plans per page with a cursor.
-  - Cost: a mandate's first pull adds one string to `PaidOnce`, paid by the payer within the fee allowance; later pulls still add nothing.
-- **The home page lists only plans with at least one paying supporter**, walking at most 200 plans per page with a "more" link. All plans are on `:plans`.
+- **Plans' supporter lists and payees' plan lists (`fixedList`, M1.4)** store fixed-width strings, never pointers to shared objects:
+  - A supporter entry is the payer's 40-character address, the mandate id in 10 digits and one status character (`0` unpaid, `1` paid, `x` cancelled): 51 bytes. A mandate remembers its position (`Index`), so Pull and Cancel rewrite the status character in place, which never changes the storage size.
+  - Two levels: the newest entries live in the owner itself (`tail`, fewer than 32); a full tail becomes a chunk of 32, appended to the last super-chunk (at most 32 chunks); the owner holds the list of super-chunks, which grows by one pointer per 1,024 entries. So no array an append rewrites grows with the list's length: an append rewrites the owner and its tail, every 32nd also creates a chunk and rewrites one super-chunk, every 1,024th also rewrites the super-chunk list.
+  - Rewriting an array costs about 0.37M gas for every pointer it holds to a shared ("escaped") object, measured with a probe realm (docs/notes.md). In M1.3 the plan's list of chunks grew by one pointer every 32 entries (+0.11M gas per chunk, about +110M at 32,000 entries for the Subscribe that starts a chunk), and a payee's plan list was a slice of pointers to plans (`PlanList`), rewritten in full by each Offer (audit LOW-2, LOW-3).
+- **Reads resolve list entries through the payer's record**, so they cost one tree lookup per entry they resolve, about 2.7M gas at 32,800 payers. Only free reads do this, and each is bounded per call (they return a cursor):
+  - the supporter page: lists paid entries (status `1`), walking at most 1,000 entries and resolving at most 200, and counts never-paid active mandates among the latest 200 entries (status `0` only);
+  - `SupportersOf`: active mandates, cancelled entries skipped without a lookup;
+  - `CollectorScan`: 200 entries per call, cancelled ones skipped without a lookup.
+- **Supporters are listed from their first payment on, while they are active; counts are payments per period.** No stored value can follow expiry, which happens without a transaction.
+  - A mandate's first pull flips its entry from unpaid to paid; listing walks paid entries and keeps the active ones.
+  - The headline and the home page count payments: how many supporters paid in the plan's current period window and in the one before (`PaidThisPeriod`, `PaidLastPeriod`, `PeriodStart` in `GetPlan`). Only a successful Pull moves them, so junk and expiry cannot inflate them, and a payer is counted once per payment.
+  - "Not yet paid" counts active mandates with no pull among the latest 200 entries; beyond that the page says "at least".
+  - The home page lists a plan when someone paid for it in the current or the previous period. That reads two counters per plan, walking at most 200 plans per page with a cursor.
+- **The home page lists only plans paid for in their current or previous period**, walking at most 200 plans per page with a "more" link. All plans are on `:plans`.
 - **The collector reads by payee**: `CollectorPlans(payee)`, then `CollectorScan(plan, key, from)` for each plan. There is no per-key list, so mandates recorded for a payee's key on someone else's plan never reach its collector.
 - **Mandate records are slim:**
   - Paid = pulls × price;
@@ -182,10 +182,65 @@ From `scripts/local-flow.sh` (real signed transactions). M1.1 is commit e37e544 
 ### What reads return for a cancelled or expired mandate
 
 - `MandateOf(payer, session)` returns the newest mandate for that pair, with Status "cancelled" or "expired". When it is no longer in the active list, the read walks the payer's history.
-- `IsActive` is false, and `NextPullAt` is 0.
+- `HasMandate` is false, `NextPullAt` is 0, and `PaidThrough` is 0 once it is cancelled (an expired mandate keeps its last payment's `PaidThrough`, which has run out or soon will).
 - `SupportersOf` and the supporter page leave it out.
 - Pull and Cancel look only at the active list:
   - after a cancel they fail with "no active mandate for this session (never recorded, cancelled or replaced)";
   - an expired mandate still says "mandate: expired" until its payer subscribes again.
 
-Every Pull after a mandate's first updates only fields that already exist (mandate, plan, payee totals and two package counters), so it adds no storage. The first pull adds the mandate to the plan's paid-once list and sets fields that were zero (amino omits zero values): up to 446 bytes measured, paid from the fee allowance.
+Every Pull after a mandate's first updates only fields that already exist (mandate, plan, payee totals, the plan's payment counters and two package counters), so it adds no storage beyond a varint growing by a byte. The first pull flips its list entry in place and sets fields that were zero (amino omits zero values): at most 68 bytes measured, paid from the fee allowance ("Pull's budget").
+
+## Pull's budget (M1.4)
+
+The chain counts a Pull's storage deposit against the session's spend limit after the call, but checks only fee + coins before it. So a Pull whose deposit does not fit is refused after the fee is charged (with `-simulate skip`), or refused in simulation (gnokey's default) and never sent.
+
+**Before (abd2ecf, audit HIGH-1, reproduced):** 66 payers with the pages' sessions (spend limit price + 0.1 GNOT, period = the plan's, exact scope), first payments pulled in order by the collector key (`scripts/measure-first-payments.sh 66`). Positions 1–31 succeeded, each adding 115–116 B to the plan's paid-once list (450 B for the first); **every position from 32 on failed** with "storage deposit processing encountered one or more errors": the 32nd moved the full list into a new chunk object, whose deposit no longer fitted in what the allowance left after the fee. With gnokey's simulation nothing was charged and the supporter could never pay; with `-simulate skip` each try cost the payer the 20,000 ugnot fee.
+
+**After (M1.4):** a Pull creates no object. It writes the mandate, the plan's counters, the payee's totals, two package counters and, on a first payment, one status character in place. Measured with real session-signed pulls:
+
+| Case | Gas | Storage |
+|---|---|---|
+| First payments 1–100 of one plan, in order, pages' sessions | 10.3–11.0M | all succeeded; at most 38 B, usually 12 B |
+| Flow: a mandate's first pull, a later pull | 9.5M, 8.8M | 18 B, 0 B |
+| First pull of the oldest entry, list of 34 (the plan's first payment ever) | 10.8M | 68 B |
+| … list of 1,058 | 11.6M | 46 B |
+| … list of 10,274 | 12.3M | 42 B |
+| … list of 32,802 | 12.7M | 46 B |
+| Flow 13: 32 supporters, the 32nd included, through the collector | | all succeeded |
+
+The worst first payment is the plan's very first (its counters go from zero), 68 B. The collector and the scripts use a bound of 100 B, asserted by `measure-first-payments.sh`.
+
+**Worst case per period:** fee 20,000 ugnot (the collector's 20M gas wanted at today's Onyx price of 1 ugnot per 1,000 gas) + 100 B × 100 ugnot (Onyx's storage price, read-only query) = **30,000 ugnot**.
+
+**Fee allowance:** today 0.1 GNOT, a margin of 70,000 ugnot (the gas price may rise to 4.5 times today's before an honest pull no longer fits). **Proposal: 0.05 GNOT**, the smallest round value with a sensible margin: 20,000 ugnot, so a gas price twice today's still fits (2 × 20,000 + 10,000 = 50,000). It halves what a hostile creator can burn per period (threat 5). Below that, one gas price step on a busy Onyx would block every pull. Not changed in M1.4; it is the owner's call.
+
+## Lists at their boundaries and at size (M1.4)
+
+`scripts/measure-plan-sizes.sh SIZE` loads SIZE mandates (one payer each) as genesis transactions, then signs live: 36 Subscribes walking the list across a chunk boundary (every 32) and a super-chunk boundary (every 1,024), the first pull of the oldest entry, every free read inside a transaction of a probe realm (local only, not under the realm's path) with 3,000,000,000 gas wanted, the node's cap for a free query, and an Offer.
+
+| | 1,022 → 1,058 | 10,238 → 10,274 (1,000 plans of one payee) | 32,766 → 32,802 |
+|---|---|---|---|
+| Subscribe, usual | 12.6–14.8M gas, 5,326–5,340 B | 16.0–18.3M, 5,346–5,367 B | 15.2–17.4M, 5,387–5,399 B |
+| Subscribe that fills the tail (creates a chunk) | 19.7M, 6,178 B | 22.5M, 6,198 B | 22.4M, 6,265 B |
+| Subscribe that also starts a super-chunk | 14.8M, 7,382 B | 18.6M, 7,435 B | 22.3M, 7,476 B |
+| Subscribe after a new chunk (new tail) | 14.0M, 5,650 B | 16.4M, 5,679 B | 15.6M, 5,708 B |
+| Pull, first payment of the oldest entry | 11.6M, 46 B | 12.3M, 42 B | 12.7M, 46 B |
+| Offer | 8.6M | 13.9M (the payee's 1,001st plan) | 8.6M |
+
+No step grows with the list's length; what grows is the stores' depth (more payers, more keys), with the log of their size.
+
+Free reads, gas inside one transaction (the probe's own overhead, 1.7M, included):
+
+| Read | 1,058 | 10,274 (1,000 plans) | 32,802 |
+|---|---|---|---|
+| Home | 9.0M | 112M (walks 200 plans) | 9.0M |
+| `:plans` | 8.4M | 30.9M | 8.4M |
+| Plan page | 404M | 504M | **557M** |
+| Payee page | 11.2M | 38.5M | 11.2M |
+| `Plans(1)` | 5.3M | 17.5M | 5.3M |
+| `PlansOf(payee, 1)` | 6.9M | 26.0M | 6.9M |
+| `SupportersOf(plan, 1)` | 39.9M | 51.6M | 54.3M |
+| `CollectorScan(plan, key, 0)` | 269M | 370M | **411M** |
+
+The node's cap for a free query is 3,000,000,000 gas. The heaviest read measured, the plan page at 32,802 supporters, uses 19% of it. Its worst case is a page where both bounded walks resolve their maximum, 200 lookups each (here only the unpaid count did): about 1.1B at 32,800 payers by the measured 2.7M per lookup, 37% of the cap. Each doubling of the number of payers adds one level to the payer tree, about 7% per lookup.
+
