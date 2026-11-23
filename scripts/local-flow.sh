@@ -26,6 +26,13 @@
 #       (first signer, pays the fee) and the session key; payer pays exactly
 #       the amount
 #   12. cancel by the payer ends the mandate; Pull is refused after it
+#   13. the collector: 32 supporters with the pages' sessions (the 32nd
+#       first payment included), sessions it must skip, a pull refused in
+#       simulation (retried) and one included and failed (put off), the
+#       state file and the run lock
+#   14. leaving and coming back within a paid period is not charged twice
+#   15. the chain's limits (30-day spend period) and a 30-day plan end to
+#       end with the pages' exact commands
 #
 # How: gnodev runs the repository's realm plus two throwaway test realms
 # (gno.land/r/mandate_dev/other and gno.land/r/mandate_dev/mandate/sub) from
@@ -115,6 +122,8 @@ for k in payer payee stranger coll coll2 coll3 coll4 coll5; do newkey "$k"; done
 # four whose sessions the collector must skip or whose pull the chain refuses.
 SUPPORTERS=() FUND=()
 for i in $(seq 1 32) low wide revoked poor; do newkey "s$i"; SUPPORTERS+=("s$i"); done
+newkey smax # step 15
+FUND+=(-add-account "$(addr_of smax)=10000000ugnot")
 for k in "${SUPPORTERS[@]}"; do
 	if [ "$k" = spoor ]; then FUND+=(-add-account "$(addr_of "$k")=1000000ugnot"); else FUND+=(-add-account "$(addr_of "$k")=10000000ugnot"); fi
 done
@@ -341,7 +350,27 @@ expect_fail "Pull with coll5 (scope vm/exec:gno.land/r/mandate_dev)" "the sessio
 expect_ok "coll5 can call another realm in that namespace: why the payer page insists on the exact scope" coll5 call -pkgpath "$OTHER" -func Tip -send 100000ugnot -master "$PAYER" "${PULLGAS[@]}"
 
 # ---- the next period ---------------------------------------------------------------
-wait_until() { local t="$1"; local d=$((t - $(now))); if [ "$d" -gt 0 ]; then echo "  (waiting ${d}s for block time to pass $t)"; sleep "$d"; fi; }
+# The chain's own clock: the time of its latest block. It lags the wall
+# clock by up to a block, so waits go by it, never by the local clock.
+chain_time() {
+	curl -s "http://$RPC/status" | python3 -c '
+import json, sys, datetime
+t = json.load(sys.stdin)["result"]["sync_info"]["latest_block_time"]
+d, _, frac = t.rstrip("Z").partition(".")
+print(int(datetime.datetime.fromisoformat(d).replace(tzinfo=datetime.timezone.utc).timestamp()))'
+}
+wait_until() { # wait until the latest block's time is at or after $1
+	local t="$1" c
+	c="$(chain_time)"
+	[ "$c" -ge "$t" ] && return 0
+	echo "  (waiting for the chain's block time to pass $t, now $c)"
+	for _ in $(seq $((t - c + 120))); do
+		sleep 1
+		[ "$(chain_time)" -ge "$t" ] && return 0
+	done
+	fail "the chain's block time did not reach $t"
+}
+fee_of() { sed -n 's/^Pull fee: \([0-9]*\)ugnot .*/\1/p' <<<"$1"; }
 step "6. next period: the collector script (dry run, then for real)"
 wait_until "$((T1 + 62))"
 if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -realm "$REALM" -chainid dev 2>&1)"; then fail "collector ran without -remote"; fi
@@ -368,7 +397,7 @@ grep -q "pulling mandate 1" <<<"$out" || fail "collector did not pull mandate 1"
 SECOND_DELTA="$(sed -n 's/^ *STORAGE DELTA: *\(-\{0,1\}[0-9]*\) bytes$/\1/p' <<<"$out")"
 SECOND_DELTA="${SECOND_DELTA:-0}"
 eq "payee gain from the collector's pull" 1000000 "$(($(bal "$PAYEE") - e))"
-eq "payer loss (amount + fee, no storage)" 1020000 "$((p - $(bal "$PAYER")))"
+eq "payer loss (amount + the collector's fee, no storage)" "$((1000000 + $(fee_of "$out")))" "$((p - $(bal "$PAYER")))"
 eq "storage delta of the second pull of a mandate" 0 "$SECOND_DELTA"
 echo "first pull storage delta: $FIRST_DELTA bytes; second pull: $SECOND_DELTA bytes" >>"$GAS_REPORT"
 realm_zero
@@ -503,7 +532,7 @@ for k in "${SUPPORTERS[@]}"; do
 done
 echo "  ok: ${#SUPPORTERS[@]} supporters subscribed to plan 5 with sessions for coll"
 expect_ok "srevoked revokes its session" srevoked session revoke -pubkey "$GPUB" "${CALL[@]}"
-for f in "$TMP"/collect.state.*; do [ -e "$f" ] && fail "a temporary state file was left: $f"; done
+for f in "$TMP"/collect.state.*; do [ -e "$f" ] && [ "$f" != "$TMP/collect.state.lock" ] && fail "a temporary state file was left: $f"; done
 echo "999999 1 1" >>"$TMP/collect.state" # a mandate that no longer exists: must be pruned
 set +e
 out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -state "$TMP/collect.state" -max-checks 100 -insecure-password-stdin 2>&1)"
@@ -538,13 +567,17 @@ echo "  ok: a pull that never reached a block is tried again on the next run, at
 collect13 -simulate skip
 eq "third run (no simulation) exit status" 0 "$rc"
 grep -q "refused on the payer's side (included in a block and failed, the fee was charged: not tried again before the next period)" <<<"$out" || fail "the included failure was not recognised"
-eq "the poor supporter paid one fee" 20000 "$((p - $(bal "$(addr_of spoor)")))"
+POORFEE="$(fee_of "$out")"
+eq "the poor supporter paid one fee" "$POORFEE" "$((p - $(bal "$(addr_of spoor)")))"
 collect13
 grep -q "1 waiting after a refused pull" <<<"$out" || fail "an included failure was retried in the same period"
-eq "and nothing more on the next run" 20000 "$((p - $(bal "$(addr_of spoor)")))"
+eq "and nothing more on the next run" "$POORFEE" "$((p - $(bal "$(addr_of spoor)")))"
 echo "  ok: a pull included in a block that failed is put off to the next period: the payer paid one fee, not one per run"
 grep -q '^999999 ' "$TMP/collect.state" && fail "state file kept a mandate that is no longer listed"
-for f in "$TMP"/collect.state.*; do [ -e "$f" ] && fail "a temporary state file was left: $f"; done
+for f in "$TMP"/collect.state.*; do [ -e "$f" ] && [ "$f" != "$TMP/collect.state.lock" ] && fail "a temporary state file was left: $f"; done
+out="$(flock "$TMP/collect.state.lock" -c "printf '%s\n' '$PW' | '$REPO/scripts/collect.sh' -home '$KB' -key coll -payee '$PAYEE' -remote '$RPC' -chainid dev -realm '$REALM' -state '$TMP/collect.state' -insecure-password-stdin -dry-run" 2>&1)" || true
+grep -q "holds $TMP/collect.state.lock; nothing done" <<<"$out" || fail "a run started while another holds the lock went ahead: $out"
+echo "  ok: a second run while another holds the lock does nothing"
 echo "  ok: state file pruned to listed mandates ($(wc -l <"$TMP/collect.state") lines), no temporary file left"
 eq "realm balance" 0 "$(bal "$REALM_ADDR")"
 
@@ -580,7 +613,42 @@ eq "s1 paid exactly one price and one fee, plus that pull's storage" "$((1000000
 [ "$CARRY_DELTA" -le 100 ] || fail "that first pull added more than 100 B"
 collect13
 grep -q "pulling mandate [0-9]*: 1000000ugnot from $S2" <<<"$out" || fail "the collector did not pull s2 when its paid period ended"
-eq "s2 paid exactly one price and one fee, plus that pull's storage" "$((1000000 + 20000 + $(awk -v a="$S2" '$0 ~ "from " a {f=1; next} f && /STORAGE DELTA/ {print $3; exit}' <<<"$out") * 100))" "$((p2 - $(bal "$S2")))"
+eq "s2 paid exactly one price and one fee, plus that pull's storage" "$((1000000 + $(fee_of "$out") + $(awk -v a="$S2" '$0 ~ "from " a {f=1; next} f && /STORAGE DELTA/ {print $3; exit}' <<<"$out") * 100))" "$((p2 - $(bal "$S2")))"
+eq "realm balance" 0 "$(bal "$REALM_ADDR")"
+
+step "15. the chain's limits, and a 30-day plan end to end with the pages' exact commands"
+SMAX="$(addr_of smax)"
+expect_fail "a session with a spend period one second over 30 days (the chain's limit)" "spend_period exceeds maximum" smax $(session_args "$GPUB3" "vm/exec:$REALM" 1100000ugnot 2592001 "$EXP13")
+expect_ok "a session with a spend period of exactly 30 days" smax $(session_args "$GPUB3" "vm/exec:$REALM" 1100000ugnot 2592000 "$EXP13")
+expect_fail "a plan one second over 30 days" "period is above the maximum" payee call -pkgpath "$REALM" -func Offer -args "Too long" -args 1000000 -args 2592001 "${CALL[@]}"
+expect_ok "a plan of exactly 30 days (MaxPeriod)" payee call -pkgpath "$REALM" -func Offer -args "Supporter F" -args 1000000 -args 2592000 "${CALL[@]}"
+MAXPLAN="$(qeval "$REALM.Totals()" | head -1 | sed -n 's/^(\([0-9]*\) int)$/\1/p')"
+[[ "$MAXPLAN" =~ ^[0-9]+$ ]] || fail "could not read the new plan's id"
+# The page's commands, exactly as printed, pointed at this local chain.
+localize() { sed -e "s| -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 | -chainid dev -remote $RPC |" -e "s| $2\$| -home $KB -insecure-password-stdin $1|"; }
+run_page_cmd() { # <what> <key> <placeholder> <command line from a page>
+	local what="$1" key="$2" ph="$3" cmd
+	cmd="$(printf '%s\n' "$4" | localize "$key" "$ph")"
+	grep -q -- "-chainid dev -remote $RPC" <<<"$cmd" || fail "$what: the page's command does not have the expected network flags: $4"
+	echo "  running the page's command: ${4:0:120}..."
+	printf '%s\n' "$PW" | eval "$cmd" >"$OUT" 2>&1 || true
+	grep -q '^OK!' "$OUT" || fail "$what: the page's exact command was refused: $(grep -E '^Data:' "$OUT" | head -2)"
+	echo "  ok: $what"
+}
+plan_page="$(gnokey query vm/qrender -data "$REALM:plan/$MAXPLAN" -remote "$RPC" -home "$KB")"
+grep -q "every 30 days" <<<"$plan_page" || fail "the plan page does not say every 30 days"
+run_page_cmd "session create from the plan page (spend period 2592000, expiry one year)" smax YOUR_KEY "$(grep -m1 '^gnokey maketx session create' <<<"$plan_page")"
+run_page_cmd "Subscribe from the plan page" smax YOUR_KEY "$(grep -m1 -- '-func Subscribe' <<<"$plan_page")"
+help_page="$(gnokey query vm/qrender -data "$REALM:help" -remote "$RPC" -home "$KB")"
+pullcmd="$(grep -m1 -- '-func Pull ' <<<"$help_page" | sed "s/AMOUNTugnot/1000000ugnot/; s/SUPPORTER_ADDRESS/$SMAX/")"
+run_page_cmd "Pull with the help page's command (today's minimum fee)" coll COLLECTOR_KEY "$pullcmd"
+PTMAX="$(qeval "$REALM.PaidThrough(address(\"$SMAX\"), $MAXPLAN)" | sed -n 's/^(\([0-9]*\) int64)$/\1/p')"
+CT="$(chain_time)"
+[ "${PTMAX:-0}" -gt $((CT + 2592000 - 120)) ] && [ "$PTMAX" -le $((CT + 2592000)) ] || fail "PaidThrough $PTMAX is not 30 days after the pull (chain time $CT)"
+echo "  ok: paid through $PTMAX, 30 days after the pull"
+payer_page="$(gnokey query vm/qrender -data "$REALM:payer/$SMAX" -remote "$RPC" -home "$KB")"
+run_page_cmd "revoke from the payer page" smax YOUR_KEY "$(grep -m1 '^gnokey maketx session revoke -pubkey '"$GPUB" <<<"$payer_page")"
+run_page_cmd "Cancel from the payer page" smax YOUR_KEY "$(grep -m1 -- "-func Cancel -args $SMAX -args $COLL" <<<"$payer_page")"
 eq "realm balance" 0 "$(bal "$REALM_ADDR")"
 
 step "pages in gnoweb"

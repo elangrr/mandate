@@ -4,7 +4,7 @@
 #   scripts/collect.sh -home <keybase dir> -key <collector key name> \
 #       -payee <payee address> -remote <rpc url> -chainid <chain id> \
 #       -realm <realm path> [-dry-run] [-state <file>] \
-#       [-max-checks 500] [-max-pulls 200]
+#       [-max-checks 500] [-max-pulls 200] [-gas-fee <n>ugnot]
 #
 # What a run does, all reads being free queries:
 #   1. lists the payee's plans (CollectorPlans) and, for each, walks its
@@ -39,7 +39,17 @@
 # on the payer's side (a revoked session is not an error), 1 when a pull
 # failed for another reason or a read failed, 2 for bad arguments.
 #
-# Needs gnokey (v1.8.0) and python3.
+# The Pull fee follows the chain: today's minimum for -gas-wanted (from
+# auth/gasprice, which the chain raises when blocks fill) plus a quarter,
+# lowered for each mandate to what its session can still pay this period,
+# never below the minimum (such a mandate is skipped with the reason).
+# -gas-fee sets a fixed fee instead.
+#
+# Runs never overlap: a run takes a lock (next to the -state file, or in
+# the temp folder per collector key) and a second run that finds it taken
+# does nothing and exits 0.
+#
+# Needs gnokey (v1.8.0), python3 and flock.
 #
 # Run it from cron or a loop at least once per period.
 #
@@ -53,7 +63,8 @@
 #     from stdin when -insecure-password-stdin is given (for scripts and
 #     tests); otherwise gnokey asks for it for each pull.
 #   - The fee counts against the payer's fee allowance (the session's spend
-#     limit is the price plus a small allowance), so keep it small.
+#     limit is the price plus a small allowance); the fee is never more than
+#     the session can still pay.
 #
 # Why a shell script and not a Go program: gnokey already does key storage,
 # signing and broadcasting with sessions (-master). A Go collector would have
@@ -68,7 +79,7 @@ usage() {
 }
 
 HOME_DIR="" KEY="" REMOTE="" CHAIN="" REALM="" PAYEE="" STATE="" DRY=0 PWSTDIN=0
-GAS_FEE="20000ugnot" GAS_WANTED="20000000" MAX_CHECKS=500 MAX_PULLS=200 SIMULATE=test
+GAS_FEE="" GAS_WANTED="20000000" MAX_CHECKS=500 MAX_PULLS=200 SIMULATE=test
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-home) HOME_DIR="${2:-}"; shift 2 ;;
@@ -117,11 +128,12 @@ esac
 if ! [[ "$REALM" =~ ^gno\.land/r/[a-z0-9_]+(/[a-z0-9_]+)*$ ]]; then echo "not a realm path: $REALM" >&2; exit 2; fi
 if ! [[ "$PAYEE" =~ ^g1[02-9ac-hj-np-z]{38}$ ]]; then echo "not an address: $PAYEE" >&2; exit 2; fi
 if [ ! -d "$HOME_DIR" ]; then echo "no keybase folder at -home $HOME_DIR" >&2; exit 2; fi
-if ! [[ "$GAS_FEE" =~ ^[0-9]+ugnot$ && "$GAS_WANTED" =~ ^[0-9]+$ && "$MAX_CHECKS" =~ ^[0-9]+$ && "$MAX_PULLS" =~ ^[0-9]+$ && "$SIMULATE" =~ ^(test|skip)$ ]]; then
+if ! [[ ( -z "$GAS_FEE" || "$GAS_FEE" =~ ^[0-9]+ugnot$ ) && "$GAS_WANTED" =~ ^[0-9]+$ && "$MAX_CHECKS" =~ ^[0-9]+$ && "$MAX_PULLS" =~ ^[0-9]+$ && "$SIMULATE" =~ ^(test|skip)$ ]]; then
 	echo "bad -gas-fee, -gas-wanted, -max-checks, -max-pulls or -simulate" >&2
 	exit 2
 fi
 command -v gnokey >/dev/null || { echo "gnokey not found on PATH" >&2; exit 1; }
+command -v flock >/dev/null || { echo "flock not found on PATH (util-linux)" >&2; exit 1; }
 
 PW=""
 if [ "$PWSTDIN" = 1 ]; then IFS= read -r PW || true; fi
@@ -129,6 +141,17 @@ if [ "$PWSTDIN" = 1 ]; then IFS= read -r PW || true; fi
 ADDR="$(gnokey list -home "$HOME_DIR" | awk -v k="$KEY" '$2 == k { for (i = 1; i <= NF; i++) if ($i == "addr:") print $(i + 1) }')"
 if ! [[ "$ADDR" =~ ^g1[a-z0-9]{38}$ ]]; then echo "no key named '$KEY' in $HOME_DIR" >&2; exit 2; fi
 echo "collector key $KEY ($ADDR) for payee $PAYEE on $CHAIN via $REMOTE"
+
+# One run at a time per collector key (and per state file): two overlapping
+# runs (a slow run and the next cron tick) would race on the state file and
+# sign the same pulls twice. A run that finds the lock taken does nothing.
+LOCK="${STATE:+$STATE.lock}"
+LOCK="${LOCK:-${TMPDIR:-/tmp}/mandate-collect-$ADDR.lock}"
+exec 9>>"$LOCK"
+if ! flock -n 9; then
+	echo "another run for this key holds $LOCK; nothing done"
+	exit 0
+fi
 
 # qtext <expr>: a realm function returning a string, printed with real newlines.
 # Runs in a subshell, so it counts queries in a file.
@@ -165,18 +188,20 @@ for plan in "${PLANS[@]+"${PLANS[@]}"}"; do
 	from=0
 	while :; do
 		next=""
-		while read -r idx id payer amount nextpull due pulls; do
+		while read -r idx id payer amount nextpull due pulls paid; do
 			case "$idx" in
 			"" | end) continue ;;
 			next) next="$id"; continue ;;
 			esac
-			if ! [[ "$idx" =~ ^[0-9]+$ && "$id" =~ ^[0-9]+$ && "$payer" =~ ^g1[a-z0-9]{38}$ && "$amount" =~ ^[0-9]+$ && "$pulls" =~ ^[0-9]+$ ]]; then
-				echo "unexpected line from the realm: $idx $id $payer $amount $nextpull $due $pulls" >&2
+			if ! [[ "$idx" =~ ^[0-9]+$ && "$id" =~ ^[0-9]+$ && "$payer" =~ ^g1[a-z0-9]{38}$ && "$amount" =~ ^[0-9]+$ && "$pulls" =~ ^[0-9]+$ && "$paid" =~ ^[01]$ ]]; then
+				echo "unexpected line from the realm: $idx $id $payer $amount $nextpull $due $pulls $paid" >&2
 				exit 1
 			fi
 			listed=$((listed + 1))
 			if [ "$due" != due ]; then waiting=$((waiting + 1)); continue; fi
-			if [ "$pulls" -gt 0 ]; then PROVEN+=("$id $payer $amount ${PERIOD[$plan]}"); else UNPROVEN+=("$id $payer $amount ${PERIOD[$plan]}"); fi
+			# paid=1: this payer has paid for the plan (pulled, or carried paid
+			# time into this mandate), so it is not a possible junk entry.
+			if [ "$paid" = 1 ]; then PROVEN+=("$id $payer $amount ${PERIOD[$plan]}"); else UNPROVEN+=("$id $payer $amount ${PERIOD[$plan]}"); fi
 		done <<<"$(qtext "CollectorScan($plan, address(\"$ADDR\"), $from)")"
 		[ -n "$next" ] || break
 		from="$next"
@@ -184,8 +209,11 @@ for plan in "${PLANS[@]+"${PLANS[@]}"}"; do
 done
 echo "${#PLANS[@]} plans, $listed active mandates for this key ($waiting not due), ${#PROVEN[@]} due that paid before, ${#UNPROVEN[@]} due that never paid ($(wc -l <"$QCOUNT") realm queries)"
 
-# Each due mandate's session, read from the chain (free). Prints one word:
-# ok, or the reason to skip it: no-session, scope, limit, budget, expired.
+# Each due mandate's session, read from the chain (free). Prints "ok <fee>"
+# with the fee to pay for its Pull, or the reason to skip it: no-session,
+# scope, limit, budget, expired. The fee is the target fee, lowered to what
+# the session can still pay this spend period after the price and the
+# storage bound; never below today's minimum (then the mandate is skipped).
 # The realm checks the scope again in Pull; the chain checks the rest. A
 # skip costs the payer nothing, a refused pull can cost them the fee.
 session_check() { # <payer> <amount>
@@ -196,7 +224,7 @@ session_check() { # <payer> <amount>
 	}
 	printf '%s\n' "$out" | python3 -c '
 import json, sys
-realm, need, now = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+realm, amount, storage, minfee, target, now = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), int(sys.argv[5]), int(sys.argv[6])
 d = json.loads(sys.stdin.read().split("data:", 1)[1])
 s = d.get("BaseSessionAccount", d)
 def ugnot(c):
@@ -207,17 +235,18 @@ def ugnot(c):
     return total
 exp, period, reset = int(s.get("expires_at") or 0), int(s.get("spend_period") or 0), int(s.get("spend_reset") or 0)
 limit, used = ugnot(s.get("spend_limit")), ugnot(s.get("spend_used"))
+left = limit - used if (period == 0 or now < reset + period) else limit
 if d.get("allow_paths") != ["vm/exec:" + realm]:
     print("scope")
 elif exp and now + 60 >= exp:
     print("expired")
-elif limit < need:
+elif limit - amount - storage < minfee:
     print("limit")
-elif (period == 0 or now < reset + period) and limit - used < need:
+elif left - amount - storage < minfee:
     print("budget")
 else:
-    print("ok")
-' "$REALM" "$(($2 + PULL_COST))" "$NOW" 2>/dev/null || echo "query-failed"
+    print("ok", min(target, left - amount - storage))
+' "$REALM" "$2" "$((STORAGE_BOUND * STORAGE_PRICE))" "$MIN_FEE" "$TARGET_FEE" "$NOW" 2>/dev/null || echo "query-failed"
 }
 
 # What one pull can cost the payer on top of the amount: the fee, plus the
@@ -227,7 +256,28 @@ PRICE_OUT="$(gnokey query params/vm:p:storage_price -remote "$REMOTE" -home "$HO
 STORAGE_PRICE="$(sed -n 's/^data: "\([0-9]*\)ugnot"$/\1/p' <<<"$PRICE_OUT")"
 [[ "$STORAGE_PRICE" =~ ^[0-9]+$ ]] || { echo "unexpected storage price: $PRICE_OUT" >&2; exit 1; }
 STORAGE_BOUND=100
-PULL_COST=$((${GAS_FEE%ugnot} + STORAGE_BOUND * STORAGE_PRICE))
+# The Pull fee. The chain accepts a fee when fee / gas wanted is at least its
+# current gas price (auth/gasprice, raised when blocks fill), and charges the
+# whole fee. So: today's minimum for -gas-wanted, plus a quarter as margin,
+# lowered per mandate to what its session can still pay. -gas-fee fixes it.
+if [ -n "$GAS_FEE" ]; then
+	MIN_FEE="${GAS_FEE%ugnot}" TARGET_FEE="${GAS_FEE%ugnot}"
+else
+	GP_OUT="$(gnokey query auth/gasprice -remote "$REMOTE" -home "$HOME_DIR" 2>&1)" || { echo "could not read the gas price: $GP_OUT" >&2; exit 1; }
+	read -r MIN_FEE TARGET_FEE < <(printf '%s\n' "$GP_OUT" | python3 -c '
+import json, sys
+wanted = int(sys.argv[1])
+d = json.loads(sys.stdin.read().split("data:", 1)[1])
+gas, price = int(d["gas"]), d["price"]
+assert price.endswith("ugnot") and gas > 0
+p = int(price[:-5])
+need = -(-wanted * p // gas)
+print(need, -(-need * 5 // 4))
+' "$GAS_WANTED" 2>/dev/null) || true
+	[[ "${MIN_FEE:-}" =~ ^[0-9]+$ && "${TARGET_FEE:-}" =~ ^[0-9]+$ ]] || { echo "unexpected gas price: $GP_OUT" >&2; exit 1; }
+fi
+echo "Pull fee: ${TARGET_FEE}ugnot for ${GAS_WANTED} gas (chain minimum today: ${MIN_FEE}ugnot), at most what each session can still pay"
+PULL_COST=$((MIN_FEE + STORAGE_BOUND * STORAGE_PRICE))
 
 # State between runs (-state): one line per mandate, "<id> <last check> <retry after>".
 #   last check:  when a never-paid mandate's session was last read, so the
@@ -285,7 +335,7 @@ consider() { # <row> <never paid 0|1>
 	fi
 	why="$(session_check "$payer" "$amount")"
 	case "$why" in
-	ok) TODO+=("$1") ;;
+	ok\ *) TODO+=("$1 ${why#ok }") ;;
 	query-failed) qfail=$((qfail + 1)); echo "  could not read the session of mandate $id ($payer)" >&2 ;;
 	*) SKIPS[$why]=$((${SKIPS[$why]:-0} + 1)); echo "  skipping mandate $id ($payer): $(reason "$why")" ;;
 	esac
@@ -294,8 +344,8 @@ reason() {
 	case "$1" in
 	no-session) echo "no session for this key (never created, revoked or expired on chain)" ;;
 	scope) echo "the session is not scoped to exactly vm/exec:$REALM" ;;
-	limit) echo "the session's spend limit is below the price + $PULL_COST ugnot for fee and storage" ;;
-	budget) echo "the session's budget for this spend period is already used" ;;
+	limit) echo "the session's spend limit is below the price + $PULL_COST ugnot (today's minimum fee and the storage bound)" ;;
+	budget) echo "what the session can still pay this spend period is below the price + $PULL_COST ugnot" ;;
 	expired) echo "the session expires within a minute" ;;
 	esac
 }
@@ -316,7 +366,7 @@ save_state
 # error; anything else is.
 failed=0 refused=0 pulled=0 over=0 deferred_now=0
 for row in "${TODO[@]+"${TODO[@]}"}"; do
-	read -r id payer amount period <<<"$row"
+	read -r id payer amount period fee <<<"$row"
 	if [ "$pulled" -ge "$MAX_PULLS" ]; then over=$((over + 1)); continue; fi
 	pulled=$((pulled + 1))
 	if [ "$DRY" = 1 ]; then
@@ -325,7 +375,7 @@ for row in "${TODO[@]+"${TODO[@]}"}"; do
 	fi
 	echo "  pulling mandate $id: ${amount}ugnot from $payer"
 	args=(maketx call -pkgpath "$REALM" -func Pull -send "${amount}ugnot" -master "$payer"
-		-gas-fee "$GAS_FEE" -gas-wanted "$GAS_WANTED" -simulate "$SIMULATE" -broadcast -chainid "$CHAIN" -remote "$REMOTE" -home "$HOME_DIR")
+		-gas-fee "${fee}ugnot" -gas-wanted "$GAS_WANTED" -simulate "$SIMULATE" -broadcast -chainid "$CHAIN" -remote "$REMOTE" -home "$HOME_DIR")
 	if [ "$PWSTDIN" = 1 ]; then
 		out="$(printf '%s\n' "$PW" | gnokey "${args[@]}" -insecure-password-stdin "$KEY" 2>&1)" || true
 	else
