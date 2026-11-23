@@ -66,8 +66,35 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 | 15 | Injection through plan titles (Markdown, HTML, links, mentions, math) | page readers | Titles are validated (one line, no control characters) and escaped with `p/nt/markdown/sanitize/v0` plus gnoweb-specific steps (`$`, `@`, leading and spaced `g1` addresses). | `TestRenderInjection` (14 hostile titles on every page that shows them); `z_pages_filetest` golden; mutations removing `$` or address escaping are caught. |
 | 16 | Expired terms | payer | Realm: `now >= ExpiresAt` refused. Chain: session expiry. | `TestPullRules` (one second before allowed, at expiry refused); flow 7 (chain expiry and realm expiry each refuse). |
 | 17 | Spam: many plans or fake supporters | readers, later subscribers | Every list is paged (20 rows). Each record costs its creator a storage deposit (about 0.4–0.6 GNOT per plan, about 0.3 GNOT per mandate). Lists are chunked, so a plan with thousands of supporters costs a new subscriber the same as an empty one. | `TestPaging`, `TestRenderPaging`. |
+| 17b | **Filling one payer bucket on purpose** | every payer whose address falls in the same bucket (1 in 256) | **Not stopped yet; see below.** Bucket = sha256(payer)[0], so an attacker grinds an address into a victim's bucket (it took 146–638 throwaway keys locally). Each Subscribe adds a lookup entry for (attacker, session); a Cancel lets the attacker subscribe again with a fresh session address (any address, no key). Deposits are never returned. Each entry also creates an index for the fresh session address, so it costs the attacker about 0.62 GNOT of deposit plus about 9.6M gas. | `scripts/measure-bucket-flood.sh` (real signed transactions, local chain): victim's Pull goes from 8.2M gas to 11.4M / 15.5M / 19.0M / 22.8M at 500 / 1,000 / 1,500 / 2,000 entries (+7,300 gas per entry). Subscribe goes from 11.9M to 41.0M, Cancel from 5.3M to 20.6M at 2,000. The attacker had paid 1,240 GNOT of deposits and 19.2B gas (19 GNOT of fees at today's price) by then. See "Bucket flooding" below. |
 | 18 | The collector script run against the wrong network | payee | `scripts/collect.sh` has no defaults, accepts only `dev` with a local remote or `onyx-1` with the Onyx RPC. | Flow 6: refused without `-remote`, with onyx-1 and a local remote, and with another chain id. |
 | 19 | The payee publishes a collector key whose address does not match | payer | The realm derives the address from the key itself (`chain.PubKeyAddress`). | `TestSetCollectorKey` (bad checksum, empty payload, wrong prefix refused; derived address checked). |
+
+## Bucket flooding (measured, M1.2)
+
+The per-payer lookup buckets (M1.1) are shared by all payers whose address hashes to the same first byte, and one address can add any number of entries to its bucket. Reads are priced per byte (17 gas, times the store's depth for the flat part), so every entry makes each later lookup in that bucket dearer.
+
+| Entries put in the victim's bucket | Attacker deposits (never returned) | Attacker gas | Victim Pull | Victim Subscribe | Victim Cancel |
+|---|---|---|---|---|---|
+| 0 | 0 | 0 | 8.22M | 11.86M | 5.33M |
+| 500 | 309 GNOT | 2.8B | 11.39M | 19.61M | 9.16M |
+| 1,000 | 620 GNOT | 7.1B | 15.52M | 26.74M | 12.96M |
+| 1,500 | 930 GNOT | 12.6B | 18.99M | 33.86M | 16.76M |
+| 2,000 | 1,240 GNOT | 19.2B | 22.79M | 40.99M | 20.56M |
+
+(`scripts/measure-bucket-flood.sh 10 4`, local gnodev, gno v1.8.0 fc79041f4.)
+
+Filetests cannot measure the read side: a filetest runs as one transaction and keeps the objects it created in memory, so a lookup costs the same 67,573 gas whatever the bucket holds. They do show the write side: a new payer's Subscribe in the bucket costs 0.76M, then 1.39M at 500 entries, then 3.09M at 2,000.
+
+Thresholds, from the linear fit (+7,300 gas per entry for Pull):
+
+- **The pages' Pull gas (20M wanted)** is exceeded at about 1,600 entries: about 1,000 GNOT of deposits.
+- **The fee allowance** (0.05 GNOT covers at most about 48M gas at today's 1 ugnot per 1,000 gas) is exceeded at about 5,500 entries: about 3,400 GNOT. Past that point no Pull for that bucket's payers can be paid within their spend limit, until they re-subscribe with a larger allowance.
+- **Subscribe** at the pages' 30M wanted is exceeded at about 1,250 entries.
+
+What the collector can do: raise `-gas-wanted`, and the fee with it, up to the allowance; nothing beyond. A payer can move to a fresh address (a different bucket).
+
+Not fixed in M1.2; the layout change is waiting for a decision (see the M1.2 report).
 
 ## What `gno test` cannot reach
 

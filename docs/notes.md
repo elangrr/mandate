@@ -53,4 +53,35 @@ Each fact was checked in the source of gno v1.8.0 (commit fc79041f4, `github.com
 - The injected API is `window.adena` with `AddEstablish(name)`, `GetAccount()`, `GetNetwork()`, `SwitchNetwork(chainId)`, `AddNetwork({chainId, chainName, rpcUrl})`, `DoContract({messages, memo})` (`packages/adena-extension/src/inject.ts`). `DoContract` takes no gas fields; the wallet estimates.
 - `DoContract` accepts `/auth.m_create_session`, `/auth.m_revoke_session` and `/auth.m_revoke_all_sessions` (`inject/executor/executor.ts:378-392`), validated by `common/validation/validation-message.ts:134-190`.
 - The extension encodes them in `packages/adena-module/src/utils/messages.ts` (`encodeMessageValue`): `session_key` is an `Any` whose `value` may be base64 of the protobuf `PubKeySecp256k1{key}` (`0a 21 <33 bytes>`); `expires_at` and `spend_period` may be decimal strings; `spend_limit` is a coin string such as `1000ugnot`. Its own test `messages.spec.ts` "round trips JSON-safe create session messages" uses that shape, which `web/adena-test.html` builds.
-- Not yet tried in a real browser with the store build; that is what `web/adena-test.html` is for.
+- First real-browser run (Firefox add-on 1.22.5, the store's version, Nov 2026):
+  - Adena accepted a page's `/auth.m_create_session` request, showed its approval, signed and broadcast it.
+  - The chain refused it with `InsufficientFeeError`: Gas-Wanted 2,000,000,000, Gas-Fee 100,000ugnot.
+  - The cause and the fix are below.
+
+### What a page must send so Adena signs a session transaction with sane gas
+
+Checked in Adena v1.22.5. Its relevant code is identical to e71fa1b, and the static fee dates from the first session release, v1.20.0 (#853).
+
+1. **Adena never estimates gas for a request made only of session messages** (`/auth.m_create_session`, `/auth.m_revoke_session`, `/auth.m_revoke_all_sessions`).
+   - The approval popup sees such a document as a "static session-admin fee" document (`hooks/wallet/transaction-gas/session-admin-static-fee.ts`, used by `hooks/wallet/use-network-fee.ts`).
+   - It skips simulation and signs exactly the fee in the document.
+   - It offers three fee tiers, but all three are copies of that fee, and the gas adjustment applies only to simulated tiers. **The user cannot fix a bad fee in the popup.**
+2. **The fee in the document comes from the request.**
+   - The popup calls `createDocument(account, chainId, messages, prefix, requestData.data.gasWanted, requestData.data.gasFee, memo)` (`pages/popup/wallet/approve-transaction-main/index.tsx`).
+   - `createDocument` (`services/transaction/transaction.ts`) writes `fee.gas = (gasWanted || DEFAULT_GAS_WANTED)` and `fee.amount = (gasFee || DEFAULT_GAS_FEE) ugnot`. The defaults are 2,000,000,000 gas and 100,000 ugnot (`common/constants/tx.constant.ts`).
+   - No chain with a gas price accepts that: at Onyx's 1 ugnot per 1,000 gas, 2,000,000,000 gas needs 2,000,000 ugnot.
+3. **So the page must send `gasWanted` and `gasFee` in the `DoContract` parameters**, next to `messages` and `memo`: `adena.DoContract({ messages, memo, gasWanted: 5000000, gasFee: 10000 })`.
+   - Both are whole numbers: `gasWanted` in gas units, `gasFee` in ugnot.
+   - They reach the popup unchanged: JSON in the popup URL, no validation strips them. Numeric strings also work, because the code calls `.toString()`.
+   - **0 or a missing value silently becomes the default**, so the page must never send 0.
+4. **The chain accepts the fee when gasFee ÷ gasWanted ≥ the current gas price** (`EnsureSufficientMempoolFees`, `tm2/pkg/sdk/auth/ante.go:548`). The whole fee is charged, whatever gas is used.
+   - The page reads the price first, read-only: `auth/gasprice` on Onyx returns `{"gas":"1000","price":"1ugnot"}`.
+   - It refuses to send a fee below the minimum.
+5. **Measured gas** (read-only `.app/simulate` on Onyx, no signature, no broadcast; 2026-11-23):
+   - MsgCreateSession used **1,358,215 gas**, the same as on a local chain.
+   - The page's default of 5,000,000 gas wanted for 10,000 ugnot (0.01 GNOT) is 3.7x the gas and 2x today's minimum price.
+   - Revoke used 0.93M gas locally. It cannot be simulated without an existing session, and the same default covers it.
+6. **The same applies to the Mandate web app's one-popup subscribe**: create session plus a `/vm.m_call` Subscribe in one request.
+   - A `/vm.m_call` in the request means the document is not session-only. Per the source, Adena then simulates it and its popup replaces the request's gas with its estimate tiers (`updateTransactionData`); the request's values only seed the simulation document.
+   - That combination is not yet tested in a browser. The app should still send explicit `gasWanted` and `gasFee` sized for both messages (Subscribe uses up to about 12M gas), so the document Adena simulates starts from sane values rather than its 2,000,000,000 default. What the popup does when that simulation fails is not checked yet.
+7. **Proof without a public transaction:** `web/adena-check/page-request.spec.ts` runs the page's request through Adena v1.22.5's own code and asserts the gas and fee it would sign.

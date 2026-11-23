@@ -173,8 +173,8 @@ test("MsgCreateSession: exact shape, accepted by Adena's validator, JSON-safe", 
   // The Any's bytes are exactly the inner part of the chain's gpub encoding.
   const gpubBytes = M.bech32Decode(GPUB_A).bytes;
   assert.ok(Buffer.from(gpubBytes).toString("hex").endsWith("1223" + "0a21" + PUB_A_HEX));
-  // DoContract params: messages + memo, no gas fields (Adena estimates gas).
-  assert.deepEqual(plain(M.doContractParams([msg], "m")), { messages: [msg], memo: "m" });
+  // DoContract params: messages, memo, and always explicit gas (see the gas tests).
+  assert.deepEqual(plain(M.doContractParams([msg], "m", { gasWanted: "5000000", gasFee: "10000" })), { messages: [msg], memo: "m", gasFee: 10000, gasWanted: 5000000 });
 });
 
 test("MsgCreateSession refuses bad input", () => {
@@ -200,6 +200,60 @@ test("MsgRevokeSession: exact shape, accepted by Adena's validator", () => {
     value: { creator: TEST1_ADDR, session_key: { type_url: "/tm.PubKeySecp256k1", value: Buffer.from("0a21" + PUB_A_HEX, "hex").toString("base64") } },
   });
   assert.ok(adenaValidateRevoke(msg));
+});
+
+// Adena v1.22.5 signs a session-only request with exactly the request's gas
+// and fee (no simulation): hooks/wallet/transaction-gas/
+// session-admin-static-fee.ts, and services/transaction/transaction.ts
+// createDocument(account, chainId, messages, prefix, gasWanted, gasFee, memo)
+// with `gasFee || DEFAULT_GAS_FEE` and `gasWanted || DEFAULT_GAS_WANTED`.
+// So the page must always send both, as positive whole numbers.
+test("DoContract params always carry explicit gas, as whole numbers", () => {
+  const msg = plain(M.buildRevokeSession({ creator: TEST1_ADDR, pub: M.parsePubKey(GPUB_A) }));
+  const p = plain(M.doContractParams([msg], "", { gasWanted: 5000000, gasFee: 10000 }));
+  assert.equal(p.gasWanted, 5000000);
+  assert.equal(p.gasFee, 10000);
+  assert.equal(typeof p.gasWanted, "number");
+  assert.equal(typeof p.gasFee, "number");
+  // Neither may be 0 or missing: Adena would replace it with its fallback
+  // (2,000,000,000 gas, 100,000 ugnot), which the chain refuses.
+  for (const bad of [
+    { gasWanted: 0, gasFee: 10000 }, { gasWanted: 5000000, gasFee: 0 }, { gasWanted: "", gasFee: 10000 },
+    { gasWanted: 5000000 }, { gasWanted: "5e6", gasFee: 10000 }, { gasWanted: 5000000.5, gasFee: 10000 },
+    { gasWanted: -1, gasFee: 10000 }, { gasWanted: 99999, gasFee: 10000 }, { gasWanted: 100000001, gasFee: 10000 },
+    { gasWanted: 5000000, gasFee: 10000001 }, { gasWanted: 5000000, gasFee: "10 ugnot" },
+  ]) {
+    assert.throws(() => M.doContractParams([msg], "", bad), /gas (wanted|fee)/, JSON.stringify(bad));
+  }
+  assert.throws(() => M.doContractParams([msg], ""), /./);
+});
+
+test("minimum fee follows the chain's rule (fee / gas wanted >= price)", () => {
+  const onyx = { gas: 1000, amount: 1 }; // Onyx auth/gasprice, read-only, Nov 2026
+  assert.equal(M.minimumFee(5000000, onyx), 5000);
+  assert.equal(M.minimumFee(1360000, onyx), 1360);
+  assert.equal(M.minimumFee(1001, onyx), 2); // rounds up
+  assert.equal(M.minimumFee(2000000000, onyx), 2000000); // Adena's fallback needs 2 GNOT, it sent 0.1
+  assert.ok(100000 < M.minimumFee(2000000000, onyx)); // why the owner's run failed
+  assert.equal(M.minimumFee(5000000, { gas: 1000, amount: 3 }), 15000);
+  // The page's defaults leave 2x headroom over today's Onyx price.
+  assert.equal(M.minimumFee(5000000, onyx) * 2, 10000);
+  const real = JSON.stringify({ gas: "1000", price: "1ugnot" }, null, 2);
+  assert.deepEqual(plain(M.parseGasPrice(real)), onyx);
+  assert.throws(() => M.parseGasPrice('{"gas":"0","price":"1ugnot"}'), /unexpected/);
+  assert.throws(() => M.parseGasPrice('{"gas":"1000","price":"1uatom"}'), /unexpected/);
+  assert.equal(
+    M.gasPriceQueryURL("https://rpc.onyx.testnets.gno.land:443"),
+    "https://rpc.onyx.testnets.gno.land:443/abci_query?path=%22auth%2Fgasprice%22",
+  );
+});
+
+test("the page's default gas inputs pass the checks", () => {
+  const wanted = /id="gaswanted"[^>]*value="([0-9]+)"/.exec(html)[1];
+  const fee = /id="gasfee"[^>]*value="([0-9]+)"/.exec(html)[1];
+  const g = plain(M.checkGas(wanted, fee));
+  assert.deepEqual(g, { gasWanted: 5000000, gasFee: 10000 });
+  assert.ok(g.gasFee >= M.minimumFee(g.gasWanted, { gas: 1000, amount: 1 }) * 2);
 });
 
 test("sessions query URL and response decoding", () => {
