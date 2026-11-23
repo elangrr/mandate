@@ -59,7 +59,7 @@ func now() int64 { return time.Now().Unix() }
 
 func resetState() {
 	nextPlanID, nextMandateID = 0, 0
-	plans, payees, payers, keys = avl.NewTree(), avl.NewTree(), avl.NewTree(), avl.NewTree()
+	plans, payees, payers = avl.NewTree(), avl.NewTree(), avl.NewTree()
 	totalPulls, totalPaid = 0, 0
 }
 
@@ -109,10 +109,11 @@ func snapshot() string {
 	}
 	plans.Iterate("", "", func(_ string, v any) bool {
 		p := v.(*Plan)
-		b.WriteString(p.Title + itoa(p.Amount) + itoa(p.Period) + itoa(int64(p.Supporters.N)) + "c" + itoa(int64(p.Cancelled)) +
+		b.WriteString(p.Title + itoa(p.Amount) + itoa(p.Period) + itoa(int64(p.Supporters.N)) + "c" + itoa(int64(p.Cancelled)) + "p" + itoa(int64(p.Paying)) +
 			itoa(p.Pulls) + itoa(p.LastPullAt) + "\n")
 		for i := 0; i < p.Supporters.N; i++ {
-			mandate(p.Supporters.at(i))
+			e := p.Supporters.at(i)
+			b.WriteString(e.Payer.String() + "#" + utoa(e.ID) + ",")
 		}
 		return false
 	})
@@ -121,12 +122,8 @@ func snapshot() string {
 		b.WriteString(k + itoa(int64(pe.Plans)) + itoa(pe.Pulls) + itoa(pe.Paid) + pe.CollectorKey + pe.CollectorAddr.String() + "\n")
 		return false
 	})
-	keys.Iterate("", "", func(k string, v any) bool {
-		b.WriteString(k + ":" + itoa(int64(v.(*KeyIndex).Mandates.N)) + ",")
-		return false
-	})
 	payers.Iterate("", "", func(k string, v any) bool {
-		pr := v.(*Payer)
+		pr := v.(Payer)
 		b.WriteString("\npayer " + k + " active:")
 		for _, r := range pr.Active {
 			b.WriteString(" " + r.Session.String() + "/" + utoa(r.PlanID) + "=" + utoa(r.M.ID))
@@ -134,9 +131,12 @@ func snapshot() string {
 		if pr.Head != nil {
 			b.WriteString(" head=" + utoa(pr.Head.ID))
 		}
+		for m := pr.Head; m != nil; m = m.prevOfPayer {
+			mandate(m)
+		}
 		return false
 	})
-	for _, t := range []*avl.Tree{plans, payees, payers, keys} {
+	for _, t := range []*avl.Tree{plans, payees, payers} {
 		b.WriteString(itoa(int64(t.Size())) + ",")
 	}
 	return b.String()
@@ -359,7 +359,7 @@ func TestResubscribeAfterCancelOrExpiry(cur realm, t *testing.T) {
 	third := subscribe(cur, payer, pid, sessA, now()+day)
 	uassert.True(t, IsActive(payer, pid))
 	uassert.Equal(t, 3, len(MandatesOf(payer, 1)))
-	uassert.Equal(t, 3, len(SupportersOf(pid, 1)))
+	uassert.Equal(t, 1, len(SupportersOf(pid, 1))) // active ones only
 	m, _ = MandateOf(payer, sessA)
 	uassert.Equal(t, third, m.ID)
 }
@@ -569,28 +569,31 @@ func TestPaging(cur realm, t *testing.T) {
 	uassert.Equal(t, PageSize, len(SupportersOf(1, 1)))
 	uassert.Equal(t, 3, len(SupportersOf(1, 2)))
 	uassert.Equal(t, 0, len(SupportersOf(2, 1)))
-	uassert.Equal(t, PageSize, len(MandatesForSession(sessA, 1)))
-	uassert.Equal(t, 3, len(MandatesForSession(sessA, 2)))
-	uassert.Equal(t, 0, len(MandatesForSession(sessB, 1)))
 
-	// CollectorList: fixed format, "more" then "end".
-	l1 := CollectorList(sessA, 1)
-	lines := strings.Split(strings.TrimSuffix(l1, "\n"), "\n")
-	uassert.Equal(t, PageSize+1, len(lines))
-	uassert.Equal(t, "more", lines[PageSize])
+	// CollectorScan: plan 1's supporter list, filtered to one key, in
+	// windows of ScanLimit entries with a cursor.
 	first := testutils.TestAddress("md_p0")
-	uassert.Equal(t, "1 "+first.String()+" 1000000 "+itoa(now())+" active due", lines[0])
-	l2 := CollectorList(sessA, 2)
-	uassert.True(t, strings.HasSuffix(l2, "\nend\n"))
-	uassert.Equal(t, 4, len(strings.Split(strings.TrimSuffix(l2, "\n"), "\n")))
-	uassert.Equal(t, "end\n", CollectorList(sessB, 1))
-	// After a pull and a cancel the list shows wait and cancelled.
+	lines := strings.Split(strings.TrimSuffix(CollectorScan(1, sessA, 0), "\n"), "\n")
+	uassert.Equal(t, 24, len(lines))
+	uassert.Equal(t, "end", lines[23])
+	uassert.Equal(t, "0 1 "+first.String()+" 1000000 "+itoa(now())+" due 0", lines[0])
+	uassert.Equal(t, "end\n", CollectorScan(1, sessB, 0))
+	uassert.Equal(t, "end\n", CollectorScan(99, sessA, 0))
+	uassert.Equal(t, "end\n", CollectorScan(1, sessA, 23))
+	// after a pull and a cancel: the paid one waits and shows its pulls, the cancelled one is gone
 	pullOK(first, sessA, gnot)
 	second := testutils.TestAddress("md_p1")
 	cancel(cur, second, second, sessA)
-	lines = strings.Split(CollectorList(sessA, 1), "\n")
-	uassert.Equal(t, "1 "+first.String()+" 1000000 "+itoa(now()+day)+" active wait", lines[0])
-	uassert.Equal(t, "2 "+second.String()+" 1000000 "+itoa(now())+" cancelled wait", lines[1])
+	lines = strings.Split(strings.TrimSuffix(CollectorScan(1, sessA, 0), "\n"), "\n")
+	uassert.Equal(t, 23, len(lines))
+	uassert.Equal(t, "0 1 "+first.String()+" 1000000 "+itoa(now()+day)+" wait 1", lines[0])
+	uassert.True(t, strings.HasPrefix(lines[1], "2 3 "))
+	// CollectorPlans
+	pl := strings.Split(strings.TrimSuffix(CollectorPlans(payee, 1), "\n"), "\n")
+	uassert.Equal(t, PageSize+1, len(pl))
+	uassert.Equal(t, "1 1000000 86400 23", pl[0])
+	uassert.Equal(t, "more", pl[PageSize])
+	uassert.Equal(t, "end\n", CollectorPlans(stranger, 1))
 	_, nMandates, _, _ := Totals()
 	uassert.Equal(t, 23, nMandates)
 }

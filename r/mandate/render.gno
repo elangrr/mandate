@@ -48,10 +48,13 @@ func renderPage(raw string) string {
 		path, query = raw[:i], raw[i+1:]
 	}
 	page := pageParam(query)
+	from := intParam(query, "from", -1)
 	parts := strings.Split(path, "/")
 	switch {
 	case path == "":
-		return renderHome(page)
+		return renderHome(from)
+	case path == "plans":
+		return renderAllPlans(page)
 	case path == "help":
 		return renderHelp()
 	case len(parts) == 2 && parts[0] == "plan":
@@ -59,7 +62,7 @@ func renderPage(raw string) string {
 		if err != nil {
 			return renderNotFound()
 		}
-		return renderPlan(id, page)
+		return renderPlan(id, from)
 	case len(parts) == 2 && parts[0] == "payer":
 		a := address(parts[1])
 		if !a.IsValid() {
@@ -76,7 +79,7 @@ func renderPage(raw string) string {
 	return renderNotFound()
 }
 
-func renderHome(page int) string {
+func renderHome(from int) string {
 	nPlans, nMandates, pulls, paid := Totals()
 	var b strings.Builder
 	b.WriteString("# Mandate\n\n")
@@ -96,26 +99,70 @@ func renderHome(page int) string {
 	b.WriteString("| Plans | Mandates | Payments | Paid out |\n|---|---|---|---|\n")
 	b.WriteString("| " + strconv.Itoa(nPlans) + " | " + strconv.Itoa(nMandates) + " | " + itoa(pulls) + " | " + formatUgnot(paid) + " |\n\n")
 	b.WriteString("## Supporter pages\n\n")
-	list := Plans(page)
-	if len(list) == 0 {
-		if page > 1 {
-			b.WriteString("No more plans. [First page](" + link("") + ")\n")
-		} else {
-			b.WriteString("No plans yet. [Publish one](" + link("help") + ").\n")
-		}
-		return b.String()
-	}
-	b.WriteString("| Plan | Price | Creator | Mandates | Payments |\n|---|---|---|---|---|\n")
-	for _, p := range list {
-		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
-			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + strconv.Itoa(p.Mandates) +
-			" | " + itoa(p.Pulls) + " |\n")
-	}
-	b.WriteString(pager("", page, len(list) == PageSize))
+	b.WriteString(plansWithSupporters(from))
 	return b.String()
 }
 
-func renderPlan(id uint64, page int) string {
+// plansWithSupporters lists, newest first, the plans that have at least one
+// paying supporter, walking at most ScanLimit plans per page: plans nobody
+// pays for (spam included) never fill this list, and a "more" link
+// continues the walk.
+func plansWithSupporters(from int) string {
+	var b strings.Builder
+	n := plans.Size()
+	if from < 0 || from >= n {
+		from = n - 1
+	}
+	rows := 0
+	i := from
+	var t strings.Builder
+	for walked := 0; i >= 0 && walked < ScanLimit && rows < PageSize; i, walked = i-1, walked+1 {
+		_, v := plans.GetByIndex(i)
+		p := v.(*Plan)
+		if p.Paying == 0 {
+			continue
+		}
+		t.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
+			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + strconv.Itoa(p.Paying) +
+			" | " + itoa(p.Pulls) + " |\n")
+		rows++
+	}
+	if rows == 0 {
+		b.WriteString("No plan has a paying supporter yet")
+		if i >= 0 {
+			b.WriteString(" among those looked at")
+		}
+		b.WriteString(".\n\n")
+	} else {
+		b.WriteString("| Plan | Price | Creator | Supporters | Payments |\n|---|---|---|---|---|\n")
+		b.WriteString(t.String() + "\n")
+	}
+	if i >= 0 {
+		b.WriteString("[More plans with supporters](" + link("") + "?from=" + strconv.Itoa(i) + ")\n\n")
+	}
+	b.WriteString("Only plans that someone has paid for are listed here. [All plans, newest first](" + link("plans") + ")\n")
+	return b.String()
+}
+
+func renderAllPlans(page int) string {
+	var b strings.Builder
+	b.WriteString("# All plans\n\nNewest first, including plans nobody has paid for yet. [Back to Mandate](" + link("") + ")\n\n")
+	list := Plans(page)
+	if len(list) == 0 {
+		b.WriteString("No plans on this page.\n")
+		return b.String()
+	}
+	b.WriteString("| Plan | Price | Creator | Supporters | Payments |\n|---|---|---|---|---|\n")
+	for _, p := range list {
+		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
+			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + strconv.Itoa(p.Paying) +
+			" | " + itoa(p.Pulls) + " |\n")
+	}
+	b.WriteString(pager("plans", page, len(list) == PageSize))
+	return b.String()
+}
+
+func renderPlan(id uint64, from int) string {
 	p := planOf(id)
 	if p == nil {
 		return renderNotFound()
@@ -129,31 +176,33 @@ func renderPlan(id uint64, page int) string {
 		b.WriteString(" (a test plan: the period is under a day)")
 	}
 	b.WriteString("\n\n")
-	b.WriteString("Plan " + utoa(p.ID) + " · published " + formatTime(p.CreatedAt) + " · " + activeText(p) + " · " +
+	b.WriteString("Plan " + utoa(p.ID) + " · published " + formatTime(p.CreatedAt) + " · " + plural(p.Paying, "paying supporter", "paying supporters") + " · " +
 		plural(int(p.Pulls), "payment", "payments") + ", " + formatUgnot(p.Pulls*p.Amount) + " in total · last payment: " + formatTimeOrNever(p.LastPullAt) + "\n\n")
 	b.WriteString("Plans never change. New terms are published as a new plan.\n\n")
 
 	b.WriteString("## Supporters\n\n")
-	rows := 0
-	var t strings.Builder
-	list, more := p.Supporters.page(page)
-	for _, m := range list {
-		if !m.isActive(now) {
-			continue
+	list, next := payingFrom(p, from, now)
+	if len(list) == 0 {
+		b.WriteString("No paying supporters")
+		if next >= 0 {
+			b.WriteString(" in this part of the list")
 		}
-		t.WriteString("| [" + short(m.Payer) + "](" + link("payer/"+m.Payer.String()) + ") | " + formatTime(m.CreatedAt) + " | " + itoa(m.Pulls) +
-			" | " + formatTimeOrNever(m.lastPullAt()) + " |\n")
-		rows++
-	}
-	if rows == 0 {
-		b.WriteString("No active supporters on this page.\n\n")
+		b.WriteString(".\n\n")
 	} else {
 		b.WriteString("| Supporter | Since | Payments | Last payment |\n|---|---|---|---|\n")
-		b.WriteString(t.String())
+		for _, m := range list {
+			b.WriteString("| [" + short(m.Payer) + "](" + link("payer/"+m.Payer.String()) + ") | " + formatTime(m.CreatedAt) + " | " + itoa(m.Pulls) +
+				" | " + formatTimeOrNever(m.lastPullAt()) + " |\n")
+		}
 		b.WriteString("\n")
 	}
-	b.WriteString("Cancelled and expired mandates are not listed. A supporter who revoked the session on chain stays listed until the mandate is cancelled or expires.\n\n")
-	b.WriteString(pager("plan/"+utoa(id), page, more))
+	if next >= 0 {
+		b.WriteString("[More supporters](" + link("plan/"+utoa(id)) + "?from=" + strconv.Itoa(next) + ")\n\n")
+	}
+	unpaid := p.Supporters.N - p.Cancelled - p.Paying
+	b.WriteString("Supporters are listed and counted from their first payment on, newest first. ")
+	b.WriteString("Cancelled and expired mandates are not listed; a supporter who revoked the session on chain stays listed until the mandate is cancelled or expires. ")
+	b.WriteString(plural(unpaid, "mandate has", "mandates have") + " not paid yet (not listed).\n\n")
 
 	b.WriteString("## Support this plan\n\n")
 	spend := p.Amount + FeeAllowance
@@ -237,10 +286,10 @@ func renderPayee(payee address, page int) string {
 		b.WriteString("No plans on this page.\n")
 		return b.String()
 	}
-	b.WriteString("| Plan | Price | Mandates | Payments | Last payment |\n|---|---|---|---|---|\n")
+	b.WriteString("| Plan | Price | Supporters | Payments | Last payment |\n|---|---|---|---|---|\n")
 	for _, p := range list {
 		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) + " | " +
-			strconv.Itoa(p.Mandates) + " | " + itoa(p.Pulls) + " | " + formatTimeOrNever(p.LastPullAt) + " |\n")
+			strconv.Itoa(p.Paying) + " | " + itoa(p.Pulls) + " | " + formatTimeOrNever(p.LastPullAt) + " |\n")
 	}
 	b.WriteString(pager("payee/"+payee.String(), page, len(list) == PageSize))
 	return b.String()
@@ -292,33 +341,17 @@ func renderNotFound() string {
 	return "# Not found\n\nThere is no such page. [Back to Mandate](" + link("") + ")\n"
 }
 
-// activeCountLimit is how many of a plan's latest mandates a page reads to
-// count the active ones; pages say "at least" beyond it.
-const activeCountLimit = 200
-
-// activeCount counts the active mandates among the plan's latest
-// activeCountLimit, and says whether that covered all of them.
-func activeCount(p *Plan) (int, bool) {
-	now := time.Now().Unix()
-	n := 0
-	lo := p.Supporters.N - activeCountLimit
-	if lo < 0 {
-		lo = 0
-	}
-	for i := lo; i < p.Supporters.N; i++ {
-		if p.Supporters.at(i).isActive(now) {
-			n++
+// intParam returns the integer value of key in the query, or def.
+func intParam(query, key string, def int) int {
+	for _, kv := range strings.Split(query, "&") {
+		if strings.HasPrefix(kv, key+"=") {
+			n, err := strconv.Atoi(kv[len(key)+1:])
+			if err == nil && n >= 0 && n <= 1_000_000_000 {
+				return n
+			}
 		}
 	}
-	return n, lo == 0
-}
-
-func activeText(p *Plan) string {
-	n, all := activeCount(p)
-	if all {
-		return plural(n, "active supporter", "active supporters")
-	}
-	return "at least " + strconv.Itoa(n) + " active supporters (counted among the latest " + strconv.Itoa(activeCountLimit) + ")"
+	return def
 }
 
 // link returns the gnoweb link to a page of this realm.

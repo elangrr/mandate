@@ -334,18 +334,24 @@ expect_ok "coll5 can call another realm in that namespace: why the payer page in
 wait_until() { local t="$1"; local d=$((t - $(now))); if [ "$d" -gt 0 ]; then echo "  (waiting ${d}s for block time to pass $t)"; sleep "$d"; fi; }
 step "6. next period: the collector script (dry run, then for real)"
 wait_until "$((T1 + 62))"
-if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -realm "$REALM" -chainid dev 2>&1)"; then fail "collector ran without -remote"; fi
+if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -realm "$REALM" -chainid dev 2>&1)"; then fail "collector ran without -remote"; fi
 grep -q "missing -remote" <<<"$out" || fail "unexpected: $out"
 echo "  ok: the collector refuses to run without -remote"
-if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -remote "$RPC" -realm "$REALM" -chainid onyx-1 2>&1)"; then fail "collector accepted onyx-1 with a local remote"; fi
+if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -realm "$REALM" -chainid onyx-1 2>&1)"; then fail "collector accepted onyx-1 with a local remote"; fi
 echo "  ok: the collector refuses onyx-1 with a non-Onyx remote"
-if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -remote "$RPC" -realm "$REALM" -chainid gnoland1 2>&1)"; then fail "collector accepted another chain id"; fi
+if out="$("$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -realm "$REALM" -chainid gnoland1 2>&1)"; then fail "collector accepted another chain id"; fi
 echo "  ok: the collector refuses any other chain id"
-out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -remote "$RPC" -chainid dev -realm "$REALM" -dry-run -insecure-password-stdin)"
+# junk: a mandate for coll recorded by someone who never created a session
+expect_ok "stranger records a junk mandate for coll on plan 3 (no session)" stranger call -pkgpath "$REALM" -func Subscribe -args 3 -args "$COLL" -args "$EXP" "${CALL[@]}"
+out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -state "$TMP/collect.state" -dry-run -insecure-password-stdin)"
 echo "$out" | sed 's/^/    /'
 grep -q "would pull mandate 1: 1000000ugnot from $PAYER" <<<"$out" || fail "dry run does not list mandate 1 as due"
 p="$(bal "$PAYER")" e="$(bal "$PAYEE")"
-out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -remote "$RPC" -chainid dev -realm "$REALM" -insecure-password-stdin)"
+grep -q "checked 1 never-paid mandates on chain: 1 without a session" <<<"$out" || fail "collector did not skip the junk mandate"
+grep -q "would pull mandate" <<<"$(grep "$STRANGER" <<<"$out")" && fail "collector would pull the junk mandate"
+[ -s "$TMP/collect.state" ] || fail "collector state file not written"
+echo "  ok: the junk mandate was checked on chain (no session) and skipped; state kept in a file"
+out="$(printf '%s\n' "$PW" | "$REPO/scripts/collect.sh" -home "$KB" -key coll -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" -state "$TMP/collect.state" -insecure-password-stdin)"
 echo "$out" | sed 's/^/    /'
 grep -q "pulling mandate 1" <<<"$out" || fail "collector did not pull mandate 1"
 SECOND_DELTA="$(sed -n 's/^ *STORAGE DELTA: *\(-\{0,1\}[0-9]*\) bytes$/\1/p' <<<"$out")"

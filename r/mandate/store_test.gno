@@ -1,51 +1,34 @@
 package mandate
 
 import (
+	"strings"
 	"testing"
 
 	"gno.land/p/nt/testutils/v0"
 	"gno.land/p/nt/uassert/v0"
 )
 
-// mandateList keeps the first chunkSize entries inline and the rest in
-// chunks; every index must map to the right entry across the boundaries.
-func TestMandateList(t *testing.T) {
-	var l mandateList
+// supporterList keeps the newest entries in tail and full chunks of
+// chunkSize; every index must map to the right entry across the boundaries.
+func TestSupporterList(t *testing.T) {
+	var l supporterList
 	for i := 0; i < 3*chunkSize+5; i++ {
-		l.add(&Mandate{ID: uint64(i)})
+		l.add(entry{Payer: payer, ID: uint64(i)})
 		uassert.Equal(t, i+1, l.N)
 		for _, j := range []int{0, i / 2, i} {
 			uassert.Equal(t, uint64(j), l.at(j).ID)
 		}
+		uassert.Equal(t, (i+1)%chunkSize, len(l.tail))
+		uassert.Equal(t, (i+1)/chunkSize, len(l.chunks))
 	}
-	uassert.Equal(t, chunkSize, len(l.first))
-	uassert.Equal(t, 3, len(l.chunks))
-	uassert.Equal(t, chunkSize, len(l.chunks[1].items))
-	uassert.Equal(t, 5, len(l.chunks[2].items))
+	uassert.Equal(t, chunkSize, len(l.chunks[2].items))
 	// No preallocation: a slot costs storage even when empty.
-	var small mandateList
-	small.add(&Mandate{ID: 7})
-	uassert.Equal(t, 1, cap(small.first))
-	// Pages cross the inline part and the chunks.
-	for page := 1; page <= 6; page++ {
-		list, more := l.page(page)
-		lo := (page - 1) * PageSize
-		want := l.N - lo
-		if want > PageSize {
-			want = PageSize
-		}
-		if want < 0 {
-			want = 0
-		}
-		uassert.Equal(t, want, len(list))
-		for k, m := range list {
-			uassert.Equal(t, uint64(lo+k), m.ID)
-		}
-		uassert.Equal(t, lo+PageSize < l.N, more)
-	}
+	var small supporterList
+	small.add(entry{Payer: payer, ID: 7})
+	uassert.Equal(t, 1, cap(small.tail))
 }
 
-// Supporters and collector lists keep their order across chunks.
+// Supporter lists keep their order across chunks.
 func TestLongLists(cur realm, t *testing.T) {
 	resetState()
 	pid := offer(cur, payee, "Plan", gnot, day)
@@ -57,12 +40,9 @@ func TestLongLists(cur realm, t *testing.T) {
 	seen := 0
 	for page := 1; ; page++ {
 		list := SupportersOf(pid, page)
-		ks := MandatesForSession(sessA, page)
-		uassert.Equal(t, len(list), len(ks))
-		for k, m := range list {
+		for _, m := range list {
 			uassert.Equal(t, uint64(seen+1), m.ID)
 			uassert.Equal(t, testutils.TestAddress("md_l"+itoa(int64(seen))).String(), m.Payer.String())
-			uassert.Equal(t, m.ID, ks[k].ID)
 			seen++
 		}
 		if len(list) < PageSize {
@@ -147,19 +127,68 @@ func TestDerivedFields(cur realm, t *testing.T) {
 	has(t, renders(t, "payer/"+payer.String()), "/sessions -remote", "lookup command")
 }
 
-// Past activeCountLimit supporters the plan page says "at least".
-func TestActiveCountLimit(cur realm, t *testing.T) {
+// Supporters are listed and counted only once they have paid; junk
+// mandates that never pay are neither listed nor counted, and cannot hide
+// a real supporter: the page walks ScanLimit entries and links onwards.
+func TestPayingSupporters(cur realm, t *testing.T) {
 	resetState()
-	pid := offer(cur, payee, "Big plan", gnot, day)
-	for i := 0; i < activeCountLimit+3; i++ {
-		subscribe(cur, testutils.TestAddress("md_a"+itoa(int64(i))), pid, sessA, now()+day)
+	pid := offer(cur, payee, "Real plan", gnot, MinPeriod)
+	offer(cur, payee, "Nobody pays", gnot, MinPeriod)
+	real := testutils.TestAddress("md_real")
+	subscribe(cur, real, pid, sessA, now()+day)
+	pullOK(real, sessA, gnot)
+	// 2*ScanLimit junk mandates after the real one, none of them ever pays
+	for i := 0; i < 2*ScanLimit; i++ {
+		subscribe(cur, testutils.TestAddress("md_j"+itoa(int64(i))), pid, sessA, now()+day)
 	}
-	first := testutils.TestAddress("md_a0")
-	cancel(cur, first, first, sessA)
-	has(t, renders(t, "plan/"+utoa(pid)), "at least 200 active supporters (counted among the latest 200)", "capped count")
-	last := testutils.TestAddress("md_a" + itoa(int64(activeCountLimit+2)))
-	cancel(cur, last, last, sessA)
-	has(t, renders(t, "plan/"+utoa(pid)), "at least 199 active supporters", "capped count after a cancel")
+	p, _ := GetPlan(pid)
+	uassert.Equal(t, 1, p.Paying)
+	// the collector scan walks at most ScanLimit entries per call and says where to go on
+	scan := CollectorScan(pid, sessA, 0)
+	uassert.True(t, strings.HasSuffix(scan, "\nnext 200\n"), "scan cursor")
+	uassert.Equal(t, ScanLimit+1, len(strings.Split(strings.TrimSuffix(scan, "\n"), "\n")))
+	uassert.True(t, strings.HasSuffix(CollectorScan(pid, sessA, 400), "end\n"))
+	page := renders(t, "plan/"+utoa(pid))
+	has(t, page, "1 paying supporter ·", "count")
+	has(t, page, "400 mandates have not paid yet (not listed)", "unpaid count")
+	hasNot(t, page, short(testutils.TestAddress("md_j0")), "junk not listed")
+	hasNot(t, page, short(real), "real one is beyond the first window")
+	has(t, page, "[More supporters]("+base+":plan/"+utoa(pid)+"?from=200)", "cursor link")
+	p2 := renders(t, "plan/"+utoa(pid)+"?from=200")
+	has(t, p2, "?from=0)", "second cursor")
+	p3 := renders(t, "plan/"+utoa(pid)+"?from=0")
+	has(t, p3, "| ["+short(real)+"]", "real supporter reached")
+	hasNot(t, p3, "More supporters", "list exhausted")
+	// a cancel takes the supporter out of the count
+	cancel(cur, real, real, sessA)
+	p, _ = GetPlan(pid)
+	uassert.Equal(t, 0, p.Paying)
+	uassert.Equal(t, 1, p.Cancelled)
+	// the home page lists only plans somebody pays for
+	other := testutils.TestAddress("md_other")
+	subscribe(cur, other, pid, sessB, now()+day)
+	pullOK(other, sessB, gnot)
+	home := renders(t, "")
+	has(t, home, "[Real plan]("+base+":plan/"+utoa(pid)+")", "paid plan on home")
+	hasNot(t, home, "Nobody pays", "unpaid plan not on home")
+	has(t, renders(t, "plans"), "Nobody pays", "all plans page")
+}
+
+// Offer spam cannot push paid plans off the home page: it walks ScanLimit
+// plans and links onwards.
+func TestOfferSpam(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Real plan", gnot, MinPeriod)
+	subscribe(cur, payer, pid, sessA, now()+day)
+	pullOK(payer, sessA, gnot)
+	for i := 0; i < ScanLimit+5; i++ {
+		offer(cur, stranger, "spam "+itoa(int64(i)), MinAmount, MinPeriod)
+	}
+	home := renders(t, "")
+	hasNot(t, home, "spam", "no spam on home")
+	has(t, home, "No plan has a paying supporter yet among those looked at.", "first window empty")
+	has(t, home, "[More plans with supporters]("+base+"?from=5)", "cursor")
+	has(t, renders(t, "?from=5"), "[Real plan]", "paid plan reached")
 }
 
 // At most MaxActivePerPayer active mandates; a cancelled or expired one
@@ -228,6 +257,8 @@ func TestInactiveReads(cur realm, t *testing.T) {
 	testing.SkipHeights(24)
 	m, _ = MandateOf(payer, sessB)
 	uassert.Equal(t, "expired", m.Status)
+	uassert.Equal(t, 0, len(SupportersOf(pid2, 1))) // only active mandates are listed
+	uassert.Equal(t, 0, len(SupportersOf(pid, 1)))  // the cancelled one neither
 	uassert.False(t, IsActive(payer, pid2))
 	uassert.Equal(t, int64(0), NextPullAt(payer, pid2))
 	panicsLocal(t, cur, "mandate: expired", func() { checkPull(true, sessB, []string{selfPaths}, payer, ugnot(gnot), now()) }, "pull expired")

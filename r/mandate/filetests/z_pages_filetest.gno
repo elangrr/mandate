@@ -64,10 +64,9 @@ func main(cur realm) {
 //
 // ## Supporter pages
 //
-// | Plan | Price | Creator | Mandates | Payments |
-// |---|---|---|---|---|
-// | [Demo \| one minute](/r/mandate_dev/mandate:plan/2) | 0.25 GNOT every minute | [g1jg8mtu…sqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5) | 0 | 0 |
-// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | [g1jg8mtu…sqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5) | 2 | 0 |
+// No plan has a paying supporter yet.
+//
+// Only plans that someone has paid for are listed here. [All plans, newest first](/r/mandate_dev/mandate:plans)
 //
 // ---
 //
@@ -78,17 +77,15 @@ func main(cur realm) {
 //
 // **1 GNOT every week** to [g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5)
 //
-// Plan 1 · published 2009-02-13 23:31 UTC · 1 active supporter · 0 payments, 0 GNOT in total · last payment: never
+// Plan 1 · published 2009-02-13 23:31 UTC · 0 paying supporters · 0 payments, 0 GNOT in total · last payment: never
 //
 // Plans never change. New terms are published as a new plan.
 //
 // ## Supporters
 //
-// | Supporter | Since | Payments | Last payment |
-// |---|---|---|---|
-// | [g1us8428…njlj](/r/mandate_dev/mandate:payer/g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj) | 2009-02-13 23:31 UTC | 0 | never |
+// No paying supporters.
 //
-// Cancelled and expired mandates are not listed. A supporter who revoked the session on chain stays listed until the mandate is cancelled or expires.
+// Supporters are listed and counted from their first payment on, newest first. Cancelled and expired mandates are not listed; a supporter who revoked the session on chain stays listed until the mandate is cancelled or expires. 1 mandate has not paid yet (not listed).
 //
 // ## Support this plan
 //
@@ -117,15 +114,15 @@ func main(cur realm) {
 //
 // **0.25 GNOT every minute** to [g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5) (a test plan: the period is under a day)
 //
-// Plan 2 · published 2009-02-13 23:31 UTC · 0 active supporters · 0 payments, 0 GNOT in total · last payment: never
+// Plan 2 · published 2009-02-13 23:31 UTC · 0 paying supporters · 0 payments, 0 GNOT in total · last payment: never
 //
 // Plans never change. New terms are published as a new plan.
 //
 // ## Supporters
 //
-// No active supporters on this page.
+// No paying supporters.
 //
-// Cancelled and expired mandates are not listed. A supporter who revoked the session on chain stays listed until the mandate is cancelled or expires.
+// Supporters are listed and counted from their first payment on, newest first. Cancelled and expired mandates are not listed; a supporter who revoked the session on chain stays listed until the mandate is cancelled or expires. 0 mandates have not paid yet (not listed).
 //
 // ## Support this plan
 //
@@ -207,9 +204,9 @@ func main(cur realm) {
 //
 // ## Plans
 //
-// | Plan | Price | Mandates | Payments | Last payment |
+// | Plan | Price | Supporters | Payments | Last payment |
 // |---|---|---|---|---|
-// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | 2 | 0 | never |
+// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | 0 | 0 | never |
 // | [Demo \| one minute](/r/mandate_dev/mandate:plan/2) | 0.25 GNOT every minute | 0 | 0 | never |
 //
 // ---

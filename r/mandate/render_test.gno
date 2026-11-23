@@ -44,9 +44,9 @@ func TestRenderEmpty(cur realm, t *testing.T) {
 	has(t, home, "Revoke any time.", "revoke")
 	has(t, home, "nothing will ever be deployed there", "sub-path rule")
 	has(t, home, "| 0 | 0 | 0 | 0 GNOT |", "empty totals")
-	has(t, home, "No plans yet.", "empty list")
+	has(t, home, "No plan has a paying supporter yet.", "empty list")
 	has(t, home, "Built on [gno.land](https://gno.land)", "footer")
-	has(t, renders(t, "?page=2"), "No more plans.", "empty page 2")
+	has(t, renders(t, "plans"), "No plans on this page.", "empty all-plans page")
 	for _, p := range []string{
 		"x", "plan", "plan/", "plan/1", "plan/abc", "plan/-1", "plan/1/2", "payer/", "payer/g1bad", "payee/xyz",
 		"help/x", "../help", "plan/18446744073709551616",
@@ -108,7 +108,8 @@ func TestRenderPages(cur realm, t *testing.T) {
 	has(t, pp, "gnokey maketx session create -pubkey "+gpubA+" -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 1050000ugnot -spend-period 604800 -expires-at "+exp+" -gas-fee 100000ugnot -gas-wanted 30000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY", "session create")
 	has(t, pp, "gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 1 -args "+sessA.String()+" -args "+exp+" -gas-fee 100000ugnot", "subscribe command")
 	has(t, pp, "at most 1.05 GNOT every week", "cap in words")
-	has(t, pp, "1 active supporter ·", "active count")
+	has(t, pp, "1 paying supporter ·", "paying count")
+	has(t, pp, "0 mandates have not paid yet", "unpaid count")
 	has(t, pp, "| ["+short(payer)+"]("+base+":payer/"+payer.String()+") |", "active supporter listed")
 	hasNot(t, pp, short(payer2), "cancelled supporter not listed")
 	has(t, pp, "1 payment, 1 GNOT in total", "plan totals")
@@ -131,11 +132,11 @@ func TestRenderPages(cur realm, t *testing.T) {
 	pe := renders(t, "payee/"+payee.String())
 	has(t, pe, "| 2 | 1 | 1 GNOT |", "payee totals")
 	has(t, pe, "Collector key: `"+sessB.String()+"` (`"+gpubB+"`)", "collector key shown")
-	has(t, pe, "| [Weekly coffee]("+base+":plan/1) | 1 GNOT every week | 2 | 1 |", "plan row")
+	has(t, pe, "| [Weekly coffee]("+base+":plan/1) | 1 GNOT every week | 1 | 1 |", "plan row")
 
 	home := renders(t, "")
 	has(t, home, "| 2 | 3 | 1 | 1 GNOT |", "home totals")
-	has(t, home, "| [Demo plan]("+base+":plan/2) | 1 GNOT every minute |", "home list")
+	has(t, renders(t, "plans"), "| [Demo plan]("+base+":plan/2) | 1 GNOT every minute |", "all plans list")
 }
 
 // Titles cannot inject Markdown, HTML, links, mentions or math anywhere they
@@ -168,6 +169,7 @@ func TestRenderInjection(cur realm, t *testing.T) {
 			"payer": renders(t, "payer/"+payer.String()),
 			"payee": renders(t, "payee/"+payee.String()),
 			"home":  renders(t, ""),
+			"plans": renders(t, "plans"),
 		}
 		for name, pg := range pages {
 			what := name + " " + title
@@ -179,7 +181,7 @@ func TestRenderInjection(cur realm, t *testing.T) {
 			hasNot(t, pg, " g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5", what)
 			hasNot(t, stripKnown(pg), "<", what) // no raw "<": no HTML, no autolink
 			hasNot(t, pg, "&amp; &#x41;", what)
-			if name == "home" || name == "payee" { // tables: a "|" must not split the cell
+			if name == "plans" || name == "payee" { // tables: a "|" must not split the cell
 				hasNot(t, pg, "| b |", what)
 			}
 		}
@@ -211,15 +213,20 @@ func TestRenderPaging(cur realm, t *testing.T) {
 		who := testutils.TestAddress("md_r" + itoa(int64(i)))
 		subscribe(cur, who, 1, sessA, now()+day)
 	}
-	home := renders(t, "")
-	has(t, home, "[Next page]("+base+"?page=2)", "home next")
-	hasNot(t, home, "Previous page", "home no previous")
-	h2 := renders(t, "?page=2")
-	has(t, h2, "[Previous page]("+base+"?page=1)", "home previous")
+	// all subscribers pay once; plan 1's supporters then span two pages of 20
+	for i := 0; i < 21; i++ {
+		pullOK(testutils.TestAddress("md_r"+itoa(int64(i))), sessA, gnot)
+	}
+	all := renders(t, "plans")
+	has(t, all, "[Next page]("+base+":plans?page=2)", "all plans next")
+	h2 := renders(t, "plans?page=2")
+	has(t, h2, "[Previous page]("+base+":plans?page=1)", "all plans previous")
 	has(t, h2, "[Plan 1]("+base+":plan/1)", "oldest on page 2")
+	has(t, renders(t, ""), "[Plan 1]("+base+":plan/1) | 1 GNOT every day |", "paid plan on home")
 	plan := renders(t, "plan/1")
-	has(t, plan, "21 active supporters", "count")
-	has(t, plan, "[Next page]("+base+":plan/1?page=2)", "plan next")
-	has(t, renders(t, "plan/1?page=2"), "[Previous page]("+base+":plan/1?page=1)", "plan previous")
+	has(t, plan, "21 paying supporters", "count")
+	has(t, plan, "| ["+short(testutils.TestAddress("md_r20"))+"]", "newest first")
+	has(t, plan, "[More supporters]("+base+":plan/1?from=0)", "plan cursor")
+	has(t, renders(t, "plan/1?from=0"), "| ["+short(testutils.TestAddress("md_r0"))+"]", "oldest on the next page")
 	has(t, renders(t, "payee/"+payee.String()), "[Next page]("+base+":payee/"+payee.String()+"?page=2)", "payee next")
 }

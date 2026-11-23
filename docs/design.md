@@ -41,7 +41,7 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 | Pull fee (pages, collector) | 20,000 ugnot for 20M gas wanted | Exactly today's Onyx price. Measured use on a local chain is 7.6–8.2M gas; reads on Onyx cost more per object, because the chain prices a read by the depth of its store (`expectedDepth100`, `tm2/pkg/store/iavl/store.go:45`) and Onyx's store is far larger. 20M keeps about 2x headroom; the first Pull on Onyx will tell. |
 | Title | 1–80 characters, one line | Same rules as QuestMaster: UTF-8, no control characters, no U+2028/U+2029. |
 | Page size | 20 rows | Every list read and every page is paged. |
-| Mandates per wallet | 16 at a time | The chain's limit on sessions per account (`tm2/pkg/std/account.go:303`). The realm does not count them; the chain refuses the 17th session. |
+| Mandates per wallet | 16 active at a time | The chain's limit on sessions per account (`tm2/pkg/std/account.go:303`). Since M1.3 the realm refuses a 17th active mandate too, which bounds each payer's own record. Cancelled and expired ones free their slot. |
 
 ## Threat model
 
@@ -65,77 +65,97 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 | 14 | Pull called by another realm (a proxy that adds its own logic) | payer | Realm: Pull and every other crossing function require a direct call from a user (`IsUserCall`). | `TestPullEntryPoint`, `TestOfferRefusals`, `TestSubscribeRefusals`. |
 | 15 | Injection through plan titles (Markdown, HTML, links, mentions, math) | page readers | Titles are validated (one line, no control characters) and escaped with `p/nt/markdown/sanitize/v0` plus gnoweb-specific steps (`$`, `@`, leading and spaced `g1` addresses). | `TestRenderInjection` (14 hostile titles on every page that shows them); `z_pages_filetest` golden; mutations removing `$` or address escaping are caught. |
 | 16 | Expired terms | payer | Realm: `now >= ExpiresAt` refused. Chain: session expiry. | `TestPullRules` (one second before allowed, at expiry refused); flow 7 (chain expiry and realm expiry each refuse). |
-| 17 | Spam: many plans or fake supporters | readers, later subscribers | Every list is paged (20 rows). Each record costs its creator a storage deposit (about 0.4–0.6 GNOT per plan, about 0.3 GNOT per mandate). Lists are chunked, so a plan with thousands of supporters costs a new subscriber the same as an empty one. | `TestPaging`, `TestRenderPaging`. |
-| 17b | **Filling one payer bucket on purpose** | every payer whose address falls in the same bucket (1 in 256) | **Not stopped yet; see below.** Bucket = sha256(payer)[0], so an attacker grinds an address into a victim's bucket (it took 146–638 throwaway keys locally). Each Subscribe adds a lookup entry for (attacker, session); a Cancel lets the attacker subscribe again with a fresh session address (any address, no key). Deposits are never returned. Each entry also creates an index for the fresh session address, so it costs the attacker about 0.62 GNOT of deposit plus about 9.6M gas. | `scripts/measure-bucket-flood.sh` (real signed transactions, local chain): victim's Pull goes from 8.2M gas to 11.4M / 15.5M / 19.0M / 22.8M at 500 / 1,000 / 1,500 / 2,000 entries (+7,300 gas per entry). Subscribe goes from 11.9M to 41.0M, Cancel from 5.3M to 20.6M at 2,000. The attacker had paid 1,240 GNOT of deposits and 19.2B gas (19 GNOT of fees at today's price) by then. See "Bucket flooding" below. |
+| 17 | Spam: many plans | readers | The home page lists only plans with at least one paying supporter. It walks at most 200 plans per page and links onwards, so spam can delay but never hide a paid plan. All plans are on `:plans`, paged. Each plan costs its creator about 0.38–0.58 GNOT of deposit (Offer, measured in the flow). | `TestOfferSpam` (205 spam plans: none on the home page, the paid plan reached through "more"); `TestPaging`, `TestRenderPaging`. |
+| 17a | Fake supporters: mandates recorded on a victim's plan without ever paying (anyone can Subscribe without creating a session) | readers of the supporter page | Supporters are listed and counted only from their first payment on (`Plan.Paying`); never-paid mandates are a number ("N mandates have not paid yet"), never names. The page walks at most 200 entries per view, with a cursor. | `TestPayingSupporters` (400 junk after a real supporter: not listed or counted, the real one reached through the cursor). `measure-shared.sh junk 10000`: the plan page renders in 207 ms with "1 paying supporter" and "625 mandates have not paid yet". |
+| 17b | Junk mandates for a victim payee's collector key, recorded without a session, to waste the collector's work | payee | The collector reads only its payee's own plans (`CollectorPlans`, then `CollectorScan` per plan, 200 entries per call). Before signing a Pull for a mandate that never paid, it asks the chain for the session (free query) and skips it when there is none. At most `-max-checks` (default 100) checks per run: never-checked first, newest first, then the oldest-checked, kept in a state file. A real new supporter is never starved; mandates that paid before are pulled without a check. A Pull without a session cannot even be built by gnokey, so nobody pays a fee for junk. | `measure-shared.sh junk 10000` (10,000 addresses, one mandate each; the realm allows one active mandate per payer and session key): the attacker paid **5,350 GNOT** in deposits. The collector listed 10,001 mandates in 67 realm queries and took **17 s** per run with the default 100 checks; checking all 10,000 took 257 s. Flow step 6: a junk mandate is checked and skipped, the state file written. |
+| 17c | Growing what other payers' calls read: shared buckets (M1.1) or anything else | every other payer | **Per-payer layout (M1.3).** Each payer's lookups live in that payer's own record, at most 16 active entries. Cancel removes the entry, and an expired one goes at the next Subscribe. Plan lists hold strings, not pointers, and an append touches only the plan and its newest chunk. What remains shared is tree depth (payers, plans, payees), which grows with log2 of the number of entries. | `measure-shared.sh` with the M1.2 attacker budget: see "Shared structures" below. Loop: one address subscribing and cancelling 2,000 or 4,000 times leaves the victim's Pull at 8.46M and 8.45M (baseline 8.29M). Depth: 2,300 new payer addresses (1,230 GNOT) raise Pull to 10.24M. `TestPayerIsolation`, `TestActiveCap`, `TestInactiveReads`. |
 | 18 | The collector script run against the wrong network | payee | `scripts/collect.sh` has no defaults, accepts only `dev` with a local remote or `onyx-1` with the Onyx RPC. | Flow 6: refused without `-remote`, with onyx-1 and a local remote, and with another chain id. |
 | 19 | The payee publishes a collector key whose address does not match | payer | The realm derives the address from the key itself (`chain.PubKeyAddress`). | `TestSetCollectorKey` (bad checksum, empty payload, wrong prefix refused; derived address checked). |
 
-## Bucket flooding (measured, M1.2)
+## Shared structures (measured, M1.3)
 
-The per-payer lookup buckets (M1.1) are shared by all payers whose address hashes to the same first byte, and one address can add any number of entries to its bucket. Reads are priced per byte (17 gas, times the store's depth for the flat part), so every entry makes each later lookup in that bucket dearer.
+`scripts/measure-shared.sh` runs each scenario on a fresh local chain, then measures the victim's own real, signed transactions:
+- the victim's Pull, signed with a real session;
+- a Subscribe and a Cancel on an untouched plan;
+- a Subscribe to the plan the attacker used (plan 17).
 
-| Entries put in the victim's bucket | Attacker deposits (never returned) | Attacker gas | Victim Pull | Victim Subscribe | Victim Cancel |
+The many attacker addresses of "depth" and "junk" are loaded as genesis transactions, so gas there is the victim's, measured live. The budget of the depth scenario matches the M1.2 bucket flood (about 1,240 GNOT).
+
+| Scenario | Attacker deposits (never returned) | Victim Pull (later) | Victim Subscribe | Victim Subscribe to the attacker's plan | Victim Cancel |
 |---|---|---|---|---|---|
-| 0 | 0 | 0 | 8.22M | 11.86M | 5.33M |
-| 500 | 309 GNOT | 2.8B | 11.39M | 19.61M | 9.16M |
-| 1,000 | 620 GNOT | 7.1B | 15.52M | 26.74M | 12.96M |
-| 1,500 | 930 GNOT | 12.6B | 18.99M | 33.86M | 16.76M |
-| 2,000 | 1,240 GNOT | 19.2B | 22.79M | 40.99M | 20.56M |
+| baseline | 0 | 8.29M | 9.32M | 9.54M | 7.70M |
+| loop: one address, 2,000 subscribe+cancel on plan 17 | 343 GNOT | 8.46M | 9.86M | 10.15M | 8.23M |
+| loop: 4,000 | 687 GNOT | 8.45M | 9.86M | 10.08M | 8.23M |
+| depth: 2,300 new payer addresses | 1,230 GNOT | 10.24M | 15.95M | 16.17M | 14.40M |
+| junk: 10,000 addresses with a never-paid mandate for the victim's collector key | 5,350 GNOT | 10.70M | 17.67M | 17.72M | 15.99M |
 
-(`scripts/measure-bucket-flood.sh 10 4`, local gnodev, gno v1.8.0 fc79041f4.)
+For comparison, the same 1,240 GNOT put into one M1.1 bucket pushed the victim's Pull to 22.8M, Subscribe to 41.0M and Cancel to 20.6M.
 
-Filetests cannot measure the read side: a filetest runs as one transaction and keeps the objects it created in memory, so a lookup costs the same 67,573 gas whatever the bucket holds. They do show the write side: a new payer's Subscribe in the bucket costs 0.76M, then 1.39M at 500 entries, then 3.09M at 2,000.
+What is left is the depth of the payer tree:
+- Pull grows by about 0.2M gas per doubling of the number of payers.
+- Subscribe and Cancel grow by about 0.65M per doubling, because they write the payer's record back into the tree.
+- At 100,000 payers that projects to about 11M for Pull and about 18M for Cancel, well inside the pages' 20M and 30M gas wanted.
+- Each doubling costs the attacker as many new payers as already exist, at about 0.53 GNOT each.
 
-Thresholds, from the linear fit (+7,300 gas per entry for Pull):
+A Subscribe to a plan whose newest chunk is partly full costs a little more: up to about 0.3M gas here, bounded by the 32-entry chunk. It does not grow with the plan's history: 4,000 entries cost the same as 2,000.
 
-- **The pages' Pull gas (20M wanted)** is exceeded at about 1,600 entries: about 1,000 GNOT of deposits.
-- **The fee allowance** (0.05 GNOT covers at most about 48M gas at today's 1 ugnot per 1,000 gas) is exceeded at about 5,500 entries: about 3,400 GNOT. Past that point no Pull for that bucket's payers can be paid within their spend limit, until they re-subscribe with a larger allowance.
-- **Subscribe** at the pages' 30M wanted is exceeded at about 1,250 entries.
-
-What the collector can do: raise `-gas-wanted`, and the fee with it, up to the allowance; nothing beyond. A payer can move to a fresh address (a different bucket).
-
-Not fixed in M1.2; the layout change is waiting for a decision (see the M1.2 report).
-
-## What `gno test` cannot reach
+## What `gno test` cannot reach## What `gno test` cannot reach
 
 `gno test` cannot sign with a session key, so `runtime.GetSessionInfo()` always says "not a session" there. Pull's rules are therefore split into `checkPull` (all the checks, taking the session info as arguments) and `recordPull` (the state update and event), which the unit tests call directly. The rest (signing, the chain's spend limit, revoke, expiry, the transfer and the session guard on the other functions) is proven by `scripts/local-flow.sh` on a real local chain.
 
 ## Measured costs (local gnodev, gno v1.8.0 fc79041f4, the same commit Onyx runs)
 
-From `scripts/local-flow.sh` (real signed transactions). M1 is the layout of commit b1fcb06; M1.1 is the current one.
+From `scripts/local-flow.sh` (real signed transactions). M1.1 is commit e37e544 (shared hash buckets); M1.3 is the current per-payer layout.
 
-| Call | Gas M1 | Gas M1.1 | Storage M1 | Storage M1.1 |
+| Call | Gas M1.1 | Gas M1.3 | Storage M1.1 | Storage M1.3 |
 |---|---|---|---|---|
-| Offer (first plan of a payee) | 7.2M | 7.5M | 5,306 B | 5,781 B |
-| SetCollectorKey | 4.6M | 4.8M | 193 B | 195 B |
+| Offer (first plan of a payee) | 7.5M | 7.6M | 5,781 B | 5,765 B |
+| SetCollectorKey | 4.8M | 4.9M | 195 B | 193 B |
 | session create (chain) | 1.36M | 1.36M | 0 (auth store) | 0 |
-| Subscribe: new payer, new key | 8.6M | 9.9M | 6,943 B | 6,185 B |
-| Subscribe: returning payer, new key | 9.7M | 10.7M | 5,644 B | 6,694 B |
-| **Subscribe: new payer, known key** | 10.0M | 11.0M | **5,429 B (0.54 GNOT)** | **3,145 B (0.31 GNOT)** |
-| Subscribe: returning payer, known key | 11.0M | 11.9M | 2,256 B | 2,274 B |
-| Pull, first of a mandate | 9.1M | 8.2M | 20 B | 18 B |
-| Pull, later | 8.3M | 7.6M | **0 B** | **0 B** |
-| Cancel | 5.3–5.9M | 5.3M | 64–76 B | 64–76 B |
+| Subscribe: new payer, new key | 9.9M | 7.9M | 6,185 B | 4,560 B |
+| Subscribe: returning payer, new key | 10.7M | 8.9M | 6,694 B | 2,701 B |
+| **Subscribe: new payer, known key** | 11.0M | 8.2M | 3,145 B (0.31 GNOT) | **5,229 B (0.52 GNOT)** |
+| Subscribe: returning payer, known key | 11.9M | 9.4M | 2,274 B | 1,796 B |
+| Pull, first of a mandate | 8.2M | 9.1M | 18 B | 20 B |
+| Pull, later | 7.6M | 8.5M | **0 B** | **0 B** |
+| Cancel | 5.3M | 7.6–9.3M | 64–76 B | −122 to −132 B |
 
-"New key" means the first mandate ever given to that collector key, which creates its index (an avl insert plus the index record, about 3.5 KB): once per payee key, not once per payer. Gas grows a little through the run as the trees deepen.
+- **"New key" no longer costs anything extra**: M1.3 has no per-key index.
+- **A new payer costs about 2.1 KB more than in M1.1**: an avl insert into the payer tree (two nodes, about 2.2 KB), and the payer's own record stored by value (no heap item). In exchange, nothing another address does can grow what this payer's calls read.
+- **Pull and Cancel cost about 1M and 2–4M more gas than in M1.1**: they look the payer up in the tree, and Cancel writes the record back.
+- **Cancel's storage delta is negative.** It removes the mandate's entry from the payer's record. The chain refunds the freed bytes to the signer of the Cancel, the payer or the payee, at the realm's average deposit per byte (`gno.land/pkg/sdk/vm/keeper.go:2561-2598`). That is about 13,000 ugnot for 130 bytes, not necessarily to the address that paid for those bytes.
 
-### Growth with plan size and payer history
+### The layout (M1.3)
 
-Marginal cost of one call on top of a setup, from pairs of filetests (filetest gas is lower than chain gas; the trend is what matters):
+- **Payers:** an avl tree `payer -> Payer`, by value. Each record holds only that payer's own lookups:
+  - `Active`: at most 16 entries (session address, plan id, mandate id, pointer), so Pull, Subscribe and Cancel find a mandate by scanning one small array;
+  - `Head`: the newest mandate, with older ones linked through `prevOfPayer` (history, walked only by free reads).
 
-| Case | Gas M1 | Gas M1.1 | Storage M1 | Storage M1.1 |
-|---|---|---|---|---|
-| Subscribe, new payer, plan with 200 supporters | 3.47M | 2.61M | 5,443 B | 2,856 B |
-| Subscribe, new payer, plan with 1,000 supporters | **5.59M** | **2.70M** | 5,467 B | 2,850 B |
-| Cancel, plan with 200 / 1,000 supporters | 3.72M / 3.74M | 3.67M / 3.67M | 70 B | 70 B |
-| Subscribe, returning payer with 0 / 50 past mandates, known key | 2.37M / 2.58M | 2.50M / 2.54M | 2,582 / 2,544 B | 2,626 / 2,599 B |
+  Cancel removes the entry. An expired entry is removed at the payer's next Subscribe. A 17th active mandate is refused.
+- **Plans' supporter lists (`supporterList`)** store one short string per mandate (the payer's 40-character address followed by the mandate id), never pointers:
+  - Rewriting an array costs about 0.37M gas for every pointer it holds to a shared ("escaped") object, measured with a probe realm (docs/notes.md). With pointers, an append cost up to 13M gas, and the list of chunks became dearer every 32 entries: 9.6M gas at 2,016 entries, about +0.11M per chunk.
+  - The newest entries live in the plan itself (`tail`); a full tail becomes a chunk. So an append rewrites the plan and its tail, and touches the list of chunks only once every 32.
+  - Strings also measured about 400 bytes less per mandate than a two-field struct, and about 80 less than a pointer.
+- **Reads resolve list entries through the payer's record**, so they cost one tree lookup per entry. Only free reads do this; they walk at most 200 entries per call and return a cursor:
+  - the supporter page;
+  - `SupportersOf`, which now returns active mandates only;
+  - `CollectorScan`.
+- **Supporters are counted and listed from their first payment on.** `Plan.Paying` goes up at a mandate's first pull and down when a paying mandate is cancelled. The supporter page walks the list newest first and shows only active mandates that have paid. Mandates that never paid appear as a number: list length − cancelled − paying.
+- **The home page lists only plans with at least one paying supporter**, walking at most 200 plans per page with a "more" link. All plans are on `:plans`.
+- **The collector reads by payee**: `CollectorPlans(payee)`, then `CollectorScan(plan, key, from)` for each plan. There is no per-key list, so mandates recorded for a payee's key on someone else's plan never reach its collector.
+- **Mandate records are slim:**
+  - Paid = pulls × price;
+  - LastPullAt = next pull − period;
+  - PlanID comes through the plan pointer;
+  - the session's public key is the payee's current collector key when the address matches.
 
-In M1 every Subscribe rewrote the plan's whole supporter array (and the payer's), so its gas grew by about 3,000 per existing supporter. In M1.1:
+### What reads return for a cancelled or expired mandate
 
-- **Per-plan and per-key lists are chunked** (`mandateList`, `r/mandate/store.gno`): the first 32 entries live inline, later ones in chunks of 32. Adding an entry rewrites at most one chunk. The list of chunks is rewritten once every 32 entries (at 10,000 supporters, about 313 references). Slices are never preallocated: with `make(.., 0, 32)` the first subscriber of a plan paid about 4 KB for 31 empty slots.
-- **Per-payer lookups** (by session key, by plan, and the head of the payer's history) are entries in one of 256 hash buckets (`map[string]*Mandate`, chosen by the first byte of sha256(payer)). An entry is about 200 bytes, against about 2.2 KB for an avl insert. A lookup reads one bucket object instead of one object per tree level, which is what reads are priced by (59,000 gas × depth per object, 17 gas per byte). A bucket holds about three entries per payer, so at 10,000 payers a bucket is about 120 entries (about 25 KB, roughly 1M gas to read and rewrite); at 100,000 payers it would be about ten times that. If Mandate ever gets that big, the bucket count can grow in a new version.
-- **A payer's history** is a linked list through the mandates (`prevOfPayer`). It is walked only by free reads (the payer page, `MandatesOf`, now newest first).
-- **Mandate records were slimmed.** Paid (= pulls × price), LastPullAt (= next pull − period), PlanID and the session's public key are derived. The public key is the payee's current collector key when the address matches; otherwise the payer page shows how to look it up.
-- **Pages read at most 200 mandates to count the active supporters of a plan.** Beyond that, they say "at least N (counted among the latest 200)". The home and payee tables show the number of mandates rather than an active count, so a page never reads thousands of records.
+- `MandateOf(payer, session)` returns the newest mandate for that pair, with Status "cancelled" or "expired". When it is no longer in the active list, the read walks the payer's history.
+- `IsActive` is false, and `NextPullAt` is 0.
+- `SupportersOf` and the supporter page leave it out.
+- Pull and Cancel look only at the active list:
+  - after a cancel they fail with "no active mandate for this session (never recorded, cancelled or replaced)";
+  - an expired mandate still says "mandate: expired" until its payer subscribes again.
 
 Every Pull updates only fields that already exist after the first pull (mandate, plan, payee totals and two package counters), so later pulls add no storage. The first pull adds about 20 bytes because amino omits zero values.

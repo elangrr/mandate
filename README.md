@@ -4,7 +4,7 @@
 
 Mandate is subscriptions and direct debit on native GNOT, built on Gno.land session keys. A supporter signs one permission from their own wallet: *at most X GNOT every period, through this realm only, until I cancel or it expires*. The creator's collector pulls each payment when it is due; the realm checks who, how much and when, and forwards the coins to the creator in the same transaction.
 
-It ships with one thing to subscribe to: **supporter pages**. A creator publishes a plan such as "1 GNOT every week"; the plan's page lists its active supporters.
+It ships with one thing to subscribe to: **supporter pages**. A creator publishes a plan such as "1 GNOT every week"; the plan's page lists its supporters, counted from their first payment on.
 
 Status: milestone 1, tested on a local chain. Not deployed yet. The realm will live at `gno.land/r/<namespace>/mandate` on the Onyx test network; in this repository the namespace is the placeholder `mandate_dev`.
 
@@ -33,7 +33,7 @@ Three parts:
 
 - **The realm** (`r/mandate`): plans, mandates, the Pull rules, the pages, free reads. No admin, no pause, no upgrade, no sweep. It never holds funds between transactions.
 - **The chain's sessions** (Gno v1.8.0): the supporter's wallet creates a session for the creator's collector key, limited to this realm, with a spend limit per period and an expiry. The chain enforces the cap; the realm enforces the terms.
-- **The collector** (`scripts/collect.sh`): run by the creator, holds the collector key, finds what is due through free queries and pulls it.
+- **The collector** (`scripts/collect.sh`): run by the creator, holds the collector key, finds what is due through free queries (walking the creator's own plans), checks on chain that a never-paid mandate really has a session before pulling it, and pulls. Its work per run is bounded and resumable.
 
 ## The honest limits
 
@@ -43,7 +43,9 @@ Three parts:
 - **Revoke any time.** Revoking the session on chain stops every payment at once. The realm cannot see a revoke, so it still shows the mandate as active until it is cancelled or expires; services must also check the session on chain (`auth/accounts/<payer>/session/<key>`, a free query).
 - **Nothing is ever deployed under the realm's path.** A session for `vm/exec:<realm>` also allows every realm under that path (the chain matches by prefix). The realm's deployer must never deploy anything at `gno.land/r/<namespace>/mandate/...`; this repository never will.
 - **The creator needs an always-on collector** holding the collector key.
-- **Subscribing costs a storage deposit** of about 0.3 GNOT (the realm's records for the mandate), paid once by the supporter, plus normal fees. The first supporter who uses a new collector key pays about 0.3 GNOT more for that key's index.
+- **Subscribing costs a storage deposit** of about 0.53 GNOT the first time a wallet subscribes (the wallet's own record in the realm plus the mandate), about 0.2 GNOT for each later one, paid by the supporter, plus normal fees. Each wallet's records are its own: nothing another wallet does can make your payments or cancels dearer, except a slightly deeper tree (measured in docs/design.md).
+- **At most 16 active mandates per wallet**, enforced by the realm too (the chain allows 16 sessions per account).
+- **Anyone can record a mandate without paying.** Supporter pages therefore list and count supporters only from their first payment on; mandates that never paid are shown as a number, never as supporters.
 
 ## Using it
 
@@ -60,8 +62,8 @@ gnokey maketx session create -pubkey <collector gpub> -allow-paths vm/exec:gno.l
 gnokey maketx call -pkgpath gno.land/r/<ns>/mandate -func Subscribe -args 1 -args <collector address> -args <unix> ...
 
 # creator's collector
-scripts/collect.sh -home <keybase> -key <collector key> -remote https://rpc.onyx.testnets.gno.land:443 \
-    -chainid onyx-1 -realm gno.land/r/<ns>/mandate [-dry-run]
+scripts/collect.sh -home <keybase> -key <collector key> -payee <your address> -remote https://rpc.onyx.testnets.gno.land:443 \
+    -chainid onyx-1 -realm gno.land/r/<ns>/mandate -state collector.state [-dry-run]
 ```
 
 ### Realm API
@@ -74,7 +76,8 @@ scripts/collect.sh -home <keybase> -key <collector key> -remote https://rpc.onyx
 | `Pull(cur)` | collector, signed with the session key (`-master <supporter>`) | Exactly the price, once per period, forwarded to the creator. |
 | `Cancel(cur, payer, sessionAddr)` | supporter or creator, own key | Ends a mandate in the realm. |
 | `GetPlan`, `MandateOf`, `IsActive`, `NextPullAt`, `GetPayee`, `Totals` | anyone, free | Plain values (copies). |
-| `Plans`, `PlansOf`, `MandatesOf`, `SupportersOf`, `MandatesForSession`, `CollectorList` | anyone, free | Paged lists, 20 rows per page. `CollectorList` is plain text for scripts. |
+| `Plans`, `PlansOf`, `MandatesOf` (newest first), `SupportersOf` (active mandates) | anyone, free | Paged lists, 20 rows per page. |
+| `CollectorPlans(payee, page)`, `CollectorScan(planID, sessionAddr, from)` | anyone, free | Plain text for the collector: a payee's plans, and a plan's active mandates for one key, 200 list entries per call with a cursor. |
 | `Render` | gnoweb | Home, `plan/<id>` (supporter page), `payer/<addr>`, `payee/<addr>`, `help`. |
 
 Every crossing function except Pull refuses session keys and coins and must be called directly by a user.

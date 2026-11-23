@@ -97,10 +97,11 @@ type Plan struct {
 	Period    int64 // seconds
 	CreatedAt int64 // unix seconds
 
-	Supporters mandateList // every mandate for this plan, oldest first
-	Cancelled  int         // how many of them were cancelled
-	Pulls      int64       // successful pulls (paid = Pulls * Amount)
-	LastPullAt int64       // unix seconds, 0 = never
+	Supporters supporterList // every mandate for this plan, oldest first
+	Cancelled  int           // how many of them were cancelled
+	Paying     int           // how many have paid at least once and are not cancelled
+	Pulls      int64         // successful pulls (paid = Pulls * Amount)
+	LastPullAt int64         // unix seconds, 0 = never
 
 	payee *Payee // direct link, so Pull needs no lookup
 }
@@ -124,11 +125,6 @@ type Mandate struct {
 	prevOfPayer *Mandate // the payer's previous mandate (history, newest first)
 }
 
-// KeyIndex lists the mandates given to one session key, oldest first.
-type KeyIndex struct {
-	Mandates mandateList
-}
-
 // Payee holds a payee's plans, totals and published collector key.
 type Payee struct {
 	Addr          address
@@ -144,12 +140,12 @@ type Payee struct {
 // State. Storage is paid per byte (100 ugnot) and gas mostly per object
 // read or written, so the layout keeps both small, and nothing one address
 // does can grow what another payer's calls read (docs/design.md):
-//   - plans, payees, payers and collector keys live in avl trees: an
-//     attacker can only add depth (log2 of the number of entries);
-//   - each payer's lookups live in that payer's own record (Payer), capped
-//     at MaxActivePerPayer active mandates;
-//   - per-plan and per-key lists are chunked (see mandateList), so adding
-//     one entry rewrites one small chunk however long the list is;
+//   - plans, payees and payers live in avl trees: an attacker can only add
+//     depth (log2 of the number of entries);
+//   - each payer's lookups live in that payer's own record (Payer, stored
+//     by value in the tree), capped at MaxActivePerPayer active mandates;
+//   - each plan's supporter list holds small values in chunks (see
+//     supporterList), so adding one costs the same however long it is;
 //   - a payer's history is a linked list through the mandates, walked only
 //     by free reads.
 var (
@@ -160,8 +156,7 @@ var (
 
 	plans  = avl.NewTree() // pad(planID) -> *Plan
 	payees = avl.NewTree() // payee -> *Payee
-	payers = avl.NewTree() // payer -> *Payer
-	keys   = avl.NewTree() // session address -> *KeyIndex
+	payers = avl.NewTree() // payer -> Payer (a value, not a pointer)
 
 	totalPulls int64
 	totalPaid  int64
@@ -289,7 +284,6 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		}
 	} else {
 		pr = &Payer{}
-		payers.Set(payer.String(), pr)
 	}
 	nextMandateID++
 	m := &Mandate{
@@ -303,14 +297,9 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		prevOfPayer: pr.Head,
 	}
 	pr.Head = m
-	pr.Active = append(pr.Active, activeRef{Session: sessionAddr, PlanID: planID, M: m})
-	ki := keyIndexOf(sessionAddr)
-	if ki == nil {
-		ki = &KeyIndex{}
-		keys.Set(sessionAddr.String(), ki)
-	}
-	ki.Mandates.add(m)
-	p.Supporters.add(m)
+	pr.Active = append(pr.Active, activeRef{Session: sessionAddr, PlanID: planID, ID: m.ID, M: m})
+	pr.save(payer)
+	p.Supporters.add(entry{Payer: payer, ID: m.ID})
 	chain.Emit("Subscribed",
 		"mandate", utoa(m.ID),
 		"plan", utoa(planID),
@@ -373,6 +362,9 @@ func checkPull(isSession bool, sess address, paths []string, payer address, sent
 // pull, so later pulls do not grow the realm's storage.
 func recordPull(m *Mandate, p *Plan, now int64) {
 	m.NextPullAt = now + p.Period
+	if m.Pulls == 0 {
+		p.Paying++ // counted as a supporter from the first payment on
+	}
 	m.Pulls++
 	p.Pulls++
 	p.LastPullAt = now
@@ -406,10 +398,15 @@ func Cancel(cur realm, payer address, sessionAddr address) {
 	if caller != m.Payer && caller != p.Payee {
 		panic("mandate: only the payer or the payee can cancel")
 	}
-	payerOf(payer).removeActive(m)
+	pr := payerOf(payer)
+	pr.removeActive(m)
+	pr.save(payer)
 	m.CancelledAt = time.Now().Unix()
 	m.CancelledBy = caller
 	p.Cancelled++
+	if m.Pulls > 0 {
+		p.Paying--
+	}
 	chain.Emit("Cancelled",
 		"mandate", utoa(m.ID),
 		"plan", utoa(p.ID),
@@ -466,14 +463,6 @@ func payeeOf(a address) *Payee {
 		return nil
 	}
 	return v.(*Payee)
-}
-
-func keyIndexOf(a address) *KeyIndex {
-	v := keys.Get(a.String())
-	if v == nil {
-		return nil
-	}
-	return v.(*KeyIndex)
 }
 
 // validateTitle returns "" or the reason the title is refused: blank, too

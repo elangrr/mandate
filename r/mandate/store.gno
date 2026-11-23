@@ -1,57 +1,73 @@
 package mandate
 
-// chunkSize is the number of entries per chunk of a mandateList.
+import "strconv"
+
+// chunkSize is the number of entries per chunk of a supporterList.
 const chunkSize = 32
 
-// mandateList is an append-only list. The first chunkSize entries live in
-// the list itself (most plans and keys never need more); later ones go in
-// chunks of chunkSize. Adding an entry rewrites at most one chunk of
-// chunkSize references and, once every chunkSize entries, the short list of
-// chunks. A plain slice would rewrite its whole backing array on every
-// append, so subscribing to a plan would get dearer with every supporter.
-// Slices are never preallocated: each stored slot costs storage, even empty.
-type mandateList struct {
+// supporterList is a plan's append-only list of mandates, oldest first. It
+// stores one short string per mandate (the payer's 40-character address
+// followed by the mandate id), never pointers: on
+// chain, rewriting an array costs about 0.37M gas for every pointer to a
+// shared object it holds, which made appends cost up to 13M gas and the
+// list of chunks grow dearer with every 32 supporters (docs/design.md).
+//
+// The newest entries live in tail, inside the plan itself; when tail is
+// full it becomes a chunk. So an append rewrites the plan and its tail (at
+// most chunkSize small values), and reads the list of chunks only once
+// every chunkSize appends. Reads resolve an entry through the payer's own
+// record (activeMandate), so they cost a lookup per entry: free reads only.
+type supporterList struct {
 	N      int
-	first  []*Mandate      // entries 0 .. chunkSize-1
-	chunks []*mandateChunk // entries chunkSize .. N-1, chunkSize per chunk
-	last   *mandateChunk   // chunks[len(chunks)-1], so an append never reads chunks
+	tail   []string      // the newest N % chunkSize entries
+	chunks []*entryChunk // full chunks of chunkSize entries, oldest first
 }
 
-type mandateChunk struct {
-	items []*Mandate
+// entry is a decoded list item. Items are stored as strings: measured,
+// about 400 bytes less per mandate than this two-field struct and about 80
+// less than a pointer.
+type entry struct {
+	Payer address
+	ID    uint64 // mandate id
 }
 
-func (l *mandateList) add(m *Mandate) {
-	switch {
-	case l.N < chunkSize:
-		l.first = append(l.first, m)
-	case l.N%chunkSize == 0:
-		l.last = &mandateChunk{items: []*Mandate{m}}
-		l.chunks = append(l.chunks, l.last)
-	default:
-		l.last.items = append(l.last.items, m)
+type entryChunk struct {
+	items []string
+}
+
+func (l *supporterList) add(e entry) {
+	l.tail = append(l.tail, e.Payer.String()+utoa(e.ID))
+	if len(l.tail) == chunkSize {
+		l.chunks = append(l.chunks, &entryChunk{items: l.tail})
+		l.tail = nil
 	}
 	l.N++
 }
 
 // at returns entry i (0 = oldest).
-func (l *mandateList) at(i int) *Mandate {
-	if i < chunkSize {
-		return l.first[i]
+func (l *supporterList) at(i int) entry {
+	var s string
+	if c := i / chunkSize; c < len(l.chunks) {
+		s = l.chunks[c].items[i%chunkSize]
+	} else {
+		s = l.tail[i%chunkSize]
 	}
-	i -= chunkSize
-	return l.chunks[i/chunkSize].items[i%chunkSize]
+	id, _ := strconv.ParseUint(s[40:], 10, 64)
+	return entry{Payer: address(s[:40]), ID: id}
 }
 
-// page returns page `page` (1-based, PageSize rows) of the list, oldest
-// first, and whether another page follows.
-func (l *mandateList) page(page int) ([]*Mandate, bool) {
-	lo, hi, more := pageBounds(l.N, page)
-	out := make([]*Mandate, 0, hi-lo)
-	for i := lo; i < hi; i++ {
-		out = append(out, l.at(i))
+// activeMandate returns the mandate an entry names if it is still in its
+// payer's active list (cancelled and replaced ones are not), or nil. It may
+// have expired: callers check isActive.
+func activeMandate(e entry) *Mandate {
+	if pr := payerOf(e.Payer); pr != nil {
+		for _, r := range pr.Active {
+			if r.ID == e.ID {
+				return r.M
+			}
+		}
 	}
-	return out, more
+	return nil
 }
 
 // MaxActivePerPayer is how many active mandates one payer may hold: the
@@ -77,16 +93,23 @@ type Payer struct {
 type activeRef struct {
 	Session address
 	PlanID  uint64
+	ID      uint64 // mandate id, so a supporter entry resolves without loading mandates
 	M       *Mandate
 }
 
+// payerOf returns a copy of the payer's record, or nil. Records are stored
+// by value (no heap item, about 400 bytes less per payer); after changing
+// one, write it back with save.
 func payerOf(a address) *Payer {
 	v := payers.Get(a.String())
 	if v == nil {
 		return nil
 	}
-	return v.(*Payer)
+	pr := v.(Payer)
+	return &pr
 }
+
+func (pr *Payer) save(a address) { payers.Set(a.String(), *pr) }
 
 // activeBySession returns the payer's active-list mandate for this session
 // key (it may have expired but not been pruned yet), or nil.

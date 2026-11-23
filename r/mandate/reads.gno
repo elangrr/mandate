@@ -1,6 +1,7 @@
 package mandate
 
 import (
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,6 +19,7 @@ type PlanInfo struct {
 	CreatedAt  int64
 	Mandates   int // mandates ever created for this plan
 	Cancelled  int // how many of them were cancelled
+	Paying     int // how many have paid at least once and are not cancelled
 	Pulls      int64
 	Paid       int64
 	LastPullAt int64
@@ -172,48 +174,45 @@ func payerPage(payer address, page int) ([]*Mandate, bool) {
 	return out, false
 }
 
-// SupportersOf lists a plan's mandates (all states), oldest first.
+// SupportersOf lists a plan's active mandates (not cancelled, replaced or
+// expired), oldest first. Page n covers entries (n-1)*PageSize to
+// n*PageSize-1 of the plan's list, so a page may hold fewer rows than
+// PageSize; inactive ones are on the payers' own pages.
 func SupportersOf(planID uint64, page int) []MandateInfo {
 	p := planOf(planID)
 	if p == nil {
 		return []MandateInfo{}
 	}
-	list, _ := p.Supporters.page(page)
-	return infos(list)
-}
-
-// MandatesForSession lists the mandates of every payer that gave a session
-// to this key, oldest first. A collector holding the key reads this.
-func MandatesForSession(sessionAddr address, page int) []MandateInfo {
-	ki := keyIndexOf(sessionAddr)
-	if ki == nil {
-		return []MandateInfo{}
-	}
-	list, _ := ki.Mandates.page(page)
-	return infos(list)
-}
-
-// CollectorList is MandatesForSession as plain text for scripts: one line
-// per mandate, fields separated by single spaces:
-//
-//	<mandate id> <payer> <amount ugnot> <next pull unix> <status> <due|wait>
-//
-// The last line is "more" when another page follows, "end" otherwise.
-func CollectorList(sessionAddr address, page int) string {
 	now := time.Now().Unix()
+	out := []MandateInfo{}
+	lo, hi, _ := pageBounds(p.Supporters.N, page)
+	for i := lo; i < hi; i++ {
+		if m := activeMandate(p.Supporters.at(i)); m != nil && m.isActive(now) {
+			out = append(out, m.info(now))
+		}
+	}
+	return out
+}
+
+// ScanLimit is the most supporter-list entries one free read walks; reads
+// that filter (the collector scan, the paying-supporter pages) return a
+// cursor to continue from, so junk entries can delay but never hide a
+// real one.
+const ScanLimit = 200
+
+// CollectorPlans lists a payee's plans for a collector script, one per line:
+//
+//	<plan id> <amount ugnot> <period seconds> <mandates>
+//
+// PageSize per page; the last line is "more" or "end".
+func CollectorPlans(payee address, page int) string {
 	var b strings.Builder
 	more := false
-	if ki := keyIndexOf(sessionAddr); ki != nil {
-		list, m := ki.Mandates.page(page)
+	if pe := payeeOf(payee); pe != nil {
+		lo, hi, m := pageBounds(len(pe.PlanList), page)
 		more = m
-		for _, mm := range list {
-			mi := mm.info(now)
-			due := "wait"
-			if mi.Due {
-				due = "due"
-			}
-			b.WriteString(utoa(mi.ID) + " " + mi.Payer.String() + " " + itoa(mi.Amount) + " " +
-				itoa(mi.NextPullAt) + " " + mi.Status + " " + due + "\n")
+		for _, p := range pe.PlanList[lo:hi] {
+			b.WriteString(utoa(p.ID) + " " + itoa(p.Amount) + " " + itoa(p.Period) + " " + strconv.Itoa(p.Supporters.N) + "\n")
 		}
 	}
 	if more {
@@ -222,6 +221,79 @@ func CollectorList(sessionAddr address, page int) string {
 		b.WriteString("end\n")
 	}
 	return b.String()
+}
+
+// CollectorScan walks at most ScanLimit entries of a plan's supporter list,
+// from index `from` (0 = oldest), and returns the active mandates whose
+// session key is sessionAddr, one per line:
+//
+//	<index> <mandate id> <payer> <amount ugnot> <next pull unix> <due|wait> <pulls>
+//
+// The last line is "next <index>" when more entries follow, "end" otherwise.
+// Cancelled and expired mandates, and mandates for other keys, are skipped
+// here, so a collector never needs to read them. A mandate with 0 pulls
+// has never paid: a collector should check on chain that its session exists
+// before signing a Pull for it.
+func CollectorScan(planID uint64, sessionAddr address, from int) string {
+	p := planOf(planID)
+	if p == nil {
+		return "end\n"
+	}
+	if from < 0 {
+		from = 0
+	}
+	now := time.Now().Unix()
+	var b strings.Builder
+	end := from + ScanLimit
+	if end > p.Supporters.N {
+		end = p.Supporters.N
+	}
+	for i := from; i < end; i++ {
+		e := p.Supporters.at(i)
+		pr := payerOf(e.Payer)
+		if pr == nil {
+			continue
+		}
+		var m *Mandate
+		for _, r := range pr.Active {
+			if r.ID == e.ID && r.Session == sessionAddr {
+				m = r.M
+			}
+		}
+		if m == nil || !m.isActive(now) {
+			continue
+		}
+		due := "wait"
+		if now >= m.NextPullAt {
+			due = "due"
+		}
+		b.WriteString(strconv.Itoa(i) + " " + utoa(m.ID) + " " + m.Payer.String() + " " + itoa(p.Amount) + " " +
+			itoa(m.NextPullAt) + " " + due + " " + itoa(m.Pulls) + "\n")
+	}
+	if end < p.Supporters.N {
+		b.WriteString("next " + strconv.Itoa(end) + "\n")
+	} else {
+		b.WriteString("end\n")
+	}
+	return b.String()
+}
+
+// payingFrom walks at most ScanLimit entries of the plan's supporter list,
+// newest first, starting at index `from` (or the newest when from < 0), and
+// returns up to PageSize active mandates that have paid at least once, and
+// the index to continue from (-1 when the list is exhausted).
+func payingFrom(p *Plan, from int, now int64) ([]*Mandate, int) {
+	if from < 0 || from >= p.Supporters.N {
+		from = p.Supporters.N - 1
+	}
+	out := []*Mandate{}
+	i := from
+	for walked := 0; i >= 0 && walked < ScanLimit && len(out) < PageSize; i, walked = i-1, walked+1 {
+		if m := activeMandate(p.Supporters.at(i)); m != nil && m.Pulls > 0 && m.isActive(now) {
+			out = append(out, m)
+		}
+	}
+	return out, i
 }
 
 func infos(list []*Mandate) []MandateInfo {
@@ -243,6 +315,7 @@ func (p *Plan) info() PlanInfo {
 		CreatedAt:  p.CreatedAt,
 		Mandates:   p.Supporters.N,
 		Cancelled:  p.Cancelled,
+		Paying:     p.Paying,
 		Pulls:      p.Pulls,
 		Paid:       p.Pulls * p.Amount,
 		LastPullAt: p.LastPullAt,

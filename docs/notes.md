@@ -46,7 +46,10 @@ Each fact was checked in the source of gno v1.8.0 (commit fc79041f4, `github.com
 - Gas for store access (`tm2/pkg/store/types/gas.go:405-420`): a read costs 59,000 flat plus 17 per byte, a write 24,000 plus 14 per byte, each multiplied by the store's expected depth, which is the bit length of the number of keys (`expectedDepth100`, `tm2/pkg/store/iavl/store.go:45`); amino adds 3 per byte each way. So gas is mostly per object touched, and a chain with more keys (Onyx) charges more per object than a fresh local chain.
 - Measured storage per entry (filetest realm ops): avl insert about 2.2 KB (two nodes with heap items); a map entry about 200–400 bytes; a pointer appended to a slice about 200 bytes; a struct behind a pointer adds a heap item of about 350 bytes. `make([]T, 0, n)` stores all n slots, empty or not.
 - Appending to a slice rewrites its whole backing array object (gas grows with its length); Mandate keeps long lists in chunks for that reason.
-- Gno map iteration follows insertion order, so iterating a map in a test is deterministic.
+- **Pointers to shared objects are dear to rewrite** (measured on a local chain with a probe realm, M1.3): saving an array that holds pointers to objects referenced from more than one place ("escaped" objects, such as a Mandate held by its payer's record and by a plan's list) costs about 0.37M gas per such pointer. Appending one pointer to an array of 31 cost 13.4M gas; to an array of 0, 2.7M. The same array of values (no pointers) costs only its bytes. Mandate's plan lists therefore store values (payer address and mandate id).
+- **Storage refunds go to the signer of the transaction that frees the bytes**, not to whoever paid for them, at the realm's average price: deposit × released ÷ realm storage (`gno.land/pkg/sdk/vm/keeper.go:2561-2598`; with no restricted denoms, as on Onyx, the refund is paid in GNOT to the caller).
+- **Queries have a gas cap of 3,000,000,000** (`DefaultQueryMaxGas`, `gno.land/pkg/sdk/vm/keeper.go:55`). Mandate's filtering reads walk at most 200 list entries per call and return a cursor.
+- **Measuring with many accounts:** gnodev applies genesis transactions (`-txs-file`) through the normal handlers without checking signatures, so thousands of accounts can act given only their public keys, with balances from `-balance-file` (`scripts/measure-shared.sh`).
 
 ## Adena (onbloc/adena-wallet e71fa1b, v1.22.5)
 
@@ -57,6 +60,7 @@ Each fact was checked in the source of gno v1.8.0 (commit fc79041f4, `github.com
   - Adena accepted a page's `/auth.m_create_session` request, showed its approval, signed and broadcast it.
   - The chain refused it with `InsufficientFeeError`: Gas-Wanted 2,000,000,000, Gas-Fee 100,000ugnot.
   - The cause and the fix are below.
+- **Confirmed on Onyx with the fix** (2026-11-23, Firefox, Adena 1.22.5): `DoContract` with `/auth.m_create_session` and gasWanted 5,000,000 / gasFee 10,000 returned TRANSACTION_SUCCESS, and a read-only sessions query showed the session with exactly the requested spend limit, period, allow path and expiry. `/auth.m_revoke_session` with the same gas also succeeded, and the sessions query then returned none.
 
 ### What a page must send so Adena signs a session transaction with sane gas
 
