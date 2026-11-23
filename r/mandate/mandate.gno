@@ -68,11 +68,15 @@ const (
 	// chain's spend period is counted in seconds. Short periods exist for
 	// demos and tests; pages flag any period under a day.
 	MinPeriod int64 = 60
-	// MaxPeriod is 366 days.
-	MaxPeriod int64 = 366 * 24 * 60 * 60
+	// MaxPeriod is 30 days, exactly the chain's limit on a session's spend
+	// period (tm2 std.MaxSpendPeriod). The session's spend period is always
+	// the plan's period, so the cap the pages promise ("at most price +
+	// allowance per period") is exactly what the chain enforces. No yearly
+	// plans: the chain refuses a session whose spend period is longer.
+	MaxPeriod int64 = 30 * 24 * 60 * 60
 	// MaxTerm is the longest a mandate may run from the moment it is
 	// created: 366 days. A payer renews once a year at most; the chain's own
-	// cap on a session is about 4 years.
+	// cap on a session's expiry is 4 x 365 days (tm2 std.MaxSessionDuration).
 	MaxTerm int64 = 366 * 24 * 60 * 60
 	// FeeAllowance is what the pages add to the session's spend limit for
 	// fees and storage (0.1 GNOT). The chain accepts a fee when fee / gas
@@ -286,27 +290,38 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		panic("mandate: expiry is more than " + itoa(MaxTerm/86400) + " days away")
 	}
 	pr := payerOf(payer)
-	if pr != nil {
-		pr.pruneExpired(now) // an expired mandate's lookups go when its payer subscribes again
-		for _, r := range pr.Active {
-			if r.Session == sessionAddr {
-				panic("mandate: this session already has an active mandate; cancel it first or use another session key")
-			}
-			if r.PlanID == planID {
-				panic("mandate: you already have an active mandate for this plan")
-			}
-		}
-		if len(pr.Active) >= MaxActivePerPayer {
-			panic("mandate: at most " + strconv.Itoa(MaxActivePerPayer) + " active mandates per wallet (the chain allows " + strconv.Itoa(MaxSessionsPerWallet) + " sessions); cancel one first")
-		}
-	} else {
+	if pr == nil {
 		pr = &Payer{}
 	}
-	// Time already paid for on this plan (a cancelled or expired mandate's)
-	// carries over: the first pull of the new mandate is due when it ends.
+	// Time already paid for on this plan carries over. Take this plan's
+	// credit before pruning, so the prune can never evict the credit about
+	// to be used; then take the one the prune may have made from an expired
+	// mandate for this plan (at most one of the two exists).
+	until := pr.takeCredit(planID, now)
+	pr.pruneExpired(now) // an expired mandate's lookups go when its payer subscribes again
+	if u := pr.takeCredit(planID, now); u > until {
+		until = u
+	}
+	for _, r := range pr.Active {
+		if r.Session == sessionAddr {
+			panic("mandate: this session already has an active mandate; cancel it first or use another session key")
+		}
+		if r.PlanID == planID {
+			panic("mandate: you already have an active mandate for this plan")
+		}
+	}
+	if len(pr.Active) >= MaxActivePerPayer {
+		panic("mandate: at most " + strconv.Itoa(MaxActivePerPayer) + " active mandates per wallet (the chain allows " + strconv.Itoa(MaxSessionsPerWallet) + " sessions); cancel one first")
+	}
+	// The first pull of the new mandate is due when the paid time ends. The
+	// new mandate must outlive it: otherwise it would be listed as paid,
+	// expire without ever paying, and hand the credit back, again and again.
 	first := now
 	status := byte(statusUnpaid)
-	if until := pr.takeCredit(planID, now); until > now {
+	if until > now {
+		if expiresAtUnix <= until {
+			panic("mandate: this plan is already paid for until " + formatTime(until) + " (unix " + itoa(until) + "); choose an expiry after that")
+		}
 		first = until
 		status = statusPaid // covered now, so listed as a supporter
 	}
@@ -432,7 +447,9 @@ func Cancel(cur realm, payer address, sessionAddr address) {
 	now := time.Now().Unix()
 	pr := payerOf(payer)
 	pr.removeActive(m)
-	pr.keepCredit(p.ID, m.paidThrough(), now) // paid time stays the payer's
+	// Paid time stays the payer's. A payee's Cancel never evicts another
+	// credit the payer holds: if the record is full, this one is not kept.
+	pr.keepCredit(p.ID, m.paidThrough(), now, caller == m.Payer)
 	pr.save(payer)
 	m.CancelledAt = now
 	m.CancelledBy = caller

@@ -148,10 +148,10 @@ type credit struct {
 	Until  int64
 }
 
-// MaxCreditsPerPayer bounds a payer's kept credits. It is reached only by a
-// payer who leaves more than 16 plans while each is still paid ahead; then
-// the credit that ends soonest gives way to a later one (that time is lost,
-// for that plan only).
+// MaxCreditsPerPayer bounds a payer's kept credits: 16 plans left while
+// each is still paid ahead. At the bound, the payer's own Cancel or expiry
+// lets the credit ending soonest give way to a later one (that plan's time
+// is lost); a payee's Cancel never evicts: its new credit is not kept.
 const MaxCreditsPerPayer = 16
 
 type activeRef struct {
@@ -228,7 +228,7 @@ func (pr *Payer) pruneExpired(now int64) {
 		if r.M.isActive(now) {
 			out = append(out, r)
 		} else {
-			pr.keepCredit(r.PlanID, r.M.paidThrough(), now)
+			pr.keepCredit(r.PlanID, r.M.paidThrough(), now, true)
 		}
 	}
 	pr.Active = out
@@ -256,9 +256,11 @@ func (pr *Payer) pruneCredits(now int64) {
 
 // keepCredit records that the payer is paid on the plan until `until`
 // (nothing if that is not in the future). One credit per plan, the later
-// time wins. At MaxCreditsPerPayer, the credit ending soonest gives way if
-// this one ends later; otherwise this one is dropped.
-func (pr *Payer) keepCredit(planID uint64, until, now int64) {
+// time wins. At MaxCreditsPerPayer: with evict (the payer's own Cancel, or
+// the expiry prune at the payer's own Subscribe), the credit ending soonest
+// gives way if this one ends later; without evict (a payee's Cancel), this
+// one is not kept, so no third party can remove a credit the payer holds.
+func (pr *Payer) keepCredit(planID uint64, until, now int64, evict bool) {
 	if until <= now {
 		return
 	}
@@ -275,6 +277,9 @@ func (pr *Payer) keepCredit(planID uint64, until, now int64) {
 	}
 	if len(pr.Credits) < MaxCreditsPerPayer {
 		pr.Credits = append(pr.Credits, credit{PlanID: planID, Until: until})
+		return
+	}
+	if !evict {
 		return
 	}
 	soonest := 0

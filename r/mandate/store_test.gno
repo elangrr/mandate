@@ -515,7 +515,8 @@ func TestExpirySequences(cur realm, t *testing.T) {
 
 // Paid time is never lost and never charged twice for the same payer and
 // plan (audit 2, MEDIUM-A), whoever cancels, after an expiry, a key
-// rotation or a yearly renewal, with another session key, across plans.
+// rotation or a yearly renewal of a monthly plan, with another session
+// key, across plans.
 func TestNoDoubleCharge(cur realm, t *testing.T) {
 	month := 30 * day
 	status := func(pid uint64, payer, sess address) byte {
@@ -546,6 +547,8 @@ func TestNoDoubleCharge(cur realm, t *testing.T) {
 	uassert.Equal(t, t0+month, m.PaidThrough)
 	uassert.False(t, m.Due)
 	tooEarly(sessA, "no second charge in the paid month")
+	scan := strings.Split(CollectorScan(pid, sessA, 0), "\n")[0]
+	uassert.True(t, strings.HasSuffix(scan, " wait 0 1"), "the collector sees a paid payer, not a new one: "+scan)
 	p, _ := GetPlan(pid)
 	uassert.Equal(t, 1, p.PaidThisPeriod+p.PaidLastPeriod, "one payment")
 	has(t, renders(t, "payer/"+payer.String()), "your current period is already paid", "payer page")
@@ -583,7 +586,7 @@ func TestNoDoubleCharge(cur realm, t *testing.T) {
 	uassert.Equal(t, t0+month, due(payer, sessB), "new key, same paid month")
 	tooEarly(sessB, "no charge with the new key in the paid month")
 
-	// 4. yearly renewal: 13 monthly pulls (day 0 to 360) on a 365-day mandate,
+	// 4. yearly renewal of a 30-day plan: 13 pulls (day 0 to 360) on a 365-day mandate,
 	// renewed on day 364 (cancel first) or on day 366 (after expiry)
 	for _, renewDay := range []int64{364, 366} {
 		resetState()
@@ -626,7 +629,7 @@ func TestNoDoubleCharge(cur realm, t *testing.T) {
 	// 6. several plans: each keeps its own paid time
 	resetState()
 	a := offer(cur, payee, "A", gnot, month)
-	b := offer(cur, payee, "B", gnot, 2*month)
+	b := offer(cur, payee, "B", gnot, month-day)
 	subscribe(cur, payer, a, sessA, now()+300*day)
 	subscribe(cur, payer, b, sessB, now()+300*day)
 	t0 = now()
@@ -636,7 +639,7 @@ func TestNoDoubleCharge(cur realm, t *testing.T) {
 	cancel(cur, payer, payer, sessB)
 	subscribe(cur, payer, b, sessA, now()+300*day)
 	subscribe(cur, payer, a, sessB, now()+300*day)
-	uassert.Equal(t, t0+2*month, due(payer, sessA), "plan B's time on B")
+	uassert.Equal(t, t0+month-day, due(payer, sessA), "plan B's time on B")
 	uassert.Equal(t, t0+month, due(payer, sessB), "plan A's time on A")
 	// a never-paid mandate cancelled keeps nothing; another payer is untouched
 	subscribe(cur, payer2, a, sessA, now()+300*day)
@@ -719,4 +722,105 @@ func TestCancelMarksEntry(cur realm, t *testing.T) {
 	uassert.True(t, at(1) == statusCancelled, "paid entry cancelled by the payee")
 	uassert.True(t, at(2) == statusUnpaid, "the other entry untouched")
 	uassert.Equal(t, 1, len(SupportersOf(pid, 1)), "only the stranger is active")
+}
+
+// A new mandate must outlive the paid time it carries; otherwise anyone
+// could mint "paid" entries from one payment by subscribing with a short
+// expiry again and again (third audit, LOW-1).
+func TestCarriedMandateMustOutliveCredit(cur realm, t *testing.T) {
+	resetState()
+	month := 30 * day
+	pid := offer(cur, payee, "Monthly", gnot, month)
+	subscribe(cur, payer, pid, sessA, now()+300*day)
+	pullOK(payer, sessA, gnot)
+	paid := PaidThrough(payer, pid)
+	cancel(cur, payer, payer, sessA)
+	paidEntries := func() int {
+		n := 0
+		l := planOf(pid).Supporters
+		for i := 0; i < l.N; i++ {
+			if decodeEntry(l.at(i)).Status == statusPaid {
+				n++
+			}
+		}
+		return n
+	}
+	before := paidEntries()
+	for i := 0; i < 20; i++ {
+		testing.SetOriginSend(nil)
+		testing.SetRealm(testing.NewUserRealm(payer))
+		fails(t, cur, "already paid for until", func() { Subscribe(cross(cur), pid, sessA, now()+1) }, "short expiry "+itoa(int64(i)))
+		testing.SkipHeights(1)
+	}
+	testing.SetOriginSend(nil)
+	testing.SetRealm(testing.NewUserRealm(payer))
+	fails(t, cur, "already paid for until", func() { Subscribe(cross(cur), pid, sessA, paid) }, "expiry exactly at the paid time")
+	uassert.Equal(t, before, paidEntries(), "no paid entry minted")
+	uassert.Equal(t, paid, PaidThrough(payer, pid), "the credit is still there")
+	subscribe(cur, payer, pid, sessA, paid+1)
+	m, _ := MandateOf(payer, sessA)
+	uassert.Equal(t, paid, m.NextPullAt, "a mandate that outlives the credit takes it")
+}
+
+// Subscribe takes the plan's own credit before pruning, so the prune of an
+// expired mandate on another plan cannot evict it (third audit, LOW-2).
+func TestSubscribeKeepsItsOwnCredit(cur realm, t *testing.T) {
+	resetState()
+	month := 30 * day
+	var pids []uint64
+	for i := 0; i < MaxCreditsPerPayer; i++ {
+		pid := offer(cur, payee, "P"+itoa(int64(i)), gnot, month)
+		pids = append(pids, pid)
+		subscribe(cur, payer, pid, sessA, now()+300*day)
+		pullOK(payer, sessA, gnot)
+		cancel(cur, payer, payer, sessA)
+		testing.SkipHeights(1)
+	}
+	p0 := PaidThrough(payer, pids[0]) // ends soonest
+	x := offer(cur, payee, "X", gnot, month)
+	subscribe(cur, payer, x, sessB, now()+120)
+	pullOK(payer, sessB, gnot)
+	testing.SkipHeights(30) // X has expired, unpruned, still paid ahead
+	uassert.Equal(t, MaxCreditsPerPayer, len(payerOf(payer).Credits))
+	subscribe(cur, payer, pids[0], sessA, now()+300*day)
+	m, _ := MandateOf(payer, sessA)
+	uassert.Equal(t, p0, m.NextPullAt, "the plan's own credit was used, not evicted")
+	uassert.True(t, PaidThrough(payer, x) > now(), "X's paid time kept by the prune")
+}
+
+// A payee's Cancel never evicts a credit the payer holds for another plan:
+// with a full record its own credit is not kept (third audit, LOW-3).
+func TestPayeeCancelNeverEvicts(cur realm, t *testing.T) {
+	resetState()
+	month := 30 * day
+	a := offer(cur, payee2, "A", 100*gnot, month)
+	subscribe(cur, payer, a, sessA, now()+300*day)
+	pullOK(payer, sessA, 100*gnot)
+	cancel(cur, payer, payer, sessA)
+	paidA := PaidThrough(payer, a)
+	testing.SkipHeights(1) // every later credit ends after A's, so an eviction would take A's
+	var bs []uint64
+	for i := 0; i < MaxActivePerPayer; i++ {
+		b := offer(cur, payee, "B"+itoa(int64(i)), MinAmount, month)
+		bs = append(bs, b)
+		sess := testutils.TestAddress("md_s" + itoa(int64(i)))
+		subscribe(cur, payer, b, sess, now()+300*day)
+		pullOK(payer, sess, MinAmount)
+	}
+	testing.SkipHeights(1)
+	for i, b := range bs { // the payee cancels every one of them, later ones ending later
+		cancel(cur, payee, payer, testutils.TestAddress("md_s"+itoa(int64(i))))
+		_ = b
+	}
+	uassert.Equal(t, MaxCreditsPerPayer, len(payerOf(payer).Credits))
+	uassert.Equal(t, paidA, PaidThrough(payer, a), "the payer's credit with another creator survives")
+	last := bs[len(bs)-1]
+	uassert.Equal(t, int64(0), PaidThrough(payer, last), "the payee's 16th cancel kept nothing")
+	has(t, renders(t, "payer/"+payer.String()), "but that time could not be kept", "payer page says so")
+	// the payer's own cancel still lets the soonest give way
+	c := offer(cur, payee2, "C", gnot, month)
+	subscribe(cur, payer, c, sessB, now()+300*day)
+	pullOK(payer, sessB, gnot)
+	cancel(cur, payer, payer, sessB)
+	uassert.True(t, PaidThrough(payer, c) > now(), "own cancel keeps its credit by evicting the soonest")
 }

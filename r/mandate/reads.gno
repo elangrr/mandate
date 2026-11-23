@@ -297,13 +297,16 @@ func CollectorPlans(payee address, page int) string {
 // from index `from` (0 = oldest), and returns the active mandates whose
 // session key is sessionAddr, one per line:
 //
-//	<index> <mandate id> <payer> <amount ugnot> <next pull unix> <due|wait> <pulls>
+//	<index> <mandate id> <payer> <amount ugnot> <next pull unix> <due|wait> <pulls> <paid>
 //
-// The last line is "next <index>" when more entries follow, "end" otherwise.
-// Cancelled and expired mandates, and mandates for other keys, are skipped
-// here, so a collector never needs to read them. A mandate with 0 pulls
-// has never paid: a collector should check on chain that its session exists
-// before signing a Pull for it.
+// <paid> is 1 when the payer has paid for this plan (this mandate pulled, or
+// it started with paid time carried over from an earlier one), 0 when it
+// never has. The last line is "next <index>" when more entries follow,
+// "end" otherwise. Cancelled and expired mandates, and mandates for other
+// keys, are skipped here, so a collector never needs to read them. Anyone
+// can record a mandate without a session, so a collector should check on
+// chain that the session exists, at least before the first pull of a
+// mandate whose payer never paid.
 func CollectorScan(planID uint64, sessionAddr address, from int) string {
 	p := planOf(planID)
 	if p == nil {
@@ -344,7 +347,7 @@ func CollectorScan(planID uint64, sessionAddr address, from int) string {
 			due = "due"
 		}
 		b.WriteString(strconv.Itoa(i) + " " + utoa(m.ID) + " " + m.Payer.String() + " " + itoa(p.Amount) + " " +
-			itoa(m.NextPullAt) + " " + due + " " + itoa(m.Pulls) + "\n")
+			itoa(m.NextPullAt) + " " + due + " " + itoa(m.Pulls) + " " + paidFlag(m) + "\n")
 	}
 	if end < p.Supporters.N {
 		b.WriteString("next " + strconv.Itoa(end) + "\n")
@@ -498,4 +501,13 @@ func pageBounds(n, page int) (lo, hi int, more bool) {
 		hi = n
 	}
 	return lo, hi, hi < n
+}
+
+// paidFlag is CollectorScan's last column: "1" once the payer has paid for
+// the plan through this mandate or carried paid time into it, else "0".
+func paidFlag(m *Mandate) string {
+	if m.paidThrough() > 0 {
+		return "1"
+	}
+	return "0"
 }

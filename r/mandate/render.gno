@@ -221,7 +221,8 @@ func renderPlan(id uint64, from int) string {
 		b.WriteString("The creator has not published a collector key yet, so there is nothing to subscribe to. Ask them to run `SetCollectorKey`.\n\n")
 		return b.String()
 	}
-	b.WriteString("You need [gnokey](https://docs.gno.land) and a key with some GNOT on " + ChainID + ". Replace `YOUR_KEY` with your key's name. ")
+	b.WriteString("You need [gnokey](https://docs.gno.land) and a key with some GNOT on " + ChainID + ". Replace `YOUR_KEY` with your key's name. " +
+		"You can support one plan of each creator at a time: every plan of a creator is collected by the same key, and the chain allows one session per key. To switch plans, cancel and revoke first (time you paid for carries over to the same plan only). ")
 	b.WriteString("These two commands give the creator's collector key (`" + pe.CollectorAddr.String() + "`) the right to take **at most " +
 		formatUgnot(spend) + " every " + formatPeriod(p.Period) + "** (the price plus a fee allowance), through this realm only, for one year.\n\n")
 	b.WriteString("1. Create the session (your own key; it cannot be done with a session):\n\n")
@@ -264,7 +265,12 @@ func renderPayer(payer address, page int) string {
 				b.WriteString("- Next payment allowed from: " + formatTime(m.NextPullAt) + " · ends: " + formatTime(m.ExpiresAt) + "\n")
 			}
 		} else if m.PaidThrough > now {
-			b.WriteString("- Paid through " + formatTime(m.PaidThrough) + ": that time stays yours. A new mandate for this plan starts its payments then.\n")
+			if PaidThrough(payer, m.PlanID) >= m.PaidThrough {
+				b.WriteString("- Paid through " + formatTime(m.PaidThrough) + ": that time stays yours. A new mandate for this plan starts its payments then.\n")
+			} else {
+				b.WriteString("- Paid through " + formatTime(m.PaidThrough) + ", but that time could not be kept: a wallet keeps paid time for at most " +
+					strconv.Itoa(MaxCreditsPerPayer) + " plans it has left, and a creator's cancel never pushes another one out. A new mandate for this plan would pay at once.\n")
+			}
 		}
 		b.WriteString("\n")
 		if m.Status != "cancelled" {
@@ -325,7 +331,8 @@ func renderHelp() string {
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func Offer -args \"TITLE\" -args 1000000 -args 604800 " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 	b.WriteString("2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key:\n\n")
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
-	b.WriteString("3. Collect each payment when it is due, signed with the collector key on behalf of the supporter. Only the exact price is accepted, at most once per period. The fee counts against the supporter's fee allowance, so keep it small:\n\n")
+	b.WriteString("3. Collect each payment when it is due, signed with the collector key on behalf of the supporter. Only the exact price is accepted, at most once per period. The fee counts against the supporter's fee allowance, so keep it small. " +
+		"The command below uses today's minimum fee on " + ChainID + " (1 ugnot per 1,000 gas); when the chain raises its gas price, raise `-gas-fee` with it (`gnokey query auth/gasprice`), within the allowance. The collector script does this itself:\n\n")
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func Pull -send AMOUNTugnot -master SUPPORTER_ADDRESS " + pullGas + " " + netFlags() + " COLLECTOR_KEY\n```\n\n")
 	b.WriteString("The repository has a collector script that finds what is due through free queries and pulls it.\n\n")
 
@@ -336,7 +343,8 @@ func renderHelp() string {
 		"ugnot -spend-period PERIOD_SECONDS -expires-at UNIX_TIME " + callGas + " " + netFlags() + " YOUR_KEY\n")
 	b.WriteString("gnokey maketx call -pkgpath " + realmPath + " -func Subscribe -args PLAN_ID -args COLLECTOR_ADDRESS -args UNIX_TIME " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 	b.WriteString("Use the same UNIX_TIME for both, at most " + itoa(MaxTerm/86400) + " days ahead. The session must allow exactly `vm/exec:" + realmPath +
-		"` and nothing else, or Pull refuses it.\n\n")
+		"` and nothing else, or Pull refuses it. PERIOD_SECONDS is the plan's period, at most " + itoa(MaxPeriod/86400) + " days (the chain's limit on a spend period). " +
+		"You can support one plan of each creator at a time: all of a creator's plans are collected by one key, and the chain allows one session per key.\n\n")
 	b.WriteString("### Stop a mandate\n\n")
 	b.WriteString("Do both, with your own key. Your page (`" + link("payer/YOUR_ADDRESS") + "`) shows them filled in.\n\n")
 	b.WriteString("```\ngnokey maketx session revoke -pubkey COLLECTOR_GPUB " + callGas + " " + netFlags() + " YOUR_KEY\n")

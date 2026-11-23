@@ -89,7 +89,7 @@ func main(cur realm) {
 //
 // ## Support this plan
 //
-// You need [gnokey](https://docs.gno.land) and a key with some GNOT on onyx-1. Replace `YOUR_KEY` with your key's name. These two commands give the creator's collector key (`g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh`) the right to take **at most 1.1 GNOT every week** (the price plus a fee allowance), through this realm only, for one year.
+// You need [gnokey](https://docs.gno.land) and a key with some GNOT on onyx-1. Replace `YOUR_KEY` with your key's name. You can support one plan of each creator at a time: every plan of a creator is collected by the same key, and the chain allows one session per key. To switch plans, cancel and revoke first (time you paid for carries over to the same plan only). These two commands give the creator's collector key (`g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh`) the right to take **at most 1.1 GNOT every week** (the price plus a fee allowance), through this realm only, for one year.
 //
 // 1. Create the session (your own key; it cannot be done with a session):
 //
@@ -126,7 +126,7 @@ func main(cur realm) {
 //
 // ## Support this plan
 //
-// You need [gnokey](https://docs.gno.land) and a key with some GNOT on onyx-1. Replace `YOUR_KEY` with your key's name. These two commands give the creator's collector key (`g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh`) the right to take **at most 0.35 GNOT every minute** (the price plus a fee allowance), through this realm only, for one year.
+// You need [gnokey](https://docs.gno.land) and a key with some GNOT on onyx-1. Replace `YOUR_KEY` with your key's name. You can support one plan of each creator at a time: every plan of a creator is collected by the same key, and the chain allows one session per key. To switch plans, cancel and revoke first (time you paid for carries over to the same plan only). These two commands give the creator's collector key (`g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh`) the right to take **at most 0.35 GNOT every minute** (the price plus a fee allowance), through this realm only, for one year.
 //
 // 1. Create the session (your own key; it cannot be done with a session):
 //
@@ -220,7 +220,7 @@ func main(cur realm) {
 //
 // ## For creators
 //
-// 1. Publish a plan with your own key: a title (one line, at most 80 characters, no invisible formatting characters: direction controls and zero-width characters, the joiner included, are refused, so emoji joined into one, such as families, cannot be used), the amount (at least 0.1 GNOT) and the period (60 seconds to 366 days). Plans cannot be changed.
+// 1. Publish a plan with your own key: a title (one line, at most 80 characters, no invisible formatting characters: direction controls and zero-width characters, the joiner included, are refused, so emoji joined into one, such as families, cannot be used), the amount (at least 0.1 GNOT) and the period (60 seconds to 30 days). Plans cannot be changed.
 //
 // ```
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Offer -args "TITLE" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
@@ -232,7 +232,7 @@ func main(cur realm) {
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// 3. Collect each payment when it is due, signed with the collector key on behalf of the supporter. Only the exact price is accepted, at most once per period. The fee counts against the supporter's fee allowance, so keep it small:
+// 3. Collect each payment when it is due, signed with the collector key on behalf of the supporter. Only the exact price is accepted, at most once per period. The fee counts against the supporter's fee allowance, so keep it small. The command below uses today's minimum fee on onyx-1 (1 ugnot per 1,000 gas); when the chain raises its gas price, raise `-gas-fee` with it (`gnokey query auth/gasprice`), within the allowance. The collector script does this itself:
 //
 // ```
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Pull -send AMOUNTugnot -master SUPPORTER_ADDRESS -gas-fee 20000ugnot -gas-wanted 20000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 COLLECTOR_KEY
@@ -249,7 +249,7 @@ func main(cur realm) {
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args PLAN_ID -args COLLECTOR_ADDRESS -args UNIX_TIME -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// Use the same UNIX_TIME for both, at most 366 days ahead. The session must allow exactly `vm/exec:gno.land/r/mandate_dev/mandate` and nothing else, or Pull refuses it.
+// Use the same UNIX_TIME for both, at most 366 days ahead. The session must allow exactly `vm/exec:gno.land/r/mandate_dev/mandate` and nothing else, or Pull refuses it. PERIOD_SECONDS is the plan's period, at most 30 days (the chain's limit on a spend period). You can support one plan of each creator at a time: all of a creator's plans are collected by one key, and the chain allows one session per key.
 //
 // ### Stop a mandate
 //
