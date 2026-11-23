@@ -114,7 +114,8 @@ type Plan struct {
 	// Payments per period window: window k is [k*Period, (k+1)*Period). A
 	// mandate pays at most once in a window, and paid time carries over to a
 	// payer's next mandate for the plan, so a payer is not charged twice for
-	// one period; but these count payments, not distinct people (a creator
+	// one period (except when 16 kept periods are already held, see
+	// MaxCreditsPerPayer); but these count payments, not distinct people (a creator
 	// can pay its own plan from a second wallet). Read with paidWindows, which
 	// turns them into counts for the window containing "now" and the one
 	// before it, so they are true at any time without a transaction.
@@ -227,6 +228,7 @@ func Offer(cur realm, title string, amountUgnot, periodSeconds int64) uint64 {
 	chain.Emit("PlanOffered",
 		"plan", utoa(p.ID),
 		"payee", caller.String(),
+		"title", p.Title,
 		"amount", itoa(p.Amount),
 		"period", itoa(p.Period),
 	)
@@ -249,6 +251,9 @@ func SetCollectorKey(cur realm, pubKey string) {
 	if addr == caller {
 		panic("mandate: use a dedicated key for collecting, not your main key")
 	}
+	if collectorFunded(addr) {
+		panic("mandate: this key's address " + addr.String() + " has received coins, so it is an account and the chain will refuse every new session for it; make a new key and never send coins to it")
+	}
 	pe := payeeOf(caller)
 	if pe == nil {
 		pe = &Payee{Addr: caller}
@@ -256,7 +261,7 @@ func SetCollectorKey(cur realm, pubKey string) {
 	}
 	pe.CollectorKey = pubKey
 	pe.CollectorAddr = addr
-	chain.Emit("CollectorKeySet", "payee", caller.String(), "key", addr.String())
+	chain.Emit("CollectorKeySet", "payee", caller.String(), "pubkey", pubKey, "address", addr.String())
 }
 
 // Subscribe records the terms for one session: the payer allows the holder
@@ -298,8 +303,9 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 	// to be used; then take the one the prune may have made from an expired
 	// mandate for this plan (at most one of the two exists).
 	until := pr.takeCredit(planID, now)
-	pr.pruneExpired(now) // an expired mandate's lookups go when its payer subscribes again
-	if u := pr.takeCredit(planID, now); u > until {
+	// An expired mandate's lookups go when its payer subscribes again; the
+	// paid time of an expired mandate for this plan comes back directly.
+	if u := pr.pruneExpired(payer, planID, now); u > until {
 		until = u
 	}
 	for _, r := range pr.Active {
@@ -317,12 +323,13 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 	// new mandate must outlive it: otherwise it would be listed as paid,
 	// expire without ever paying, and hand the credit back, again and again.
 	first := now
+	carried := int64(0) // paid time carried over: until when, or 0
 	status := byte(statusUnpaid)
 	if until > now {
 		if expiresAtUnix <= until {
 			panic("mandate: this plan is already paid for until " + formatTime(until) + " (unix " + itoa(until) + "); choose an expiry after that")
 		}
-		first = until
+		first, carried = until, until
 		status = statusPaid // covered now, so listed as a supporter
 	}
 	nextMandateID++
@@ -349,6 +356,7 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		"session", sessionAddr.String(),
 		"expires", itoa(expiresAtUnix),
 		"first", itoa(first),
+		"carried", itoa(carried),
 	)
 	return m.ID
 }
@@ -449,7 +457,7 @@ func Cancel(cur realm, payer address, sessionAddr address) {
 	pr.removeActive(m)
 	// Paid time stays the payer's. A payee's Cancel never evicts another
 	// credit the payer holds: if the record is full, this one is not kept.
-	pr.keepCredit(p.ID, m.paidThrough(), now, caller == m.Payer)
+	kept := pr.keepCredit(payer, p.ID, m.paidThrough(), now, caller == m.Payer)
 	pr.save(payer)
 	m.CancelledAt = now
 	m.CancelledBy = caller
@@ -460,6 +468,7 @@ func Cancel(cur realm, payer address, sessionAddr address) {
 		"plan", utoa(p.ID),
 		"payer", m.Payer.String(),
 		"by", caller.String(),
+		"kept", itoa(kept),
 	)
 }
 
@@ -587,3 +596,13 @@ func pad(id uint64) string {
 
 func itoa(n int64) string  { return strconv.FormatInt(n, 10) }
 func utoa(n uint64) string { return strconv.FormatUint(n, 10) }
+
+// collectorFunded reports whether a collector key's address holds coins.
+// Receiving any coin makes an address an account for good, and the chain
+// refuses to create a session for a key whose address is an account
+// (tm2/pkg/sdk/auth/handler.go:63-65): no new supporter could join. A
+// balance cannot see an account that received coins and was emptied; the
+// free query auth/accounts/<address> can, and the collector runs it.
+func collectorFunded(addr address) bool {
+	return len(banker.NewReadonlyBanker().GetCoins(addr)) > 0
+}

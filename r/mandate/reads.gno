@@ -77,6 +77,12 @@ type PayeeInfo struct {
 	LastPullAt    int64
 	CollectorKey  string
 	CollectorAddr address
+	// CollectorFunded is true when the collector key's address holds coins:
+	// the chain then refuses every new session for that key, so nobody can
+	// subscribe until the creator publishes a new key. (An address that
+	// received coins and was emptied is also refused by the chain; only the
+	// free query auth/accounts/<CollectorAddr> shows that.)
+	CollectorFunded bool
 }
 
 // GetPlan returns the plan with this id.
@@ -102,7 +108,8 @@ func MandateOf(payer, sessionAddr address) (MandateInfo, bool) {
 // the plan cover them: the latest payment's time plus one period. Paid time
 // stays the payer's when a mandate is cancelled (by either side) or
 // expires, and a new mandate for the same plan starts when it ends, so it
-// is never lost or charged twice. 0 when they never paid for the plan.
+// is not charged twice. The one exception: a payer who already holds 16
+// kept periods (MaxCreditsPerPayer). 0 when they never paid for the plan.
 // Deliver while now < PaidThrough.
 //
 // It turns false at the due time and moves on only when the payee's
@@ -162,13 +169,14 @@ func GetPayee(payee address) (PayeeInfo, bool) {
 		return PayeeInfo{}, false
 	}
 	return PayeeInfo{
-		Addr:          pe.Addr,
-		Plans:         pe.Plans,
-		Pulls:         pe.Pulls,
-		Paid:          pe.Paid,
-		LastPullAt:    pe.LastPullAt,
-		CollectorKey:  pe.CollectorKey,
-		CollectorAddr: pe.CollectorAddr,
+		Addr:            pe.Addr,
+		Plans:           pe.Plans,
+		Pulls:           pe.Pulls,
+		Paid:            pe.Paid,
+		LastPullAt:      pe.LastPullAt,
+		CollectorKey:    pe.CollectorKey,
+		CollectorAddr:   pe.CollectorAddr,
+		CollectorFunded: pe.CollectorKey != "" && collectorFunded(pe.CollectorAddr),
 	}, true
 }
 

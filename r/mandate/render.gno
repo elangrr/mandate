@@ -7,8 +7,8 @@ import (
 )
 
 // SourceRepo is where the source code is published, shown in the footer of
-// every page. Empty until the repository is public.
-const SourceRepo = ""
+// every page.
+const SourceRepo = "https://github.com/elangrr/mandate"
 
 // Network the copy-ready commands are pinned to.
 const (
@@ -24,9 +24,8 @@ const (
 // and Onyx's store is far larger), so gas wanted keeps about 2x headroom.
 // The Pull fee counts against the session's spend limit (see FeeAllowance).
 const (
-	callGas    = "-gas-fee 100000ugnot -gas-wanted 60000000"
-	PullGasFee = 20_000
-	pullGas    = "-gas-fee 20000ugnot -gas-wanted 20000000"
+	callGas = "-gas-fee 100000ugnot -gas-wanted 60000000"
+	pullGas = "-gas-fee 20000ugnot -gas-wanted 20000000"
 )
 
 // Render returns the gnoweb page for path, with the footer.
@@ -35,11 +34,7 @@ func Render(path string) string {
 }
 
 func footer() string {
-	src := "source: not published yet"
-	if strings.HasPrefix(SourceRepo, "https://") {
-		src = "[source](" + SourceRepo + ")"
-	}
-	return "\n---\n\nBuilt on [gno.land](https://gno.land) · " + src + "\n"
+	return "\n---\n\nBuilt on [gno.land](https://gno.land) · source code: [" + strings.TrimPrefix(SourceRepo, "https://") + "](" + SourceRepo + ")\n"
 }
 
 func renderPage(raw string) string {
@@ -221,6 +216,12 @@ func renderPlan(id uint64, from int) string {
 		b.WriteString("The creator has not published a collector key yet, so there is nothing to subscribe to. Ask them to run `SetCollectorKey`.\n\n")
 		return b.String()
 	}
+	if collectorFunded(pe.CollectorAddr) {
+		b.WriteString("**New supporters cannot join right now.** The creator's collector key (`" + pe.CollectorAddr.String() + "`) has received coins, and the chain refuses a session for a key whose address holds an account. " +
+			"This creator must publish a new collector key before new supporters can join. Existing supporters are not affected. " +
+			"A creator can also hand you a fresh session key privately: `Subscribe` accepts any session key, not only the published one.\n\n")
+		return b.String()
+	}
 	b.WriteString("You need [gnokey](https://docs.gno.land) and a key with some GNOT on " + ChainID + ". Replace `YOUR_KEY` with your key's name. " +
 		"You can support one plan of each creator at a time: every plan of a creator is collected by the same key, and the chain allows one session per key. To switch plans, cancel and revoke first (time you paid for carries over to the same plan only). ")
 	b.WriteString("These two commands give the creator's collector key (`" + pe.CollectorAddr.String() + "`) the right to take **at most " +
@@ -232,7 +233,8 @@ func renderPlan(id uint64, from int) string {
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func Subscribe -args " + utoa(p.ID) + " -args " + pe.CollectorAddr.String() +
 		" -args " + itoa(expires) + " " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 	b.WriteString("The first payment is collected right after, then one every " + formatPeriod(p.Period) + ". If you paid for this plan before and that period has not ended " +
-		"(you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends: time you paid for is never charged twice. Your page at `" + link("payer/<your address>") +
+		"(you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends, so time you paid for is not charged twice. " +
+		"The one exception: a wallet keeps paid time for at most " + strconv.Itoa(MaxCreditsPerPayer) + " plans it has left; beyond that, a creator's cancel keeps nothing for that creator's plan, and your own cancel or expiry lets the period that ends soonest go. Your page at `" + link("payer/<your address>") +
 		"` shows how to stop.\n")
 	return b.String()
 }
@@ -303,6 +305,9 @@ func renderPayee(payee address, page int) string {
 		b.WriteString("Collector key: **not published**. Supporters cannot subscribe until it is (see [help](" + link("help") + ")).\n\n")
 	} else {
 		b.WriteString("Collector key: `" + pe.CollectorAddr.String() + "` (`" + pe.CollectorKey + "`)\n\n")
+		if collectorFunded(pe.CollectorAddr) {
+			b.WriteString("**This collector key's address has received coins, so the chain refuses new sessions for it: nobody new can subscribe.** The creator must publish a new collector key; existing mandates keep being collected with this one.\n\n")
+		}
 	}
 	b.WriteString("## Plans\n\n")
 	list := PlansOf(payee, page)
@@ -329,7 +334,10 @@ func renderHelp() string {
 	b.WriteString("1. Publish a plan with your own key: a title (one line, at most " + strconv.Itoa(MaxTitleLen) + " characters, no invisible formatting characters: direction controls and zero-width characters, the joiner included, are refused, so emoji joined into one, such as families, cannot be used), the amount (at least " +
 		formatUgnot(MinAmount) + ") and the period (" + itoa(MinPeriod) + " seconds to " + itoa(MaxPeriod/86400) + " days). Plans cannot be changed.\n\n")
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func Offer -args \"TITLE\" -args 1000000 -args 604800 " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
-	b.WriteString("2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key:\n\n")
+	b.WriteString("2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key. " +
+		"**Never send coins to the collector key's address**, not even for fees (the supporter pays every fee): an address that has received coins is an account, and the chain refuses to create a session for it, so nobody new could subscribe. " +
+		"Anyone can do this to a published key with a 1 ugnot send; if it happens, the plan page says so: make a new key and publish it (this command again). New supporters then use the new key, and existing mandates keep being collected with the old one: run one collector per key. " +
+		"`Subscribe` accepts any session key you hand out, so you can also give supporters a fresh key privately:\n\n")
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 	b.WriteString("3. Collect each payment when it is due, signed with the collector key on behalf of the supporter. Only the exact price is accepted, at most once per period. The fee counts against the supporter's fee allowance, so keep it small. " +
 		"The command below uses today's minimum fee on " + ChainID + " (1 ugnot per 1,000 gas); when the chain raises its gas price, raise `-gas-fee` with it (`gnokey query auth/gasprice`), within the allowance. The collector script does this itself:\n\n")

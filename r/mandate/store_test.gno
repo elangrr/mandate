@@ -1,6 +1,7 @@
 package mandate
 
 import (
+	"chain"
 	"strings"
 	"testing"
 
@@ -823,4 +824,78 @@ func TestPayeeCancelNeverEvicts(cur realm, t *testing.T) {
 	pullOK(payer, sessB, gnot)
 	cancel(cur, payer, payer, sessB)
 	uassert.True(t, PaidThrough(payer, c) > now(), "own cancel keeps its credit by evicting the soonest")
+}
+
+// A collector key whose address holds coins is an account, and the chain
+// then refuses every new session for it (audit 4, MEDIUM-1): SetCollectorKey
+// refuses such a key, and the pages and GetPayee say so when it happens to a
+// published key.
+func TestFundedCollectorKey(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
+	setKey(cur, payee, gpubA)
+	pe, _ := GetPayee(payee)
+	uassert.False(t, pe.CollectorFunded)
+	has(t, renders(t, "plan/"+utoa(pid)), "gnokey maketx session create", "commands shown")
+	// a key whose address already received coins is refused
+	testing.IssueCoins(sessB, chain.Coins{{Denom: "ugnot", Amount: 1}})
+	testing.SetOriginSend(nil)
+	testing.SetRealm(testing.NewUserRealm(payee))
+	fails(t, cur, "has received coins", func() { SetCollectorKey(cross(cur), gpubB) }, "funded key")
+	pe, _ = GetPayee(payee)
+	uassert.Equal(t, sessA.String(), pe.CollectorAddr.String(), "the old key stays")
+	// someone sends 1 ugnot to the published key's address
+	testing.IssueCoins(sessA, chain.Coins{{Denom: "ugnot", Amount: 1}})
+	pe, _ = GetPayee(payee)
+	uassert.True(t, pe.CollectorFunded)
+	pp := renders(t, "plan/"+utoa(pid))
+	has(t, pp, "New supporters cannot join right now", "plan page notice")
+	has(t, pp, "must publish a new collector key", "what to do")
+	hasNot(t, pp, "gnokey maketx session create", "no command the chain would refuse")
+	has(t, renders(t, "payee/"+payee.String()), "nobody new can subscribe", "payee page notice")
+	has(t, renders(t, "help"), "Never send coins to the collector key", "help says so")
+	// an existing mandate for the old key is untouched by the realm
+	subscribe(cur, payer, pid, sessA, now()+day) // the realm does not block it; the chain's session create would
+	pullOK(payer, sessA, gnot)
+	uassert.True(t, IsPaidUp(payer, pid))
+	// a fresh, unfunded key can be published
+	fresh := "gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqtrmge0d5wdx9cqxw7fpdrj7n4zwmuj6jh0gknykufehl20ng5drcwhzezy"
+	setKey(cur, payee, fresh)
+	pe, _ = GetPayee(payee)
+	uassert.False(t, pe.CollectorFunded)
+	has(t, renders(t, "plan/"+utoa(pid)), "gnokey maketx session create", "commands back with the new key")
+}
+
+// The paid time of an expired mandate for the plan being subscribed to
+// comes back directly from the prune, so a later expired mandate in the same
+// prune cannot evict it (audit 4, LOW-A).
+func TestPruneReturnsOwnPlanTime(cur realm, t *testing.T) {
+	resetState()
+	month := 30 * day
+	credit := func(i int) uint64 {
+		c := offer(cur, payee, "C"+itoa(int64(i)), gnot, month)
+		subscribe(cur, payer, c, sessA, now()+300*day)
+		pullOK(payer, sessA, gnot)
+		cancel(cur, payer, payer, sessA)
+		testing.SkipHeights(1)
+		return c
+	}
+	credit(0)
+	p := offer(cur, payee, "P", gnot, month)
+	subscribe(cur, payer, p, testutils.TestAddress("md_p1"), now()+120)
+	pullOK(payer, testutils.TestAddress("md_p1"), gnot)
+	pUntil := PaidThrough(payer, p) // after C0's, before every later credit
+	testing.SkipHeights(1)
+	for i := 1; i < MaxCreditsPerPayer; i++ {
+		credit(i)
+	}
+	x := offer(cur, payee, "X", gnot, month)
+	subscribe(cur, payer, x, testutils.TestAddress("md_x"), now()+120)
+	pullOK(payer, testutils.TestAddress("md_x"), gnot) // ends after everything else
+	testing.SkipHeights(30)                            // P and X have expired, unpruned, paid ahead
+	uassert.Equal(t, MaxCreditsPerPayer, len(payerOf(payer).Credits))
+	subscribe(cur, payer, p, testutils.TestAddress("md_p2"), now()+300*day)
+	m, _ := MandateOf(payer, testutils.TestAddress("md_p2"))
+	uassert.Equal(t, pUntil, m.NextPullAt, "P's paid time came back from the prune, not evicted by X's")
+	uassert.True(t, PaidThrough(payer, x) > now(), "X's paid time kept")
 }

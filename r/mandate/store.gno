@@ -1,6 +1,9 @@
 package mandate
 
-import "strconv"
+import (
+	"chain"
+	"strconv"
+)
 
 // fanout is the number of entries per chunk, and of chunks per super-chunk.
 const fanout = 32
@@ -135,7 +138,8 @@ const MaxActivePerPayer = MaxSessionsPerWallet
 //     have an active mandate (cancelled by either side, or expired and
 //     pruned), at most MaxCreditsPerPayer, each still in the future. A new
 //     mandate for that plan starts when the credit ends, so paid time is
-//     never lost or charged twice.
+//     not lost or charged twice, unless 16 credits are already held (see
+//     MaxCreditsPerPayer for who can then lose what).
 type Payer struct {
 	Active  []activeRef
 	Head    *Mandate
@@ -211,9 +215,12 @@ func (pr *Payer) removeActive(m *Mandate) {
 	pr.Active = out
 }
 
-// pruneExpired drops expired entries from the active list, keeping the
-// time each had paid for as a credit for its plan.
-func (pr *Payer) pruneExpired(now int64) {
+// pruneExpired drops expired entries from the active list (payer is the
+// record's owner, for events). The paid time of an expired mandate for
+// planID, the plan being subscribed to, is returned directly, so nothing in
+// the same prune can evict it; every other expired mandate's paid time is
+// kept as a credit for its plan.
+func (pr *Payer) pruneExpired(payer address, planID uint64, now int64) int64 {
 	keep := 0
 	for _, r := range pr.Active {
 		if r.M.isActive(now) {
@@ -221,17 +228,32 @@ func (pr *Payer) pruneExpired(now int64) {
 		}
 	}
 	if keep == len(pr.Active) {
-		return
+		return 0
 	}
+	var own int64
 	out := make([]activeRef, 0, keep)
 	for _, r := range pr.Active {
 		if r.M.isActive(now) {
 			out = append(out, r)
-		} else {
-			pr.keepCredit(r.PlanID, r.M.paidThrough(), now, true)
+			continue
 		}
+		var kept int64
+		if r.PlanID == planID {
+			if t := r.M.paidThrough(); t > now {
+				own, kept = t, t
+			}
+		} else {
+			kept = pr.keepCredit(payer, r.PlanID, r.M.paidThrough(), now, true)
+		}
+		chain.Emit("MandatePruned",
+			"mandate", utoa(r.ID),
+			"plan", utoa(r.PlanID),
+			"payer", payer.String(),
+			"kept", itoa(kept),
+		)
 	}
 	pr.Active = out
+	return own
 }
 
 // pruneCredits drops credits that have run out.
@@ -260,9 +282,12 @@ func (pr *Payer) pruneCredits(now int64) {
 // the expiry prune at the payer's own Subscribe), the credit ending soonest
 // gives way if this one ends later; without evict (a payee's Cancel), this
 // one is not kept, so no third party can remove a credit the payer holds.
-func (pr *Payer) keepCredit(planID uint64, until, now int64, evict bool) {
+//
+// It returns the time kept (0 if none) and emits CreditDropped for a credit
+// it pushes out.
+func (pr *Payer) keepCredit(payer address, planID uint64, until, now int64, evict bool) int64 {
 	if until <= now {
-		return
+		return 0
 	}
 	pr.pruneCredits(now)
 	// A plan has a credit only while the payer has no active mandate for it
@@ -272,15 +297,15 @@ func (pr *Payer) keepCredit(planID uint64, until, now int64, evict bool) {
 			if until > pr.Credits[i].Until {
 				pr.Credits[i] = credit{PlanID: planID, Until: until}
 			}
-			return
+			return pr.Credits[i].Until
 		}
 	}
 	if len(pr.Credits) < MaxCreditsPerPayer {
 		pr.Credits = append(pr.Credits, credit{PlanID: planID, Until: until})
-		return
+		return until
 	}
 	if !evict {
-		return
+		return 0
 	}
 	soonest := 0
 	for i := range pr.Credits {
@@ -288,9 +313,16 @@ func (pr *Payer) keepCredit(planID uint64, until, now int64, evict bool) {
 			soonest = i
 		}
 	}
-	if until > pr.Credits[soonest].Until {
-		pr.Credits[soonest] = credit{PlanID: planID, Until: until}
+	if until <= pr.Credits[soonest].Until {
+		return 0
 	}
+	chain.Emit("CreditDropped",
+		"payer", payer.String(),
+		"plan", utoa(pr.Credits[soonest].PlanID),
+		"until", itoa(pr.Credits[soonest].Until),
+	)
+	pr.Credits[soonest] = credit{PlanID: planID, Until: until}
+	return until
 }
 
 // creditFor returns until when a kept credit covers the payer on the plan,

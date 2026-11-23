@@ -1,7 +1,8 @@
 // PKGPATH: gno.land/r/mandate_dev/mandate/filetests/z_events_filetest
 
-// Every state change emits one event. Pulled is emitted by Pull, which only
-// a session-signed transaction can reach; scripts/local-flow.sh checks it.
+// Every state change emits an event. Pulled, CreditDropped and the paid-time
+// values (kept, carried) above 0 need a Pull, which only a session-signed
+// transaction can reach; scripts/local-flow.sh checks them on a real chain.
 package z_events_filetest
 
 import (
@@ -28,6 +29,12 @@ func main(cur realm) {
 	testing.SetRealm(testing.NewUserRealm(payer))
 	mandate.Cancel(cross(cur), payer, sess)
 	println(mandate.HasMandate(payer, id))
+	// an expired mandate is dropped at its payer's next Subscribe
+	testing.SetRealm(testing.NewUserRealm(payer))
+	mandate.Subscribe(cross(cur), id, sess, time.Now().Unix()+60)
+	testing.SkipHeights(13)
+	testing.SetRealm(testing.NewUserRealm(payer))
+	mandate.Subscribe(cross(cur), id, sess, time.Now().Unix()+86400)
 }
 
 // Output:
@@ -45,6 +52,10 @@ func main(cur realm) {
 //       {
 //         "key": "payee",
 //         "value": "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5"
+//       },
+//       {
+//         "key": "title",
+//         "value": "Weekly supporter"
 //       },
 //       {
 //         "key": "amount",
@@ -65,7 +76,11 @@ func main(cur realm) {
 //         "value": "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5"
 //       },
 //       {
-//         "key": "key",
+//         "key": "pubkey",
+//         "value": "gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c"
+//       },
+//       {
+//         "key": "address",
 //         "value": "g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh"
 //       }
 //     ],
@@ -101,6 +116,10 @@ func main(cur realm) {
 //       {
 //         "key": "first",
 //         "value": "1234567890"
+//       },
+//       {
+//         "key": "carried",
+//         "value": "0"
 //       }
 //     ],
 //     "pkg_path": "gno.land/r/mandate_dev/mandate"
@@ -123,6 +142,108 @@ func main(cur realm) {
 //       {
 //         "key": "by",
 //         "value": "g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj"
+//       },
+//       {
+//         "key": "kept",
+//         "value": "0"
+//       }
+//     ],
+//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//   },
+//   {
+//     "type": "Subscribed",
+//     "attrs": [
+//       {
+//         "key": "mandate",
+//         "value": "2"
+//       },
+//       {
+//         "key": "plan",
+//         "value": "1"
+//       },
+//       {
+//         "key": "payer",
+//         "value": "g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj"
+//       },
+//       {
+//         "key": "payee",
+//         "value": "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5"
+//       },
+//       {
+//         "key": "session",
+//         "value": "g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh"
+//       },
+//       {
+//         "key": "expires",
+//         "value": "1234567950"
+//       },
+//       {
+//         "key": "first",
+//         "value": "1234567890"
+//       },
+//       {
+//         "key": "carried",
+//         "value": "0"
+//       }
+//     ],
+//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//   },
+//   {
+//     "type": "MandatePruned",
+//     "attrs": [
+//       {
+//         "key": "mandate",
+//         "value": "2"
+//       },
+//       {
+//         "key": "plan",
+//         "value": "1"
+//       },
+//       {
+//         "key": "payer",
+//         "value": "g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj"
+//       },
+//       {
+//         "key": "kept",
+//         "value": "0"
+//       }
+//     ],
+//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//   },
+//   {
+//     "type": "Subscribed",
+//     "attrs": [
+//       {
+//         "key": "mandate",
+//         "value": "3"
+//       },
+//       {
+//         "key": "plan",
+//         "value": "1"
+//       },
+//       {
+//         "key": "payer",
+//         "value": "g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj"
+//       },
+//       {
+//         "key": "payee",
+//         "value": "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5"
+//       },
+//       {
+//         "key": "session",
+//         "value": "g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh"
+//       },
+//       {
+//         "key": "expires",
+//         "value": "1234654355"
+//       },
+//       {
+//         "key": "first",
+//         "value": "1234567955"
+//       },
+//       {
+//         "key": "carried",
+//         "value": "0"
 //       }
 //     ],
 //     "pkg_path": "gno.land/r/mandate_dev/mandate"

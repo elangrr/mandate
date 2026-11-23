@@ -70,7 +70,7 @@ func main(cur realm) {
 //
 // ---
 //
-// Built on [gno.land](https://gno.land) · source: not published yet
+// Built on [gno.land](https://gno.land) · source code: [github.com/elangrr/mandate](https://github.com/elangrr/mandate)
 //
 // ==== Render("plan/1")
 // # Plan #1: Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5
@@ -103,11 +103,11 @@ func main(cur realm) {
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 1 -args g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh -args 1266103890 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// The first payment is collected right after, then one every week. If you paid for this plan before and that period has not ended (you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends: time you paid for is never charged twice. Your page at `/r/mandate_dev/mandate:payer/<your address>` shows how to stop.
+// The first payment is collected right after, then one every week. If you paid for this plan before and that period has not ended (you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends, so time you paid for is not charged twice. The one exception: a wallet keeps paid time for at most 16 plans it has left; beyond that, a creator's cancel keeps nothing for that creator's plan, and your own cancel or expiry lets the period that ends soonest go. Your page at `/r/mandate_dev/mandate:payer/<your address>` shows how to stop.
 //
 // ---
 //
-// Built on [gno.land](https://gno.land) · source: not published yet
+// Built on [gno.land](https://gno.land) · source code: [github.com/elangrr/mandate](https://github.com/elangrr/mandate)
 //
 // ==== Render("plan/2")
 // # Plan #2: Demo | one minute
@@ -140,11 +140,11 @@ func main(cur realm) {
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 2 -args g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh -args 1266103890 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// The first payment is collected right after, then one every minute. If you paid for this plan before and that period has not ended (you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends: time you paid for is never charged twice. Your page at `/r/mandate_dev/mandate:payer/<your address>` shows how to stop.
+// The first payment is collected right after, then one every minute. If you paid for this plan before and that period has not ended (you cancelled, the creator cancelled, or your mandate expired), the new mandate's first payment waits until it ends, so time you paid for is not charged twice. The one exception: a wallet keeps paid time for at most 16 plans it has left; beyond that, a creator's cancel keeps nothing for that creator's plan, and your own cancel or expiry lets the period that ends soonest go. Your page at `/r/mandate_dev/mandate:payer/<your address>` shows how to stop.
 //
 // ---
 //
-// Built on [gno.land](https://gno.land) · source: not published yet
+// Built on [gno.land](https://gno.land) · source code: [github.com/elangrr/mandate](https://github.com/elangrr/mandate)
 //
 // ==== Render("payer/g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj")
 // # Mandates of g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj
@@ -174,7 +174,7 @@ func main(cur realm) {
 //
 // ---
 //
-// Built on [gno.land](https://gno.land) · source: not published yet
+// Built on [gno.land](https://gno.land) · source code: [github.com/elangrr/mandate](https://github.com/elangrr/mandate)
 //
 // ==== Render("payer/g1rzuwh5frve732k4futyw45y78rzuty4626zy6h")
 // # Mandates of g1rzuwh5frve732k4futyw45y78rzuty4626zy6h
@@ -191,7 +191,7 @@ func main(cur realm) {
 //
 // ---
 //
-// Built on [gno.land](https://gno.land) · source: not published yet
+// Built on [gno.land](https://gno.land) · source code: [github.com/elangrr/mandate](https://github.com/elangrr/mandate)
 //
 // ==== Render("payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5")
 // # Creator g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5
@@ -211,7 +211,7 @@ func main(cur realm) {
 //
 // ---
 //
-// Built on [gno.land](https://gno.land) · source: not published yet
+// Built on [gno.land](https://gno.land) · source code: [github.com/elangrr/mandate](https://github.com/elangrr/mandate)
 //
 // ==== Render("help")
 // # How to use Mandate
@@ -226,7 +226,7 @@ func main(cur realm) {
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Offer -args "TITLE" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// 2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key:
+// 2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key. **Never send coins to the collector key's address**, not even for fees (the supporter pays every fee): an address that has received coins is an account, and the chain refuses to create a session for it, so nobody new could subscribe. Anyone can do this to a published key with a 1 ugnot send; if it happens, the plan page says so: make a new key and publish it (this command again). New supporters then use the new key, and existing mandates keep being collected with the old one: run one collector per key. `Subscribe` accepts any session key you hand out, so you can also give supporters a fresh key privately:
 //
 // ```
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
@@ -278,7 +278,7 @@ func main(cur realm) {
 //
 // ---
 //
-// Built on [gno.land](https://gno.land) · source: not published yet
+// Built on [gno.land](https://gno.land) · source code: [github.com/elangrr/mandate](https://github.com/elangrr/mandate)
 //
 // ==== Render("nope")
 // # Not found
@@ -287,4 +287,4 @@ func main(cur realm) {
 //
 // ---
 //
-// Built on [gno.land](https://gno.land) · source: not published yet
+// Built on [gno.land](https://gno.land) · source code: [github.com/elangrr/mandate](https://github.com/elangrr/mandate)
