@@ -59,7 +59,10 @@ func now() int64 { return time.Now().Unix() }
 
 func resetState() {
 	nextPlanID, nextMandateID = 0, 0
-	plans, payees, payers, keys = avl.NewTree(), avl.NewTree(), avl.NewTree(), avl.NewTree()
+	plans, payees, keys = avl.NewTree(), avl.NewTree(), avl.NewTree()
+	for i := range buckets {
+		buckets[i] = nil
+	}
 	totalPulls, totalPaid = 0, 0
 }
 
@@ -103,15 +106,16 @@ func snapshot() string {
 	var b strings.Builder
 	n1, n2, pulls, paid := Totals()
 	b.WriteString(itoa(int64(n1)) + "/" + itoa(int64(n2)) + "/" + itoa(pulls) + "/" + itoa(paid) + "/" + itoa(bal(realmAddr)) + "\n")
+	mandate := func(m *Mandate) {
+		b.WriteString(utoa(m.ID) + m.Payer.String() + m.Session.String() + itoa(m.ExpiresAt) + itoa(m.NextPullAt) +
+			itoa(m.Pulls) + itoa(m.CancelledAt) + m.CancelledBy.String() + "\n")
+	}
 	plans.Iterate("", "", func(_ string, v any) bool {
 		p := v.(*Plan)
-		b.WriteString(p.Title + itoa(p.Amount) + itoa(p.Period) + itoa(int64(p.Mandates)) + itoa(p.Pulls) + itoa(p.Paid) + itoa(p.LastPullAt) + "\n")
-		return false
-	})
-	payers.Iterate("", "", func(_ string, v any) bool {
-		for _, m := range v.(*Payer).Mandates {
-			b.WriteString(m.Payer.String() + m.Session.String() + itoa(m.ExpiresAt) + itoa(m.NextPullAt) + itoa(m.LastPullAt) +
-				itoa(m.Pulls) + itoa(m.Paid) + itoa(m.CancelledAt) + m.SessionPubKey + "\n")
+		b.WriteString(p.Title + itoa(p.Amount) + itoa(p.Period) + itoa(int64(p.Supporters.N)) + "c" + itoa(int64(p.Cancelled)) +
+			itoa(p.Pulls) + itoa(p.LastPullAt) + "\n")
+		for i := 0; i < p.Supporters.N; i++ {
+			mandate(p.Supporters.at(i))
 		}
 		return false
 	})
@@ -120,21 +124,22 @@ func snapshot() string {
 		b.WriteString(k + itoa(int64(pe.Plans)) + itoa(pe.Pulls) + itoa(pe.Paid) + pe.CollectorKey + pe.CollectorAddr.String() + "\n")
 		return false
 	})
-	for _, t := range []*avl.Tree{plans, payees, payers, keys} {
+	keys.Iterate("", "", func(k string, v any) bool {
+		b.WriteString(k + ":" + itoa(int64(v.(*KeyIndex).Mandates.N)) + ",")
+		return false
+	})
+	for i, bk := range buckets {
+		if bk == nil {
+			continue
+		}
+		b.WriteString("\nbucket " + itoa(int64(i)) + ":")
+		for k, m := range bk {
+			b.WriteString(" " + k + "=" + utoa(m.ID)) // map order is fixed by insertion in gno
+		}
+	}
+	for _, t := range []*avl.Tree{plans, payees, keys} {
 		b.WriteString(itoa(int64(t.Size())) + ",")
 	}
-	payers.Iterate("", "", func(k string, v any) bool {
-		b.WriteString(k + ":" + itoa(int64(len(v.(*Payer).Mandates))) + ",")
-		return false
-	})
-	keys.Iterate("", "", func(k string, v any) bool {
-		b.WriteString(k + ":" + itoa(int64(len(v.(*KeyIndex).Mandates))) + ",")
-		return false
-	})
-	plans.Iterate("", "", func(k string, v any) bool {
-		b.WriteString(k + ":" + itoa(int64(len(v.(*Plan).Supporters))) + ",")
-		return false
-	})
 	return b.String()
 }
 
@@ -282,7 +287,7 @@ func TestSubscribe(cur realm, t *testing.T) {
 	uassert.Equal(t, "auth/accounts/"+payer.String()+"/session/"+sessA.String(), m.SessionQuery)
 	uassert.True(t, IsActive(payer, pid))
 	uassert.Equal(t, now(), NextPullAt(payer, pid))
-	uassert.Equal(t, 1, planOf(pid).Mandates)
+	uassert.Equal(t, 1, planOf(pid).Supporters.N)
 	uassert.Equal(t, int64(0), bal(realmAddr))
 
 	// A session key that is not the published collector key: no public key recorded.
@@ -345,7 +350,7 @@ func TestResubscribeAfterCancelOrExpiry(cur realm, t *testing.T) {
 	uassert.True(t, IsActive(payer, pid))
 	m, _ := MandateOf(payer, sessA)
 	uassert.Equal(t, second, m.ID)
-	old := MandatesOf(payer, 1)[0]
+	old := MandatesOf(payer, 1)[1] // newest first
 	uassert.Equal(t, first, old.ID)
 	uassert.Equal(t, "cancelled", old.Status)
 	// Let it expire, then subscribe again with the same session.

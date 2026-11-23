@@ -131,7 +131,7 @@ func TestRenderPages(cur realm, t *testing.T) {
 	pe := renders(t, "payee/"+payee.String())
 	has(t, pe, "| 2 | 1 | 1 GNOT |", "payee totals")
 	has(t, pe, "Collector key: `"+sessB.String()+"` (`"+gpubB+"`)", "collector key shown")
-	has(t, pe, "| [Weekly coffee]("+base+":plan/1) | 1 GNOT every week | 1 | 1 |", "plan row")
+	has(t, pe, "| [Weekly coffee]("+base+":plan/1) | 1 GNOT every week | 2 | 1 |", "plan row")
 
 	home := renders(t, "")
 	has(t, home, "| 2 | 3 | 1 | 1 GNOT |", "home totals")

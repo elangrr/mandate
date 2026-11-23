@@ -43,7 +43,7 @@ Three parts:
 - **Revoke any time.** Revoking the session on chain stops every payment at once. The realm cannot see a revoke, so it still shows the mandate as active until it is cancelled or expires; services must also check the session on chain (`auth/accounts/<payer>/session/<key>`, a free query).
 - **Nothing is ever deployed under the realm's path.** A session for `vm/exec:<realm>` also allows every realm under that path (the chain matches by prefix). The realm's deployer must never deploy anything at `gno.land/r/<namespace>/mandate/...`; this repository never will.
 - **The creator needs an always-on collector** holding the collector key.
-- **Subscribing costs a storage deposit** of about 0.55 GNOT (the realm's records for the mandate), paid once by the supporter, plus normal fees.
+- **Subscribing costs a storage deposit** of about 0.3 GNOT (the realm's records for the mandate), paid once by the supporter, plus normal fees. The first supporter who uses a new collector key pays about 0.3 GNOT more for that key's index.
 
 ## Using it
 

@@ -16,11 +16,13 @@ const (
 	Remote  = "https://rpc.onyx.testnets.gno.land:443"
 )
 
-// Gas settings used in the commands (measured on a local chain: Offer and
-// Subscribe use 7M to 12M gas, growing slowly with the number of plans and
-// payers; Pull about 8.5M). Onyx's minimum gas price is 1 ugnot per 1,000
-// gas. The Pull fee counts against the session's spend limit, so it stays
-// well inside FeeAllowance.
+// Gas settings used in the commands. The chain charges the whole fee set,
+// whatever gas is used, and accepts it when fee / gas wanted is at least
+// the current gas price (1 ugnot per 1,000 gas on Onyx). Measured on a local
+// chain: Offer and Subscribe use 7M to 10M gas, Pull 8M to 9M. Reads on
+// Onyx cost more per object (the chain prices a read by its store's depth,
+// and Onyx's store is far larger), so gas wanted keeps about 2x headroom.
+// The Pull fee counts against the session's spend limit (see FeeAllowance).
 const (
 	callGas    = "-gas-fee 100000ugnot -gas-wanted 30000000"
 	PullGasFee = 20_000
@@ -103,10 +105,10 @@ func renderHome(page int) string {
 		}
 		return b.String()
 	}
-	b.WriteString("| Plan | Price | Creator | Supporters | Payments |\n|---|---|---|---|---|\n")
+	b.WriteString("| Plan | Price | Creator | Mandates | Payments |\n|---|---|---|---|---|\n")
 	for _, p := range list {
 		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
-			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + strconv.Itoa(activeCount(p.ID)) +
+			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + strconv.Itoa(p.Mandates) +
 			" | " + itoa(p.Pulls) + " |\n")
 	}
 	b.WriteString(pager("", page, len(list) == PageSize))
@@ -127,20 +129,20 @@ func renderPlan(id uint64, page int) string {
 		b.WriteString(" (a test plan: the period is under a day)")
 	}
 	b.WriteString("\n\n")
-	b.WriteString("Plan " + utoa(p.ID) + " · published " + formatTime(p.CreatedAt) + " · " + plural(activeCount(p.ID), "active supporter", "active supporters") + " · " +
-		plural(int(p.Pulls), "payment", "payments") + ", " + formatUgnot(p.Paid) + " in total · last payment: " + formatTimeOrNever(p.LastPullAt) + "\n\n")
+	b.WriteString("Plan " + utoa(p.ID) + " · published " + formatTime(p.CreatedAt) + " · " + activeText(p) + " · " +
+		plural(int(p.Pulls), "payment", "payments") + ", " + formatUgnot(p.Pulls*p.Amount) + " in total · last payment: " + formatTimeOrNever(p.LastPullAt) + "\n\n")
 	b.WriteString("Plans never change. New terms are published as a new plan.\n\n")
 
 	b.WriteString("## Supporters\n\n")
 	rows := 0
 	var t strings.Builder
-	lo, hi, more := pageBounds(len(p.Supporters), page)
-	for _, m := range p.Supporters[lo:hi] {
+	list, more := p.Supporters.page(page)
+	for _, m := range list {
 		if !m.isActive(now) {
 			continue
 		}
 		t.WriteString("| [" + short(m.Payer) + "](" + link("payer/"+m.Payer.String()) + ") | " + formatTime(m.CreatedAt) + " | " + itoa(m.Pulls) +
-			" | " + formatTimeOrNever(m.LastPullAt) + " |\n")
+			" | " + formatTimeOrNever(m.lastPullAt()) + " |\n")
 		rows++
 	}
 	if rows == 0 {
@@ -235,10 +237,10 @@ func renderPayee(payee address, page int) string {
 		b.WriteString("No plans on this page.\n")
 		return b.String()
 	}
-	b.WriteString("| Plan | Price | Supporters | Payments | Last payment |\n|---|---|---|---|---|\n")
+	b.WriteString("| Plan | Price | Mandates | Payments | Last payment |\n|---|---|---|---|---|\n")
 	for _, p := range list {
 		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) + " | " +
-			strconv.Itoa(activeCount(p.ID)) + " | " + itoa(p.Pulls) + " | " + formatTimeOrNever(p.LastPullAt) + " |\n")
+			strconv.Itoa(p.Mandates) + " | " + itoa(p.Pulls) + " | " + formatTimeOrNever(p.LastPullAt) + " |\n")
 	}
 	b.WriteString(pager("payee/"+payee.String(), page, len(list) == PageSize))
 	return b.String()
@@ -290,24 +292,33 @@ func renderNotFound() string {
 	return "# Not found\n\nThere is no such page. [Back to Mandate](" + link("") + ")\n"
 }
 
-// activeCount counts a plan's active mandates among its latest 1000.
-func activeCount(planID uint64) int {
-	p := planOf(planID)
-	if p == nil {
-		return 0
-	}
+// activeCountLimit is how many of a plan's latest mandates a page reads to
+// count the active ones; pages say "at least" beyond it.
+const activeCountLimit = 200
+
+// activeCount counts the active mandates among the plan's latest
+// activeCountLimit, and says whether that covered all of them.
+func activeCount(p *Plan) (int, bool) {
 	now := time.Now().Unix()
 	n := 0
-	lo := len(p.Supporters) - 1000
+	lo := p.Supporters.N - activeCountLimit
 	if lo < 0 {
 		lo = 0
 	}
-	for _, m := range p.Supporters[lo:] {
-		if m.isActive(now) {
+	for i := lo; i < p.Supporters.N; i++ {
+		if p.Supporters.at(i).isActive(now) {
 			n++
 		}
 	}
-	return n
+	return n, lo == 0
+}
+
+func activeText(p *Plan) string {
+	n, all := activeCount(p)
+	if all {
+		return plural(n, "active supporter", "active supporters")
+	}
+	return "at least " + strconv.Itoa(n) + " active supporters (counted among the latest " + strconv.Itoa(activeCountLimit) + ")"
 }
 
 // link returns the gnoweb link to a page of this realm.

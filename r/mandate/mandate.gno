@@ -53,9 +53,11 @@ const Denom = "ugnot"
 
 // Limits. See docs/design.md for the reasoning behind each value.
 const (
-	// MinAmount is the smallest plan amount, 0.1 GNOT. A Pull costs about
-	// 4M gas (about 4,000 ugnot at Onyx's minimum gas price), so below this
-	// the fees would be a large share of each payment.
+	// MinAmount is the smallest plan amount, 0.1 GNOT. A Pull uses about
+	// 8-9M gas on a local chain, and the chain charges the whole fee the
+	// signer sets, not the gas used: the pages set 20,000 ugnot for 20M gas
+	// wanted (Onyx's minimum price of 1 ugnot per 1,000 gas). At 0.1 GNOT that
+	// fee is already a fifth of the payment; below it, fees would dominate.
 	MinAmount int64 = 100_000
 	// MaxAmount is 1,000,000 GNOT per period: far above any real plan, and
 	// low enough that totals cannot overflow int64 for millions of pulls.
@@ -70,9 +72,13 @@ const (
 	// created: 366 days. A payer renews once a year at most; the chain's own
 	// cap on a session is about 4 years.
 	MaxTerm int64 = 366 * 24 * 60 * 60
-	// FeeAllowance is the gas allowance the pages add to the spend limit of
-	// the session (0.05 GNOT). It covers a Pull's fee at up to about 6x the
-	// minimum gas price, plus the first Pull's small storage deposit.
+	// FeeAllowance is what the pages add to the session's spend limit for
+	// fees (0.05 GNOT). The chain accepts a fee when fee / gas wanted is at
+	// least the current gas price (1 ugnot per 1,000 gas on Onyx, raised by
+	// the chain when blocks are full). With the pages' 20M gas wanted, the
+	// minimum fee is 20,000 ugnot, so the allowance covers a gas price up to
+	// 2.5x Onyx's current one (2.4x on a mandate's first pull, which also
+	// pays a storage deposit of about 20 bytes, 2,000 ugnot).
 	FeeAllowance int64 = 50_000
 	// MaxTitleLen is the longest plan title, in characters.
 	MaxTitleLen = 80
@@ -91,44 +97,36 @@ type Plan struct {
 	Period    int64 // seconds
 	CreatedAt int64 // unix seconds
 
-	Mandates   int        // mandates ever created for this plan
-	Supporters []*Mandate // every mandate for this plan, oldest first
-	Pulls      int64      // successful pulls
-	Paid       int64      // ugnot forwarded to the payee
-	LastPullAt int64      // unix seconds, 0 = never
+	Supporters mandateList // every mandate for this plan, oldest first
+	Cancelled  int         // how many of them were cancelled
+	Pulls      int64       // successful pulls (paid = Pulls * Amount)
+	LastPullAt int64       // unix seconds, 0 = never
 
 	payee *Payee // direct link, so Pull needs no lookup
 }
 
-// Mandate is one payer's permission for one session key on one plan.
+// Mandate is one payer's permission for one session key on one plan. It
+// keeps only what cannot be derived: the amount paid is Pulls * the plan's
+// amount, and the last pull was one period before NextPullAt.
 type Mandate struct {
-	ID            uint64
-	PlanID        uint64
-	Payer         address
-	Session       address // address of the session key the payee holds
-	SessionPubKey string  // its public key, when known (payee's collector key)
-	CreatedAt     int64
-	ExpiresAt     int64 // unix seconds; pulls are refused from this time on
-
+	ID         uint64
+	Payer      address
+	Session    address // address of the session key the payee holds
+	CreatedAt  int64
+	ExpiresAt  int64 // unix seconds; pulls are refused from this time on
 	NextPullAt int64 // unix seconds; the first pull is due at once
-	LastPullAt int64
 	Pulls      int64
-	Paid       int64
 
 	CancelledAt int64 // 0 = not cancelled
 	CancelledBy address
 
-	plan *Plan // direct link, so Pull needs no lookup
-}
-
-// Payer lists a payer's mandates, oldest first.
-type Payer struct {
-	Mandates []*Mandate
+	plan        *Plan    // direct link, so Pull needs no lookup
+	prevOfPayer *Mandate // the payer's previous mandate (history, newest first)
 }
 
 // KeyIndex lists the mandates given to one session key, oldest first.
 type KeyIndex struct {
-	Mandates []*Mandate
+	Mandates mandateList
 }
 
 // Payee holds a payee's plans, totals and published collector key.
@@ -143,12 +141,18 @@ type Payee struct {
 	CollectorAddr address // address derived from CollectorKey by the chain
 }
 
-// State. Each avl insert costs about 2 KB of storage deposit (two nodes of
-// about 1 KB), so every write path inserts into as few trees as possible:
-// Offer into one (plans, plus payees for a new payee), Subscribe into none
-// for a returning payer and key, and into payers or keys only the first time
-// a payer or a session key appears. Per-payer, per-plan and per-key lists
-// are slices inside their owner objects.
+// State. Storage is paid per byte (100 ugnot) and gas mostly per object
+// read or written, so the layout keeps both small (docs/design.md has the
+// numbers):
+//   - plans, payees and collector keys are rare and live in avl trees;
+//   - per-payer lookups (by session key, by plan, history head) live in
+//     256 hash buckets of small maps: a new payer adds map entries of about
+//     200 bytes instead of avl nodes of about 1 KB, and a lookup reads one
+//     bucket;
+//   - per-plan and per-key lists are chunked (see mandateList), so adding
+//     one entry rewrites one small chunk however long the list is;
+//   - a payer's history is a linked list through the mandates, walked only
+//     by free reads.
 var (
 	realmPath string // this realm's package path, captured at init
 
@@ -157,8 +161,9 @@ var (
 
 	plans  = avl.NewTree() // pad(planID) -> *Plan
 	payees = avl.NewTree() // payee -> *Payee
-	payers = avl.NewTree() // payer -> *Payer (all the payer's mandates)
 	keys   = avl.NewTree() // session address -> *KeyIndex
+
+	buckets [256]map[string]*Mandate // see payerBucket
 
 	totalPulls int64
 	totalPaid  int64
@@ -277,33 +282,27 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		panic("mandate: you already have an active mandate for this plan")
 	}
 	nextMandateID++
+	bk := payerBucket(payer)
 	m := &Mandate{
-		ID:         nextMandateID,
-		PlanID:     planID,
-		Payer:      payer,
-		Session:    sessionAddr,
-		CreatedAt:  now,
-		ExpiresAt:  expiresAtUnix,
-		NextPullAt: now,
-		plan:       p,
+		ID:          nextMandateID,
+		Payer:       payer,
+		Session:     sessionAddr,
+		CreatedAt:   now,
+		ExpiresAt:   expiresAtUnix,
+		NextPullAt:  now,
+		plan:        p,
+		prevOfPayer: bk[headKey(payer)],
 	}
-	if pe := payeeOf(p.Payee); pe != nil && pe.CollectorAddr == sessionAddr {
-		m.SessionPubKey = pe.CollectorKey
-	}
-	pr := payerOf(payer)
-	if pr == nil {
-		pr = &Payer{}
-		payers.Set(payer.String(), pr)
-	}
-	pr.Mandates = append(pr.Mandates, m)
+	bk[headKey(payer)] = m
+	bk[sessionKey(payer, sessionAddr)] = m
+	bk[planKey(payer, planID)] = m
 	ki := keyIndexOf(sessionAddr)
 	if ki == nil {
 		ki = &KeyIndex{}
 		keys.Set(sessionAddr.String(), ki)
 	}
-	ki.Mandates = append(ki.Mandates, m)
-	p.Supporters = append(p.Supporters, m)
-	p.Mandates++
+	ki.Mandates.add(m)
+	p.Supporters.add(m)
 	chain.Emit("Subscribed",
 		"mandate", utoa(m.ID),
 		"plan", utoa(planID),
@@ -368,12 +367,9 @@ func checkPull(isSession bool, sess address, paths []string, payer address, sent
 // and emits the event. Every field it writes already exists after the first
 // pull, so later pulls do not grow the realm's storage.
 func recordPull(m *Mandate, p *Plan, now int64) {
-	m.LastPullAt = now
 	m.NextPullAt = now + p.Period
 	m.Pulls++
-	m.Paid += p.Amount
 	p.Pulls++
-	p.Paid += p.Amount
 	p.LastPullAt = now
 	pe := p.payee
 	pe.Pulls++
@@ -410,9 +406,10 @@ func Cancel(cur realm, payer address, sessionAddr address) {
 	}
 	m.CancelledAt = time.Now().Unix()
 	m.CancelledBy = caller
+	p.Cancelled++
 	chain.Emit("Cancelled",
 		"mandate", utoa(m.ID),
-		"plan", utoa(m.PlanID),
+		"plan", utoa(p.ID),
 		"payer", m.Payer.String(),
 		"by", caller.String(),
 	)
@@ -468,48 +465,12 @@ func payeeOf(a address) *Payee {
 	return v.(*Payee)
 }
 
-func payerOf(a address) *Payer {
-	v := payers.Get(a.String())
-	if v == nil {
-		return nil
-	}
-	return v.(*Payer)
-}
-
 func keyIndexOf(a address) *KeyIndex {
 	v := keys.Get(a.String())
 	if v == nil {
 		return nil
 	}
 	return v.(*KeyIndex)
-}
-
-// mandateBySession returns the payer's latest mandate for this session key.
-func mandateBySession(payer, sess address) *Mandate {
-	pr := payerOf(payer)
-	if pr == nil {
-		return nil
-	}
-	for i := len(pr.Mandates) - 1; i >= 0; i-- {
-		if pr.Mandates[i].Session == sess {
-			return pr.Mandates[i]
-		}
-	}
-	return nil
-}
-
-// mandateByPayerPlan returns the payer's latest mandate for the plan.
-func mandateByPayerPlan(payer address, planID uint64) *Mandate {
-	pr := payerOf(payer)
-	if pr == nil {
-		return nil
-	}
-	for i := len(pr.Mandates) - 1; i >= 0; i-- {
-		if pr.Mandates[i].PlanID == planID {
-			return pr.Mandates[i]
-		}
-	}
-	return nil
 }
 
 // validateTitle returns "" or the reason the title is refused: blank, too

@@ -39,8 +39,14 @@ Each fact was checked in the source of gno v1.8.0 (commit fc79041f4, `github.com
 ## Storage and gas
 
 - Each insert into a `p/nt/avl/v0` tree writes two nodes of about 1 KB each including their heap items (measured with a filetest's `// Realm:` ops). At 100 ugnot per byte, that is about 0.2 GNOT per insert. Gas for a tree operation grows with the tree's depth, about 1M gas per level loaded.
-- Fields that go from zero to non-zero grow an object (amino omits zero values); after that, rewriting the same fields adds nothing. That is why only the first Pull of a mandate adds storage (22 bytes).
+- Fields that go from zero to non-zero grow an object (amino omits zero values); after that, rewriting the same fields adds nothing. That is why only the first Pull of a mandate adds storage (about 20 bytes).
 - Gas used by any call of this realm starts at about 2.4M (a refused call through the session guard), mostly loading the realm.
+
+- Fees: the chain charges the whole gas fee the signer sets, whatever gas is used, and accepts it when fee ÷ gas wanted ≥ the block gas price and the node's minimum (`EnsureSufficientMempoolFees`, `tm2/pkg/sdk/auth/ante.go:548-600`). `gnokey query auth/gasprice` on Onyx answered `{"gas": "1000", "price": "1ugnot"}` (read-only, 2026-11-23); the chain raises it when blocks are full.
+- Gas for store access (`tm2/pkg/store/types/gas.go:405-420`): a read costs 59,000 flat plus 17 per byte, a write 24,000 plus 14 per byte, each multiplied by the store's expected depth, which is the bit length of the number of keys (`expectedDepth100`, `tm2/pkg/store/iavl/store.go:45`); amino adds 3 per byte each way. So gas is mostly per object touched, and a chain with more keys (Onyx) charges more per object than a fresh local chain.
+- Measured storage per entry (filetest realm ops): avl insert about 2.2 KB (two nodes with heap items); a map entry about 200–400 bytes; a pointer appended to a slice about 200 bytes; a struct behind a pointer adds a heap item of about 350 bytes. `make([]T, 0, n)` stores all n slots, empty or not.
+- Appending to a slice rewrites its whole backing array object (gas grows with its length); Mandate keeps long lists in chunks for that reason.
+- Gno map iteration follows insertion order, so iterating a map in a test is deterministic.
 
 ## Adena (onbloc/adena-wallet e71fa1b, v1.22.5)
 

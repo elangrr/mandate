@@ -32,13 +32,13 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 
 | Limit | Value | Why |
 |---|---|---|
-| Minimum amount | 0.1 GNOT (100,000 ugnot) | A Pull uses about 8–9M gas, about 9,000 ugnot at Onyx's minimum gas price; below 0.1 GNOT the fee would be a large share of each payment. |
+| Minimum amount | 0.1 GNOT (100,000 ugnot) | The chain charges the whole fee the signer sets, not the gas used. The pages' Pull fee is 20,000 ugnot (see below), already a fifth of a 0.1 GNOT payment; below that, fees would dominate. |
 | Maximum amount | 1,000,000 GNOT per period | Far above any real plan; keeps all totals far from int64 overflow. |
 | Minimum period | 60 seconds | Block times are seconds; the chain's spend period is in seconds. Short periods exist for demos and tests; plan pages flag anything under a day as a test plan. |
 | Maximum period | 366 days | A yearly plan plus slack. |
 | Maximum term | 366 days from Subscribe | A payer renews at most once a year. The chain's own cap on a session is about 4 years. |
-| Fee allowance (pages) | 0.05 GNOT | Added to the session's spend limit. Covers a Pull's fee at up to about 2.5x the measured gas at the minimum price, plus the first Pull's storage deposit (22 bytes, 2,200 ugnot). |
-| Pull fee (pages, collector) | 20,000 ugnot for 20M gas wanted | 1 ugnot per 1,000 gas, Onyx's minimum price; measured use is 7.9–9.0M gas. |
+| Fee allowance (pages) | 0.05 GNOT | Added to the session's spend limit. The chain accepts a fee when fee ÷ gas wanted ≥ the current gas price (`EnsureSufficientMempoolFees`, `tm2/pkg/sdk/auth/ante.go:548`; Onyx answers `auth/gasprice` with 1 ugnot per 1,000 gas, and raises it when blocks are full). At 20M gas wanted the minimum fee is 20,000 ugnot, so the allowance covers a gas price up to 2.5x today's (2.4x on a first pull, which also pays about 2,000 ugnot of storage). |
+| Pull fee (pages, collector) | 20,000 ugnot for 20M gas wanted | Exactly today's Onyx price. Measured use on a local chain is 7.6–8.2M gas; reads on Onyx cost more per object, because the chain prices a read by the depth of its store (`expectedDepth100`, `tm2/pkg/store/iavl/store.go:45`) and Onyx's store is far larger. 20M keeps about 2x headroom; the first Pull on Onyx will tell. |
 | Title | 1–80 characters, one line | Same rules as QuestMaster: UTF-8, no control characters, no U+2028/U+2029. |
 | Page size | 20 rows | Every list read and every page is paged. |
 | Mandates per wallet | 16 at a time | The chain's limit on sessions per account (`tm2/pkg/std/account.go:303`). The realm does not count them; the chain refuses the 17th session. |
@@ -65,7 +65,7 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 | 14 | Pull called by another realm (a proxy that adds its own logic) | payer | Realm: Pull and every other crossing function require a direct call from a user (`IsUserCall`). | `TestPullEntryPoint`, `TestOfferRefusals`, `TestSubscribeRefusals`. |
 | 15 | Injection through plan titles (Markdown, HTML, links, mentions, math) | page readers | Titles are validated (one line, no control characters) and escaped with `p/nt/markdown/sanitize/v0` plus gnoweb-specific steps (`$`, `@`, leading and spaced `g1` addresses). | `TestRenderInjection` (14 hostile titles on every page that shows them); `z_pages_filetest` golden; mutations removing `$` or address escaping are caught. |
 | 16 | Expired terms | payer | Realm: `now >= ExpiresAt` refused. Chain: session expiry. | `TestPullRules` (one second before allowed, at expiry refused); flow 7 (chain expiry and realm expiry each refuse). |
-| 17 | Spam: many plans or fake supporters | readers, later subscribers | Every list is paged (20 rows). Each record costs its creator a storage deposit (about 0.35 GNOT per plan, 0.55 GNOT per mandate). A plan's supporter list is one slice, so a plan with very many supporters makes each new Subscribe to it somewhat more expensive in gas. | `TestPaging`, `TestRenderPaging`. |
+| 17 | Spam: many plans or fake supporters | readers, later subscribers | Every list is paged (20 rows). Each record costs its creator a storage deposit (about 0.4–0.6 GNOT per plan, about 0.3 GNOT per mandate). Lists are chunked, so a plan with thousands of supporters costs a new subscriber the same as an empty one. | `TestPaging`, `TestRenderPaging`. |
 | 18 | The collector script run against the wrong network | payee | `scripts/collect.sh` has no defaults, accepts only `dev` with a local remote or `onyx-1` with the Onyx RPC. | Flow 6: refused without `-remote`, with onyx-1 and a local remote, and with another chain id. |
 | 19 | The payee publishes a collector key whose address does not match | payer | The realm derives the address from the key itself (`chain.PubKeyAddress`). | `TestSetCollectorKey` (bad checksum, empty payload, wrong prefix refused; derived address checked). |
 
@@ -75,19 +75,40 @@ Mandate is one realm, `gno.land/r/<namespace>/mandate` (the placeholder in this 
 
 ## Measured costs (local gnodev, gno v1.8.0 fc79041f4, the same commit Onyx runs)
 
-| Call | Gas used | Storage delta |
-|---|---|---|
-| Offer (first plan of a payee) | 7.2M | 5,306 bytes (0.53 GNOT) |
-| Offer (later plans) | 8.0–9.8M, growing slowly with the number of plans | about 3,750 bytes (0.38 GNOT) |
-| SetCollectorKey | 4.6M | 193 bytes |
-| session create (chain) | 1.36M | none (auth store) |
-| Subscribe (new payer, new collector key) | 8.6M | 6,943 bytes (0.69 GNOT) |
-| Subscribe (new payer, known key) | not measured on chain | 5,439 bytes (0.54 GNOT), measured in a filetest |
-| Pull, first of a mandate | 8.5–9.0M | 22 bytes (2,200 ugnot, counted against the spend limit) |
-| Pull, later | 7.9–8.2M | **0 bytes** |
-| Refused Pull (realm rule) | 4.9–5.4M | none (reverted) |
-| Cancel | 5.3–5.8M | 64 bytes |
+From `scripts/local-flow.sh` (real signed transactions). M1 is the layout of commit b1fcb06; M1.1 is the current one.
 
-Where Subscribe's bytes go (from a filetest's realm ops): each avl insert writes two nodes of about 1 KB each (with their heap items), the Mandate record is about 1.5 KB, the Payer record about 1.2 KB, and the per-plan and per-key slices grow by a few hundred bytes when they reallocate. That is why the realm keeps only four trees (plans, payees, payers, collector keys) and stores per-payer, per-plan and per-key lists as slices inside their owner records: a returning payer with a known key adds no tree node at all.
+| Call | Gas M1 | Gas M1.1 | Storage M1 | Storage M1.1 |
+|---|---|---|---|---|
+| Offer (first plan of a payee) | 7.2M | 7.5M | 5,306 B | 5,781 B |
+| SetCollectorKey | 4.6M | 4.8M | 193 B | 195 B |
+| session create (chain) | 1.36M | 1.36M | 0 (auth store) | 0 |
+| Subscribe: new payer, new key | 8.6M | 9.9M | 6,943 B | 6,185 B |
+| Subscribe: returning payer, new key | 9.7M | 10.7M | 5,644 B | 6,694 B |
+| **Subscribe: new payer, known key** | 10.0M | 11.0M | **5,429 B (0.54 GNOT)** | **3,145 B (0.31 GNOT)** |
+| Subscribe: returning payer, known key | 11.0M | 11.9M | 2,256 B | 2,274 B |
+| Pull, first of a mandate | 9.1M | 8.2M | 20 B | 18 B |
+| Pull, later | 8.3M | 7.6M | **0 B** | **0 B** |
+| Cancel | 5.3–5.9M | 5.3M | 64–76 B | 64–76 B |
 
-Every Pull updates only fields that already exist after the first pull (mandate, plan, payee totals and two package counters), so later pulls add no storage. The first pull adds 22 bytes because amino omits zero values.
+"New key" means the first mandate ever given to that collector key, which creates its index (an avl insert plus the index record, about 3.5 KB): once per payee key, not once per payer. Gas grows a little through the run as the trees deepen.
+
+### Growth with plan size and payer history
+
+Marginal cost of one call on top of a setup, from pairs of filetests (filetest gas is lower than chain gas; the trend is what matters):
+
+| Case | Gas M1 | Gas M1.1 | Storage M1 | Storage M1.1 |
+|---|---|---|---|---|
+| Subscribe, new payer, plan with 200 supporters | 3.47M | 2.61M | 5,443 B | 2,856 B |
+| Subscribe, new payer, plan with 1,000 supporters | **5.59M** | **2.70M** | 5,467 B | 2,850 B |
+| Cancel, plan with 200 / 1,000 supporters | 3.72M / 3.74M | 3.67M / 3.67M | 70 B | 70 B |
+| Subscribe, returning payer with 0 / 50 past mandates, known key | 2.37M / 2.58M | 2.50M / 2.54M | 2,582 / 2,544 B | 2,626 / 2,599 B |
+
+In M1 every Subscribe rewrote the plan's whole supporter array (and the payer's), so its gas grew by about 3,000 per existing supporter. In M1.1:
+
+- **Per-plan and per-key lists are chunked** (`mandateList`, `r/mandate/store.gno`): the first 32 entries live inline, later ones in chunks of 32. Adding an entry rewrites at most one chunk. The list of chunks is rewritten once every 32 entries (at 10,000 supporters, about 313 references). Slices are never preallocated: with `make(.., 0, 32)` the first subscriber of a plan paid about 4 KB for 31 empty slots.
+- **Per-payer lookups** (by session key, by plan, and the head of the payer's history) are entries in one of 256 hash buckets (`map[string]*Mandate`, chosen by the first byte of sha256(payer)). An entry is about 200 bytes, against about 2.2 KB for an avl insert. A lookup reads one bucket object instead of one object per tree level, which is what reads are priced by (59,000 gas × depth per object, 17 gas per byte). A bucket holds about three entries per payer, so at 10,000 payers a bucket is about 120 entries (about 25 KB, roughly 1M gas to read and rewrite); at 100,000 payers it would be about ten times that. If Mandate ever gets that big, the bucket count can grow in a new version.
+- **A payer's history** is a linked list through the mandates (`prevOfPayer`). It is walked only by free reads (the payer page, `MandatesOf`, now newest first).
+- **Mandate records were slimmed.** Paid (= pulls × price), LastPullAt (= next pull − period), PlanID and the session's public key are derived. The public key is the payee's current collector key when the address matches; otherwise the payer page shows how to look it up.
+- **Pages read at most 200 mandates to count the active supporters of a plan.** Beyond that, they say "at least N (counted among the latest 200)". The home and payee tables show the number of mandates rather than an active count, so a page never reads thousands of records.
+
+Every Pull updates only fields that already exist after the first pull (mandate, plan, payee totals and two package counters), so later pulls add no storage. The first pull adds about 20 bytes because amino omits zero values.

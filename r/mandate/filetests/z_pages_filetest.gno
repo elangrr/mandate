@@ -64,10 +64,10 @@ func main(cur realm) {
 //
 // ## Supporter pages
 //
-// | Plan | Price | Creator | Supporters | Payments |
+// | Plan | Price | Creator | Mandates | Payments |
 // |---|---|---|---|---|
 // | [Demo \| one minute](/r/mandate_dev/mandate:plan/2) | 0.25 GNOT every minute | [g1jg8mtu…sqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5) | 0 | 0 |
-// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | [g1jg8mtu…sqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5) | 1 | 0 |
+// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | [g1jg8mtu…sqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5) | 2 | 0 |
 //
 // ---
 //
@@ -207,9 +207,9 @@ func main(cur realm) {
 //
 // ## Plans
 //
-// | Plan | Price | Supporters | Payments | Last payment |
+// | Plan | Price | Mandates | Payments | Last payment |
 // |---|---|---|---|---|
-// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | 1 | 0 | never |
+// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | 2 | 0 | never |
 // | [Demo \| one minute](/r/mandate_dev/mandate:plan/2) | 0.25 GNOT every minute | 0 | 0 | never |
 //
 // ---

@@ -5,7 +5,8 @@
 #
 # Every step checks its result and the script stops with a non-zero exit at
 # the first mismatch. It proves:
-#    1. subscribe, then pull: payer down by amount + fee, payee up by exactly
+#    1. subscribe (also measured for a new payer and a returning payer with a
+#       known key), then pull: payer down by amount + fee, payee up by exactly
 #       the amount, realm balance zero; the Pulled event; storage delta of
 #       the first and later pulls (later pulls must add nothing)
 #    2. a second pull in the same period is refused (by the chain's spend
@@ -250,10 +251,11 @@ EXP="$((T0 + 1800))"
 expect_ok "session for coll (1.05 GNOT / 60 s, exactly this realm)" payer $(session_args "$GPUB" "vm/exec:$REALM" 1050000ugnot 60 "$EXP")
 note_gas "session create"
 expect_ok "Subscribe plan 1 with coll" payer call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL" -args "$EXP" "${CALL[@]}"
-note_gas "Subscribe"
+note_gas "Subscribe (new payer, new key)"
 # coll2: a far too generous chain limit, so the realm's own rules show.
 expect_ok "session for coll2 (50 GNOT / 60 s)" payer $(session_args "$GPUB2" "vm/exec:$REALM" 50000000ugnot 60 "$EXP")
 expect_ok "Subscribe plan 2 with coll2" payer call -pkgpath "$REALM" -func Subscribe -args 2 -args "$COLL2" -args "$EXP" "${CALL[@]}"
+note_gas "Subscribe (returning payer, new key)"
 # coll3: the chain session expires soon, the realm terms do not.
 EXP3="$((T0 + 100))"
 expect_ok "session for coll3 (chain expiry in ~100 s)" payer $(session_args "$GPUB3" "vm/exec:$REALM" 600000ugnot 60 "$EXP3")
@@ -265,6 +267,15 @@ expect_ok "Subscribe plan 4 with coll4, realm expiry in ~100 s" payer call -pkgp
 # coll5: scoped to the whole namespace, wider than this realm.
 expect_ok "session for coll5 (vm/exec:gno.land/r/mandate_dev, too wide)" payer $(session_args "$GPUB5" "vm/exec:gno.land/r/mandate_dev" 5000000ugnot 60 "$EXP")
 eq "IsActive(payer, 1)" "(true bool)" "$(qeval "$REALM.IsActive(address(\"$PAYER\"), 1)")"
+
+step "1b. what subscribing costs a new payer and a returning payer whose key is already known"
+expect_ok "stranger subscribes to plan 1 with coll (new payer, known key)" stranger call -pkgpath "$REALM" -func Subscribe -args 1 -args "$COLL" -args "$EXP" "${CALL[@]}"
+note_gas "Subscribe (new payer, known key)"
+expect_ok "stranger cancels it" stranger call -pkgpath "$REALM" -func Cancel -args "$STRANGER" -args "$COLL" "${CALL[@]}"
+note_gas "Cancel (right after subscribing)"
+expect_ok "stranger subscribes to plan 2 with coll (returning payer, known key)" stranger call -pkgpath "$REALM" -func Subscribe -args 2 -args "$COLL" -args "$EXP" "${CALL[@]}"
+note_gas "Subscribe (returning payer, known key)"
+expect_ok "stranger cancels it" stranger call -pkgpath "$REALM" -func Cancel -args "$STRANGER" -args "$COLL" "${CALL[@]}"
 
 # ---- first pull -------------------------------------------------------------------
 step "first pull: coll signs for the payer, exactly 1 GNOT"

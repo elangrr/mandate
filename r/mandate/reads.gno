@@ -16,7 +16,8 @@ type PlanInfo struct {
 	Amount     int64
 	Period     int64
 	CreatedAt  int64
-	Mandates   int
+	Mandates   int // mandates ever created for this plan
+	Cancelled  int // how many of them were cancelled
 	Pulls      int64
 	Paid       int64
 	LastPullAt int64
@@ -44,6 +45,9 @@ type MandateInfo struct {
 	Status string
 	// Due is true when the mandate is active and a pull is allowed now.
 	Due bool
+	// SessionPubKey is the session key's public key when it is the payee's
+	// current collector key, "" otherwise.
+	//
 	// SessionQuery is the free query an off-chain checker must also run:
 	// the realm cannot see a session revoked or expired on chain.
 	SessionQuery string
@@ -143,13 +147,29 @@ func PlansOf(payee address, page int) []PlanInfo {
 	return out
 }
 
-// MandatesOf lists a payer's mandates (all states), oldest first.
+// MandatesOf lists a payer's mandates (all states), newest first.
 func MandatesOf(payer address, page int) []MandateInfo {
-	pr := payerOf(payer)
-	if pr == nil {
-		return []MandateInfo{}
+	list, _ := payerPage(payer, page)
+	return infos(list)
+}
+
+// payerPage returns page `page` of the payer's mandates, newest first, and
+// whether another page follows. It walks the payer's history, which only
+// free reads do.
+func payerPage(payer address, page int) ([]*Mandate, bool) {
+	skip := offset(page)
+	out := []*Mandate{}
+	for m := payerHead(payer); m != nil; m = m.prevOfPayer {
+		if skip > 0 {
+			skip--
+			continue
+		}
+		if len(out) == PageSize {
+			return out, true
+		}
+		out = append(out, m)
 	}
-	return infos(pr.Mandates, page)
+	return out, false
 }
 
 // SupportersOf lists a plan's mandates (all states), oldest first.
@@ -158,7 +178,8 @@ func SupportersOf(planID uint64, page int) []MandateInfo {
 	if p == nil {
 		return []MandateInfo{}
 	}
-	return infos(p.Supporters, page)
+	list, _ := p.Supporters.page(page)
+	return infos(list)
 }
 
 // MandatesForSession lists the mandates of every payer that gave a session
@@ -168,7 +189,8 @@ func MandatesForSession(sessionAddr address, page int) []MandateInfo {
 	if ki == nil {
 		return []MandateInfo{}
 	}
-	return infos(ki.Mandates, page)
+	list, _ := ki.Mandates.page(page)
+	return infos(list)
 }
 
 // CollectorList is MandatesForSession as plain text for scripts: one line
@@ -182,9 +204,9 @@ func CollectorList(sessionAddr address, page int) string {
 	var b strings.Builder
 	more := false
 	if ki := keyIndexOf(sessionAddr); ki != nil {
-		lo, hi, m := pageBounds(len(ki.Mandates), page)
+		list, m := ki.Mandates.page(page)
 		more = m
-		for _, mm := range ki.Mandates[lo:hi] {
+		for _, mm := range list {
 			mi := mm.info(now)
 			due := "wait"
 			if mi.Due {
@@ -202,11 +224,10 @@ func CollectorList(sessionAddr address, page int) string {
 	return b.String()
 }
 
-func infos(list []*Mandate, page int) []MandateInfo {
+func infos(list []*Mandate) []MandateInfo {
 	now := time.Now().Unix()
 	out := []MandateInfo{}
-	lo, hi, _ := pageBounds(len(list), page)
-	for _, m := range list[lo:hi] {
+	for _, m := range list {
 		out = append(out, m.info(now))
 	}
 	return out
@@ -220,9 +241,10 @@ func (p *Plan) info() PlanInfo {
 		Amount:     p.Amount,
 		Period:     p.Period,
 		CreatedAt:  p.CreatedAt,
-		Mandates:   p.Mandates,
+		Mandates:   p.Supporters.N,
+		Cancelled:  p.Cancelled,
 		Pulls:      p.Pulls,
-		Paid:       p.Paid,
+		Paid:       p.Pulls * p.Amount,
 		LastPullAt: p.LastPullAt,
 	}
 }
@@ -232,25 +254,43 @@ func (m *Mandate) info(now int64) MandateInfo {
 	st := m.status(now)
 	return MandateInfo{
 		ID:            m.ID,
-		PlanID:        m.PlanID,
+		PlanID:        p.ID,
 		Payer:         m.Payer,
 		Payee:         p.Payee,
 		Session:       m.Session,
-		SessionPubKey: m.SessionPubKey,
+		SessionPubKey: m.sessionPubKey(),
 		Amount:        p.Amount,
 		Period:        p.Period,
 		CreatedAt:     m.CreatedAt,
 		ExpiresAt:     m.ExpiresAt,
 		NextPullAt:    m.NextPullAt,
-		LastPullAt:    m.LastPullAt,
+		LastPullAt:    m.lastPullAt(),
 		Pulls:         m.Pulls,
-		Paid:          m.Paid,
+		Paid:          m.Pulls * p.Amount,
 		CancelledAt:   m.CancelledAt,
 		CancelledBy:   m.CancelledBy,
 		Status:        st,
 		Due:           st == "active" && now >= m.NextPullAt,
 		SessionQuery:  "auth/accounts/" + m.Payer.String() + "/session/" + m.Session.String(),
 	}
+}
+
+// lastPullAt is when the last pull happened (0 = never): each pull sets
+// NextPullAt to its own time plus one period.
+func (m *Mandate) lastPullAt() int64 {
+	if m.Pulls == 0 {
+		return 0
+	}
+	return m.NextPullAt - m.plan.Period
+}
+
+// sessionPubKey returns the session key's public key when it is the payee's
+// current collector key, "" otherwise (the realm then does not know it).
+func (m *Mandate) sessionPubKey() string {
+	if pe := m.plan.payee; pe.CollectorAddr == m.Session {
+		return pe.CollectorKey
+	}
+	return ""
 }
 
 // offset turns a 1-based page number into a row offset; pages below 1 and
