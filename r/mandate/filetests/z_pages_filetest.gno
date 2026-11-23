@@ -91,7 +91,7 @@ func main(cur realm) {
 //
 // You need [gnokey](https://docs.gno.land) and a key with some GNOT on onyx-1. Replace `YOUR_KEY` with your key's name. You can support one plan of each creator at a time: every plan of a creator is collected by the same key, and the chain allows one session per key. To switch plans, cancel and revoke first (time you paid for carries over to the same plan only). These two commands give the creator's collector key (`g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh`) the right to take **at most 1.1 GNOT every week** (the price plus a fee allowance), through this realm only, for one year.
 //
-// 1. Create the session (your own key; it cannot be done with a session):
+// 1. Create the session (your own key; it cannot be done with a session). If the chain answers `session key address collides with existing account`, this collector key can no longer be used for new sessions: ask the creator to publish a new one.
 //
 // ```
 // gnokey maketx session create -pubkey gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 1100000ugnot -spend-period 604800 -expires-at 1266103890 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
@@ -128,7 +128,7 @@ func main(cur realm) {
 //
 // You need [gnokey](https://docs.gno.land) and a key with some GNOT on onyx-1. Replace `YOUR_KEY` with your key's name. You can support one plan of each creator at a time: every plan of a creator is collected by the same key, and the chain allows one session per key. To switch plans, cancel and revoke first (time you paid for carries over to the same plan only). These two commands give the creator's collector key (`g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh`) the right to take **at most 0.35 GNOT every minute** (the price plus a fee allowance), through this realm only, for one year.
 //
-// 1. Create the session (your own key; it cannot be done with a session):
+// 1. Create the session (your own key; it cannot be done with a session). If the chain answers `session key address collides with existing account`, this collector key can no longer be used for new sessions: ask the creator to publish a new one.
 //
 // ```
 // gnokey maketx session create -pubkey gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 350000ugnot -spend-period 60 -expires-at 1266103890 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
@@ -226,7 +226,7 @@ func main(cur realm) {
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Offer -args "TITLE" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// 2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key. **Never send coins to the collector key's address**, not even for fees (the supporter pays every fee): an address that has received coins is an account, and the chain refuses to create a session for it, so nobody new could subscribe. Anyone can do this to a published key with a 1 ugnot send; if it happens, the plan page says so: make a new key and publish it (this command again). New supporters then use the new key, and existing mandates keep being collected with the old one: run one collector per key. `Subscribe` accepts any session key you hand out, so you can also give supporters a fresh key privately:
+// 2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key. **Never send coins to the collector key's address**, not even for fees (the supporter pays every fee): an address that has received coins is an account, and the chain refuses to create a session for it, so nobody new could subscribe. Anyone can do this to a published key with a 1 ugnot send, and a realm can even make the address an account that holds nothing. In most cases the plan page then says so; in every case supporters get the chain error `session key address collides with existing account` when they create the session, and the collector script warns. Then the key can no longer be used for new sessions: make a new key and publish it (this command again). New supporters then use the new key, and existing mandates keep being collected with the old one: run one collector per key. `Subscribe` accepts any session key you hand out, so you can also give supporters a fresh key privately:
 //
 // ```
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY

@@ -217,8 +217,8 @@ func renderPlan(id uint64, from int) string {
 		return b.String()
 	}
 	if collectorFunded(pe.CollectorAddr) {
-		b.WriteString("**New supporters cannot join right now.** The creator's collector key (`" + pe.CollectorAddr.String() + "`) has received coins, and the chain refuses a session for a key whose address holds an account. " +
-			"This creator must publish a new collector key before new supporters can join. Existing supporters are not affected. " +
+		b.WriteString("**New supporters cannot join right now.** The creator's collector key (`" + pe.CollectorAddr.String() + "`) has received coins, so its address is an account, and the chain refuses a session for a key whose address is an account. " +
+			"This creator must publish a new collector key before new supporters can join. Existing mandates keep working until they expire; renewing needs the new key. " +
 			"A creator can also hand you a fresh session key privately: `Subscribe` accepts any session key, not only the published one.\n\n")
 		return b.String()
 	}
@@ -226,7 +226,7 @@ func renderPlan(id uint64, from int) string {
 		"You can support one plan of each creator at a time: every plan of a creator is collected by the same key, and the chain allows one session per key. To switch plans, cancel and revoke first (time you paid for carries over to the same plan only). ")
 	b.WriteString("These two commands give the creator's collector key (`" + pe.CollectorAddr.String() + "`) the right to take **at most " +
 		formatUgnot(spend) + " every " + formatPeriod(p.Period) + "** (the price plus a fee allowance), through this realm only, for one year.\n\n")
-	b.WriteString("1. Create the session (your own key; it cannot be done with a session):\n\n")
+	b.WriteString("1. Create the session (your own key; it cannot be done with a session). If the chain answers `session key address collides with existing account`, this collector key can no longer be used for new sessions: ask the creator to publish a new one.\n\n")
 	b.WriteString("```\ngnokey maketx session create -pubkey " + pe.CollectorKey + " -allow-paths vm/exec:" + realmPath +
 		" -spend-limit " + itoa(spend) + "ugnot -spend-period " + itoa(p.Period) + " -expires-at " + itoa(expires) + " " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 	b.WriteString("2. Record the terms here:\n\n")
@@ -306,7 +306,7 @@ func renderPayee(payee address, page int) string {
 	} else {
 		b.WriteString("Collector key: `" + pe.CollectorAddr.String() + "` (`" + pe.CollectorKey + "`)\n\n")
 		if collectorFunded(pe.CollectorAddr) {
-			b.WriteString("**This collector key's address has received coins, so the chain refuses new sessions for it: nobody new can subscribe.** The creator must publish a new collector key; existing mandates keep being collected with this one.\n\n")
+			b.WriteString("**This collector key's address has received coins, so the chain refuses new sessions for it: nobody new can subscribe.** The creator must publish a new collector key; existing mandates keep being collected with this one until they expire, and renewing needs the new key.\n\n")
 		}
 	}
 	b.WriteString("## Plans\n\n")
@@ -336,7 +336,8 @@ func renderHelp() string {
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func Offer -args \"TITLE\" -args 1000000 -args 604800 " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 	b.WriteString("2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key. " +
 		"**Never send coins to the collector key's address**, not even for fees (the supporter pays every fee): an address that has received coins is an account, and the chain refuses to create a session for it, so nobody new could subscribe. " +
-		"Anyone can do this to a published key with a 1 ugnot send; if it happens, the plan page says so: make a new key and publish it (this command again). New supporters then use the new key, and existing mandates keep being collected with the old one: run one collector per key. " +
+		"Anyone can do this to a published key with a 1 ugnot send, and a realm can even make the address an account that holds nothing. In most cases the plan page then says so; in every case supporters get the chain error `session key address collides with existing account` when they create the session, and the collector script warns. " +
+		"Then the key can no longer be used for new sessions: make a new key and publish it (this command again). New supporters then use the new key, and existing mandates keep being collected with the old one: run one collector per key. " +
 		"`Subscribe` accepts any session key you hand out, so you can also give supporters a fresh key privately:\n\n")
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 	b.WriteString("3. Collect each payment when it is due, signed with the collector key on behalf of the supporter. Only the exact price is accepted, at most once per period. The fee counts against the supporter's fee allowance, so keep it small. " +

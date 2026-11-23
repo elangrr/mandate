@@ -837,6 +837,8 @@ func TestFundedCollectorKey(cur realm, t *testing.T) {
 	pe, _ := GetPayee(payee)
 	uassert.False(t, pe.CollectorFunded)
 	has(t, renders(t, "plan/"+utoa(pid)), "gnokey maketx session create", "commands shown")
+	has(t, renders(t, "plan/"+utoa(pid)), "`session key address collides with existing account`", "the chain's error, where a supporter looks")
+	has(t, renders(t, "help"), "a realm can even make the address an account that holds nothing", "help is true when the notice cannot fire")
 	// a key whose address already received coins is refused
 	testing.IssueCoins(sessB, chain.Coins{{Denom: "ugnot", Amount: 1}})
 	testing.SetOriginSend(nil)
@@ -851,6 +853,7 @@ func TestFundedCollectorKey(cur realm, t *testing.T) {
 	pp := renders(t, "plan/"+utoa(pid))
 	has(t, pp, "New supporters cannot join right now", "plan page notice")
 	has(t, pp, "must publish a new collector key", "what to do")
+	has(t, pp, "Existing mandates keep working until they expire; renewing needs the new key", "honest about renewals")
 	hasNot(t, pp, "gnokey maketx session create", "no command the chain would refuse")
 	has(t, renders(t, "payee/"+payee.String()), "nobody new can subscribe", "payee page notice")
 	has(t, renders(t, "help"), "Never send coins to the collector key", "help says so")
