@@ -24,7 +24,7 @@ const (
 // and Onyx's store is far larger), so gas wanted keeps about 2x headroom.
 // The Pull fee counts against the session's spend limit (see FeeAllowance).
 const (
-	callGas    = "-gas-fee 100000ugnot -gas-wanted 30000000"
+	callGas    = "-gas-fee 100000ugnot -gas-wanted 40000000"
 	PullGasFee = 20_000
 	pullGas    = "-gas-fee 20000ugnot -gas-wanted 20000000"
 )
@@ -312,7 +312,7 @@ func renderHelp() string {
 	b.WriteString("Amounts are in ugnot (1 GNOT = 1,000,000 ugnot); periods and times are in seconds and unix seconds.\n\n")
 
 	b.WriteString("## For creators\n\n")
-	b.WriteString("1. Publish a plan with your own key: a title (one line, at most " + strconv.Itoa(MaxTitleLen) + " characters), the amount (at least " +
+	b.WriteString("1. Publish a plan with your own key: a title (one line, at most " + strconv.Itoa(MaxTitleLen) + " characters, no invisible formatting characters: direction controls and zero-width characters, the joiner included, are refused, so emoji joined into one, such as families, cannot be used), the amount (at least " +
 		formatUgnot(MinAmount) + ") and the period (" + itoa(MinPeriod) + " seconds to " + itoa(MaxPeriod/86400) + " days). Plans cannot be changed.\n\n")
 	b.WriteString("```\ngnokey maketx call -pkgpath " + realmPath + " -func Offer -args \"TITLE\" -args 1000000 -args 604800 " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 	b.WriteString("2. Make a separate key for collecting (`gnokey add COLLECTOR_KEY`) and publish its public key (the `gpub1...` value `gnokey list` shows), signed with your own key:\n\n")

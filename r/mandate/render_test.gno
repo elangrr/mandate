@@ -61,7 +61,8 @@ func TestRenderHelp(cur realm, t *testing.T) {
 	resetState()
 	h := renders(t, "help")
 	net := "-broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443"
-	has(t, h, "gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Offer -args \"TITLE\" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 30000000 "+net+" YOUR_KEY", "offer command")
+	has(t, h, "gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Offer -args \"TITLE\" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 40000000 "+net+" YOUR_KEY", "offer command")
+	has(t, h, "the joiner included, are refused", "format characters explained")
 	has(t, h, "-func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY", "collector key command")
 	has(t, h, "-func Pull -send AMOUNTugnot -master SUPPORTER_ADDRESS -gas-fee 20000ugnot -gas-wanted 20000000 "+net+" COLLECTOR_KEY", "pull command")
 	has(t, h, "gnokey maketx session create -pubkey COLLECTOR_GPUB -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit PRICE_PLUS_100000ugnot -spend-period PERIOD_SECONDS -expires-at UNIX_TIME", "session command")
@@ -105,7 +106,7 @@ func TestRenderPages(cur realm, t *testing.T) {
 
 	pp = renders(t, "plan/1")
 	exp := itoa(now() + 365*day)
-	has(t, pp, "gnokey maketx session create -pubkey "+gpubA+" -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 1100000ugnot -spend-period 604800 -expires-at "+exp+" -gas-fee 100000ugnot -gas-wanted 30000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY", "session create")
+	has(t, pp, "gnokey maketx session create -pubkey "+gpubA+" -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 1100000ugnot -spend-period 604800 -expires-at "+exp+" -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY", "session create")
 	has(t, pp, "gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 1 -args "+sessA.String()+" -args "+exp+" -gas-fee 100000ugnot", "subscribe command")
 	has(t, pp, "at most 1.1 GNOT every week", "cap in words")
 	has(t, pp, "1 supporter paid in the current period", "paid count")
@@ -119,7 +120,7 @@ func TestRenderPages(cur realm, t *testing.T) {
 	pr := renders(t, "payer/"+payer.String())
 	has(t, pr, "## Mandate 1: [Weekly coffee]("+base+":plan/1)", "mandate heading")
 	has(t, pr, "Status here: **active**", "status")
-	has(t, pr, "gnokey maketx session revoke -pubkey "+gpubA+" -gas-fee 100000ugnot -gas-wanted 30000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY", "revoke command")
+	has(t, pr, "gnokey maketx session revoke -pubkey "+gpubA+" -gas-fee 100000ugnot -gas-wanted 40000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY", "revoke command")
 	has(t, pr, "-func Cancel -args "+payer.String()+" -args "+sessA.String()+" -gas-fee", "cancel command")
 	has(t, pr, "Payments: 1, 1 GNOT in total", "payer totals")
 	// Unknown session public key: show how to find it.
