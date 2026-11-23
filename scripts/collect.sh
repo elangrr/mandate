@@ -69,8 +69,9 @@
 #   - Chain ids: only "dev" (a local gnodev chain, with a 127.0.0.1 or
 #     localhost remote) and "onyx-1" (with the Onyx RPC) are accepted.
 #   - The key is only ever used by gnokey itself. Its password is read once
-#     from stdin when -insecure-password-stdin is given (for scripts and
-#     tests); otherwise gnokey asks for it for each pull.
+#     per run, from stdin with -insecure-password-stdin (for scripts and
+#     tests), otherwise from the terminal without echo, and handed to each
+#     gnokey call on its stdin.
 #   - The fee counts against the payer's fee allowance (the session's spend
 #     limit is the price plus a small allowance); the fee is never more than
 #     the session can still pay.
@@ -150,8 +151,25 @@ command -v timeout >/dev/null || { echo "timeout not found on PATH (coreutils)" 
 # run lock (fd 9), so a hung call cannot hold it after this script ends.
 gk() { timeout --kill-after=5 "$GK_TIMEOUT" gnokey "$@" 9>&-; }
 
+# The key's password is read once per run: from stdin with
+# -insecure-password-stdin, otherwise from the terminal (not echoed). It is
+# then handed to each gnokey call on its stdin, so gnokey never reads the
+# terminal itself (its prompt would be hidden: the script captures gnokey's
+# output to read the result), and the time limit cannot block a prompt.
 PW=""
-if [ "$PWSTDIN" = 1 ]; then IFS= read -r PW || true; fi
+if [ "$PWSTDIN" = 1 ]; then
+	IFS= read -r PW || true
+elif [ "$DRY" = 0 ]; then
+	if ! { exec 8</dev/tty; } 2>/dev/null; then
+		echo "no terminal to ask for the key's password: run it in a terminal, or pass the password on stdin with -insecure-password-stdin" >&2
+		exit 2
+	fi
+	printf 'Password for collector key %s: ' "$KEY" >/dev/tty
+	IFS= read -r -s PW <&8 || true
+	exec 8<&-
+	printf '\n' >/dev/tty
+	PWSTDIN=1
+fi
 
 ADDR="$(gk list -home "$HOME_DIR" | awk -v k="$KEY" '$2 == k { for (i = 1; i <= NF; i++) if ($i == "addr:") print $(i + 1) }')"
 if ! [[ "$ADDR" =~ ^g1[a-z0-9]{38}$ ]]; then echo "no key named '$KEY' in $HOME_DIR" >&2; exit 2; fi

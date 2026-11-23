@@ -723,6 +723,47 @@ PTJ="$(qeval "$REALM.PaidThrough(address(\"$SJOIN\"), 5)" | sed -n 's/^(\([0-9]*
 collect13
 grep -q "active mandates for this key" <<<"$out" || fail "the old key's collector stopped listing its mandates"
 echo "  ok: rotation: new supporters use the new key (collected by its own collector), old mandates stay with the old key"
+# The collector without -insecure-password-stdin: gnokey asks for the key's
+# password on a terminal (a pseudo-terminal here), once per pull.
+wait_until "$(( $(chain_time) + 61 ))"
+out="$(python3 - "$REPO/scripts/collect.sh" "$PW" -home "$KB" -key collnew -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" <<'PYPTY'
+import os, pty, select, sys, time
+script, pw, args = sys.argv[1], sys.argv[2], sys.argv[3:]
+pid, fd = pty.fork()
+if pid == 0:
+    os.execv(script, [script] + args)
+buf, answered, end = b"", 0, time.time() + 300
+while time.time() < end:
+    r, _, _ = select.select([fd], [], [], 1)
+    if not r:
+        continue
+    try:
+        data = os.read(fd, 4096)
+    except OSError:
+        break
+    if not data:
+        break
+    buf += data
+    if buf.count(b"assword") > answered:
+        answered = buf.count(b"assword")
+        os.write(fd, (pw + "\n").encode())
+_, status = os.waitpid(pid, 0)
+sys.stdout.write(buf.decode(errors="replace"))
+print("\nEXIT", os.waitstatus_to_exitcode(status), "PROMPTS", answered)
+PYPTY
+)"
+echo "$out" | sed 's/^/    /' | tail -12
+grep -q "^EXIT 0 " <<<"$out" || fail "the collector on a terminal did not finish cleanly"
+grep -q "pulling mandate [0-9]*: 1000000ugnot from $SJOIN" <<<"$out" || fail "the collector on a terminal did not pull"
+grep -A3 "pulling mandate [0-9]*: 1000000ugnot from $SJOIN" <<<"$out" | grep -q "GAS USED" || fail "the pull on a terminal did not go through (password read blocked?)"
+grep -q "^EXIT 0 PROMPTS 1$" <<<"$out" || fail "the password was not asked exactly once"
+echo "  ok: without -insecure-password-stdin, the collector asks for the password once on the terminal and the pull goes through"
+set +e
+out="$(setsid -w "$REPO/scripts/collect.sh" -home "$KB" -key collnew -payee "$PAYEE" -remote "$RPC" -chainid dev -realm "$REALM" </dev/null 2>&1)"
+rc=$?
+set -e
+eq "without a terminal and without -insecure-password-stdin, the collector stops" 2 "$rc"
+grep -q "no terminal to ask for the key's password" <<<"$out" || fail "unexpected: $out"
 eq "realm balance" 0 "$(bal "$REALM_ADDR")"
 
 step "pages in gnoweb"
