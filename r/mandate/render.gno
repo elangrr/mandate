@@ -103,14 +103,15 @@ func renderHome(from int) string {
 	return b.String()
 }
 
-// homeScanPlans is how many plans one home page walks: each check reads the
-// plan's paid-once list until it finds an active payer.
-const homeScanPlans = 50
+// homeScanPlans is how many plans one home page walks. Each check reads only
+// the plan itself (its payment counters), never its supporters.
+const homeScanPlans = ScanLimit
 
-// plansWithSupporters lists, newest first, the plans that have at least one
-// paying supporter right now, walking at most homeScanPlans plans per page: plans nobody
-// pays for (spam included) never fill this list, and a "more" link
-// continues the walk.
+// plansWithSupporters lists, newest first, the plans that someone paid in
+// the current or the previous period, walking at most homeScanPlans plans
+// per page: plans nobody pays for (spam included) never fill this list, and
+// a "more" link continues the walk. A plan someone keeps paying for stays,
+// whatever the churn of its supporter list.
 func plansWithSupporters(from int) string {
 	var b strings.Builder
 	n := plans.Size()
@@ -124,7 +125,7 @@ func plansWithSupporters(from int) string {
 	for walked := 0; i >= 0 && walked < homeScanPlans && rows < PageSize; i, walked = i-1, walked+1 {
 		_, v := plans.GetByIndex(i)
 		p := v.(*Plan)
-		if !hasPaying(p, now) {
+		if current, previous := p.paidWindows(now); current+previous == 0 {
 			continue
 		}
 		t.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
@@ -133,13 +134,13 @@ func plansWithSupporters(from int) string {
 		rows++
 	}
 	if rows == 0 {
-		b.WriteString("No plan has a paying supporter yet")
+		b.WriteString("No plan has been paid for in its current or last period")
 		if i >= 0 {
 			b.WriteString(" among those looked at")
 		}
 		b.WriteString(".\n\n")
 	} else {
-		b.WriteString("| Plan | Price | Creator | Supporters | Payments |\n|---|---|---|---|---|\n")
+		b.WriteString("| Plan | Price | Creator | Paid this / last period | Payments |\n|---|---|---|---|---|\n")
 		b.WriteString(t.String() + "\n")
 	}
 	if i >= 0 {
@@ -157,7 +158,7 @@ func renderAllPlans(page int) string {
 		b.WriteString("No plans on this page.\n")
 		return b.String()
 	}
-	b.WriteString("| Plan | Price | Creator | Supporters | Payments |\n|---|---|---|---|---|\n")
+	b.WriteString("| Plan | Price | Creator | Paid this / last period | Payments |\n|---|---|---|---|---|\n")
 	for _, p := range list {
 		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) +
 			" | [" + short(p.Payee) + "](" + link("payee/"+p.Payee.String()) + ") | " + infoPayingCell(p) +
@@ -295,7 +296,7 @@ func renderPayee(payee address, page int) string {
 		b.WriteString("No plans on this page.\n")
 		return b.String()
 	}
-	b.WriteString("| Plan | Price | Supporters | Payments | Last payment |\n|---|---|---|---|---|\n")
+	b.WriteString("| Plan | Price | Paid this / last period | Payments | Last payment |\n|---|---|---|---|---|\n")
 	for _, p := range list {
 		b.WriteString("| [" + escCell(p.Title) + "](" + link("plan/"+utoa(p.ID)) + ") | " + price(p.Amount, p.Period) + " | " +
 			infoPayingCell(p) + " | " + itoa(p.Pulls) + " | " + formatTimeOrNever(p.LastPullAt) + " |\n")
@@ -333,9 +334,10 @@ func renderHelp() string {
 	b.WriteString("```\ngnokey maketx session revoke -pubkey COLLECTOR_GPUB " + callGas + " " + netFlags() + " YOUR_KEY\n")
 	b.WriteString("gnokey maketx call -pkgpath " + realmPath + " -func Cancel -args YOUR_ADDRESS -args COLLECTOR_ADDRESS " + callGas + " " + netFlags() + " YOUR_KEY\n```\n\n")
 
-	b.WriteString("## Checking a mandate (free)\n\n")
-	b.WriteString("The realm's view, then the chain's view of the session. A mandate is only really active if both answer: the realm cannot see a revoke.\n\n")
-	b.WriteString("```\ngnokey query vm/qeval -data '" + realmPath + ".IsActive(address(\"PAYER\"), PLAN_ID)' -remote " + Remote + "\n")
+	b.WriteString("## Checking a supporter (free)\n\n")
+	b.WriteString("To decide whether to deliver something to a supporter, ask how long their latest payment covers them: `PaidThrough` returns a unix time (0 if they never paid or cancelled); deliver while now is before it. ")
+	b.WriteString("Do not rely on a mandate merely existing: anyone can record one without paying. A realm cannot see a session revoked on chain either, but a revoked supporter stops paying, so `PaidThrough` stops moving and runs out within one period. The second query shows the chain's view of the session.\n\n")
+	b.WriteString("```\ngnokey query vm/qeval -data '" + realmPath + ".PaidThrough(address(\"PAYER\"), PLAN_ID)' -remote " + Remote + "\n")
 	b.WriteString("gnokey query auth/accounts/PAYER/session/COLLECTOR_ADDRESS -remote " + Remote + "\n```\n\n")
 
 	b.WriteString("## Rules the realm enforces\n\n")
@@ -350,29 +352,22 @@ func renderNotFound() string {
 	return "# Not found\n\nThere is no such page. [Back to Mandate](" + link("") + ")\n"
 }
 
-// payingText is the plan headline's supporter count.
+// payingText is the plan headline's count of supporters who paid.
 func payingText(p *Plan, now int64) string {
-	n, exact := countPaying(p, now)
-	if exact {
-		return plural(n, "paying supporter", "paying supporters")
-	}
-	return "at least " + strconv.Itoa(n) + " paying supporters (counted among the latest " + strconv.Itoa(ScanLimit) + " who ever paid)"
+	current, previous := p.paidWindows(now)
+	start := now / p.Period * p.Period
+	return plural(current, "supporter", "supporters") + " paid in the current period (since " + formatTime(start) + "), " +
+		strconv.Itoa(previous) + " in the one before"
 }
 
-// payingCell is the supporter count in tables.
+// payingCell is the count in tables: paid this period / the one before.
 func payingCell(p *Plan, now int64) string {
-	n, exact := countPaying(p, now)
-	if exact {
-		return strconv.Itoa(n)
-	}
-	return strconv.Itoa(n) + "+"
+	current, previous := p.paidWindows(now)
+	return strconv.Itoa(current) + " / " + strconv.Itoa(previous)
 }
 
 func infoPayingCell(p PlanInfo) string {
-	if p.PayingExact {
-		return strconv.Itoa(p.Paying)
-	}
-	return strconv.Itoa(p.Paying) + "+"
+	return strconv.Itoa(p.PaidThisPeriod) + " / " + strconv.Itoa(p.PaidLastPeriod)
 }
 
 // intParam returns the integer value of key in the query, or def.

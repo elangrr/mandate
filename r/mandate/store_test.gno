@@ -8,23 +8,35 @@ import (
 	"gno.land/p/nt/uassert/v0"
 )
 
-// supporterList keeps the newest entries in tail and full chunks of
-// chunkSize; every index must map to the right entry across the boundaries.
-func TestSupporterList(t *testing.T) {
-	var l supporterList
-	for i := 0; i < 3*chunkSize+5; i++ {
-		l.add(entry{Payer: payer, ID: uint64(i)})
+// fixedList keeps the newest entries in tail, full chunks of fanout, and
+// fanout chunks per super-chunk; every index maps to the right entry across
+// the boundaries, and set rewrites in place.
+func TestFixedList(t *testing.T) {
+	var l fixedList
+	n := fanout*fanout + 3*fanout + 5 // past the first super-chunk
+	for i := 0; i < n; i++ {
+		l.add(encodeEntry(payer, uint64(i), statusUnpaid))
 		uassert.Equal(t, i+1, l.N)
 		for _, j := range []int{0, i / 2, i} {
-			uassert.Equal(t, uint64(j), l.at(j).ID)
+			uassert.Equal(t, uint64(j), decodeEntry(l.at(j)).ID)
 		}
-		uassert.Equal(t, (i+1)%chunkSize, len(l.tail))
-		uassert.Equal(t, (i+1)/chunkSize, len(l.chunks))
+		uassert.Equal(t, (i+1)%fanout, len(l.tail))
+		full := (i + 1) / fanout
+		uassert.Equal(t, (full+fanout-1)/fanout, len(l.supers))
 	}
-	uassert.Equal(t, chunkSize, len(l.chunks[2].items))
+	uassert.Equal(t, fanout, len(l.supers[0].chunks))
+	uassert.Equal(t, 3, len(l.supers[1].chunks))
+	for _, j := range []int{0, 31, 32, 33, fanout*fanout - 1, fanout * fanout, n - 1} {
+		l.setStatus(j, statusPaid)
+		e := decodeEntry(l.at(j))
+		uassert.Equal(t, uint64(j), e.ID)
+		uassert.True(t, e.Status == statusPaid)
+		uassert.Equal(t, entryWidth, len(l.at(j)))
+		uassert.Equal(t, payer.String(), e.Payer.String())
+	}
 	// No preallocation: a slot costs storage even when empty.
-	var small supporterList
-	small.add(entry{Payer: payer, ID: 7})
+	var small fixedList
+	small.add("x")
 	uassert.Equal(t, 1, cap(small.tail))
 }
 
@@ -32,7 +44,7 @@ func TestSupporterList(t *testing.T) {
 func TestLongLists(cur realm, t *testing.T) {
 	resetState()
 	pid := offer(cur, payee, "Plan", gnot, day)
-	n := 2*chunkSize + 3
+	n := 2*fanout + 3
 	for i := 0; i < n; i++ {
 		subscribe(cur, testutils.TestAddress("md_l"+itoa(int64(i))), pid, sessA, now()+day)
 	}
@@ -74,8 +86,8 @@ func TestPayerHistory(cur realm, t *testing.T) {
 	uassert.Equal(t, ids[0], p2[5].ID)
 	m, _ := MandateOf(payer, sessA)
 	uassert.Equal(t, last, m.ID)
-	uassert.True(t, IsActive(payer, pid2))
-	uassert.False(t, IsActive(payer, pid))
+	uassert.True(t, HasMandate(payer, pid2))
+	uassert.False(t, HasMandate(payer, pid))
 	pl, _ := GetPlan(pid)
 	uassert.Equal(t, 25, pl.Mandates)
 	uassert.Equal(t, 25, pl.Cancelled)
@@ -89,7 +101,7 @@ func TestPayerHistory(cur realm, t *testing.T) {
 func TestReadsDoNotWrite(cur realm, t *testing.T) {
 	resetState()
 	MandateOf(payer, sessA)
-	IsActive(payer, 1)
+	HasMandate(payer, 1)
 	NextPullAt(payer, 1)
 	MandatesOf(payer, 1)
 	renders(t, "payer/"+payer.String())
@@ -127,9 +139,10 @@ func TestDerivedFields(cur realm, t *testing.T) {
 	has(t, renders(t, "payer/"+payer.String()), "/sessions -remote", "lookup command")
 }
 
-// Supporters are listed and counted only once they have paid; junk
-// mandates that never pay are neither listed nor counted, and cannot hide
-// a real supporter: only mandates that paid enter the list the page reads.
+// Supporters are listed only once they have paid. Junk mandates that never
+// pay are skipped by their status character, without a lookup, so they
+// cannot hide a real supporter; payment counts come from the plan's own
+// counters and junk cannot move them.
 func TestPayingSupporters(cur realm, t *testing.T) {
 	resetState()
 	pid := offer(cur, payee, "Real plan", gnot, MinPeriod)
@@ -142,31 +155,112 @@ func TestPayingSupporters(cur realm, t *testing.T) {
 		subscribe(cur, testutils.TestAddress("md_j"+itoa(int64(i))), pid, sessA, now()+day)
 	}
 	p, _ := GetPlan(pid)
-	uassert.Equal(t, 1, p.Paying)
-	// the collector scan walks at most ScanLimit entries per call and says where to go on
+	uassert.Equal(t, 1, p.PaidThisPeriod)
+	// the collector scan resolves at most ScanLimit entries per call and says where to go on
 	scan := CollectorScan(pid, sessA, 0)
 	uassert.True(t, strings.HasSuffix(scan, "\nnext 200\n"), "scan cursor")
 	uassert.Equal(t, ScanLimit+1, len(strings.Split(strings.TrimSuffix(scan, "\n"), "\n")))
 	uassert.True(t, strings.HasSuffix(CollectorScan(pid, sessA, 400), "end\n"))
+	uassert.Equal(t, "end\n", CollectorScan(pid, sessA, 1<<62)) // the cursor is clamped
 	page := renders(t, "plan/"+utoa(pid))
-	has(t, page, "1 paying supporter ·", "count")
+	has(t, page, "1 supporter paid in the current period", "count")
 	has(t, page, "200 active mandates have not paid yet (not listed), among the latest 200", "unpaid count, bounded")
 	hasNot(t, page, short(testutils.TestAddress("md_j0")), "junk not listed")
-	has(t, page, "| ["+short(real)+"]", "real supporter listed at once: junk never enters the paid-once list")
+	has(t, page, "| ["+short(real)+"]", "real supporter found past 400 junk entries in one walk")
 	hasNot(t, page, "More supporters", "nothing more to walk")
-	// a cancel takes the supporter out of the count
+	// a cancel takes the supporter off the list; the payment stays in the counts
 	cancel(cur, real, real, sessA)
 	p, _ = GetPlan(pid)
-	uassert.Equal(t, 0, p.Paying)
+	uassert.Equal(t, 1, p.PaidThisPeriod)
 	uassert.Equal(t, 1, p.Cancelled)
-	// the home page lists only plans somebody pays for
-	other := testutils.TestAddress("md_other")
-	subscribe(cur, other, pid, sessB, now()+day)
-	pullOK(other, sessB, gnot)
+	list, _ := payingFrom(planOf(pid), -1, now())
+	uassert.Equal(t, 0, len(list))
+	// the home page lists only plans somebody paid for in this or the last period
 	home := renders(t, "")
 	has(t, home, "[Real plan]("+base+":plan/"+utoa(pid)+")", "paid plan on home")
 	hasNot(t, home, "Nobody pays", "unpaid plan not on home")
 	has(t, renders(t, "plans"), "Nobody pays", "all plans page")
+	// two periods without payments: off the home page
+	testing.SkipHeights(25)
+	hasNot(t, renders(t, ""), "[Real plan]", "no payment for two periods")
+}
+
+// The supporter list walks at most WalkLimit entries per page, and the
+// next page continues where it stopped: a real supporter behind more than
+// WalkLimit never-paid entries is on a later page, never lost.
+func TestPayingWalkBounded(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
+	real := testutils.TestAddress("md_real")
+	subscribe(cur, real, pid, sessA, now()+day)
+	pullOK(real, sessA, gnot)
+	for i := 0; i < WalkLimit+10; i++ {
+		subscribe(cur, testutils.TestAddress("md_w"+itoa(int64(i))), pid, sessA, now()+day)
+	}
+	p := planOf(pid)
+	list, next := payingFrom(p, -1, now())
+	uassert.Equal(t, 0, len(list), "first walk stops after WalkLimit entries")
+	uassert.Equal(t, p.Supporters.N-1-WalkLimit, next, "cursor where the walk stopped")
+	list, next = payingFrom(p, next, now())
+	uassert.Equal(t, 1, len(list), "found on the next walk")
+	uassert.Equal(t, real.String(), list[0].Payer.String())
+	uassert.Equal(t, -1, next)
+}
+
+// The payment counters read against the current time: a payment counts in
+// its own period window, then in "the one before", then not at all.
+func TestPaymentWindows(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
+	toNextWindow := func() {
+		need := (now()/MinPeriod+1)*MinPeriod - now()
+		testing.SkipHeights((need + 4) / 5)
+	}
+	windows := func(cur, prev int, what string) {
+		p, _ := GetPlan(pid)
+		uassert.Equal(t, cur, p.PaidThisPeriod, what+": this period")
+		uassert.Equal(t, prev, p.PaidLastPeriod, what+": last period")
+	}
+	toNextWindow()
+	subscribe(cur, payer, pid, sessA, now()+day)
+	subscribe(cur, payer2, pid, sessB, now()+day)
+	windows(0, 0, "nothing paid")
+	pullOK(payer, sessA, gnot)
+	pullOK(payer2, sessB, gnot)
+	windows(2, 0, "two payments")
+	toNextWindow()
+	windows(0, 2, "next window, no payment yet")
+	testing.SkipHeights(1) // a full period after the first payment
+	pullOK(payer, sessA, gnot)
+	windows(1, 2, "one payment in the next window")
+	toNextWindow()
+	toNextWindow()
+	windows(0, 0, "two windows later")
+	pullOK(payer, sessA, gnot)
+	windows(1, 0, "after a gap")
+}
+
+// Churn cannot hide a plan someone keeps paying for (audit LOW-1): one
+// steady supporter, and 300 others who subscribe, pay once and cancel.
+func TestHomeSurvivesChurn(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Steady", gnot, MinPeriod)
+	steady := testutils.TestAddress("md_steady")
+	subscribe(cur, steady, pid, sessA, now()+day)
+	for round := 0; round < 3; round++ {
+		pullOK(steady, sessA, gnot)
+		for i := 0; i < 100; i++ {
+			who := testutils.TestAddress("md_c" + itoa(int64(round*100+i)))
+			subscribe(cur, who, pid, sessB, now()+day)
+			pullOK(who, sessB, gnot)
+			cancel(cur, who, who, sessB)
+		}
+		has(t, renders(t, ""), "[Steady]("+base+":plan/"+utoa(pid)+")", "steady plan stays on home")
+		list, _ := payingFrom(planOf(pid), -1, now())
+		uassert.Equal(t, 1, len(list), "the steady supporter is listed")
+		uassert.Equal(t, steady.String(), list[0].Payer.String())
+		testing.SkipHeights(13)
+	}
 }
 
 // Offer spam cannot push paid plans off the home page: it walks ScanLimit
@@ -181,24 +275,9 @@ func TestOfferSpam(cur realm, t *testing.T) {
 	}
 	home := renders(t, "")
 	hasNot(t, home, "spam", "no spam on home")
-	has(t, home, "No plan has a paying supporter yet among those looked at.", "first window empty")
-	// follow the "more" links: 206 plans, 50 per page
-	page, from, found := home, "", false
-	for i := 0; i < 6 && !found; i++ {
-		if strings.Contains(page, "[Real plan]") {
-			found = true
-			break
-		}
-		k := strings.Index(page, "[More plans with supporters]("+base+"?from=")
-		if k < 0 {
-			break
-		}
-		rest := page[k+len("[More plans with supporters]("+base+"?from="):]
-		from = rest[:strings.Index(rest, ")")]
-		page = renders(t, "?from="+from)
-	}
-	uassert.True(t, found, "paid plan reached through the cursor")
-	uassert.Equal(t, "5", from) // 205 -> 155 -> 105 -> 55 -> 5
+	has(t, home, "No plan has been paid for in its current or last period among those looked at.", "first window empty")
+	has(t, home, "[More plans with supporters]("+base+"?from=5)", "cursor")
+	has(t, renders(t, "?from=5"), "[Real plan]", "paid plan reached")
 }
 
 // At most MaxActivePerPayer active mandates; a cancelled or expired one
@@ -256,7 +335,7 @@ func TestInactiveReads(cur realm, t *testing.T) {
 	m, ok := MandateOf(payer, sessA)
 	uassert.True(t, ok)
 	uassert.Equal(t, "cancelled", m.Status)
-	uassert.False(t, IsActive(payer, pid))
+	uassert.False(t, HasMandate(payer, pid))
 	uassert.Equal(t, int64(0), NextPullAt(payer, pid))
 	panicsLocal(t, cur, "no active mandate", func() { checkPull(true, sessA, []string{selfPaths}, payer, ugnot(gnot), now()) }, "pull cancelled")
 	testing.SetOriginSend(nil)
@@ -269,7 +348,7 @@ func TestInactiveReads(cur realm, t *testing.T) {
 	uassert.Equal(t, "expired", m.Status)
 	uassert.Equal(t, 0, len(SupportersOf(pid2, 1))) // only active mandates are listed
 	uassert.Equal(t, 0, len(SupportersOf(pid, 1)))  // the cancelled one neither
-	uassert.False(t, IsActive(payer, pid2))
+	uassert.False(t, HasMandate(payer, pid2))
 	uassert.Equal(t, int64(0), NextPullAt(payer, pid2))
 	panicsLocal(t, cur, "mandate: expired", func() { checkPull(true, sessB, []string{selfPaths}, payer, ugnot(gnot), now()) }, "pull expired")
 	subscribe(cur, payer, pid, sessA, now()+day) // prunes the expired entry
@@ -305,25 +384,27 @@ func TestPayerIsolation(cur realm, t *testing.T) {
 	uassert.Equal(t, 40, len(MandatesOf(stranger, 1))+len(MandatesOf(stranger, 2)))
 }
 
-// Counts are computed when read: an expired mandate is neither a paying
-// supporter nor "not yet paid", and a payer who comes back after expiry or
-// cancel counts once. Every view must agree: GetPlan, the plan headline,
-// the supporter list, SupportersOf, the home page and the payee table.
-func checkCounts(t *testing.T, pid uint64, paying, unpaid int, what string) {
+// Counts true at read time. "Supporters" (listed) are mandates that have
+// paid and are active now: an expired or cancelled one is not, and is not
+// "not yet paid" either; a payer who comes back counts once. The per-period
+// payment counts are history (who paid in this period window and the one
+// before) and are checked against the tests' own log of payments. Every view
+// must agree: GetPlan, the plan headline, the supporter list, SupportersOf,
+// the home page and the payee table.
+func checkCounts(t *testing.T, pid uint64, listed, unpaid int, what string) {
 	t.Helper()
 	p, _ := GetPlan(pid)
-	uassert.Equal(t, paying, p.Paying, what+": GetPlan")
-	uassert.True(t, p.PayingExact, what+": exact")
+	cur, prev := expectedWindows(pid, p.Period)
+	uassert.Equal(t, cur, p.PaidThisPeriod, what+": GetPlan this period")
+	uassert.Equal(t, prev, p.PaidLastPeriod, what+": GetPlan last period")
+	uassert.Equal(t, now()/p.Period*p.Period, p.PeriodStart, what+": period start")
 	pp := renders(t, "plan/"+utoa(pid))
-	if paying == 1 {
-		has(t, pp, "· 1 paying supporter ·", what+": headline")
-	} else {
-		has(t, pp, "· "+itoa(int64(paying))+" paying supporters ·", what+": headline")
-	}
-	listed, _ := payingFrom(planOf(pid), -1, now())
-	uassert.Equal(t, paying, len(listed), what+": listed")
+	has(t, pp, plural(cur, "supporter", "supporters")+" paid in the current period", what+": headline")
+	has(t, pp, ", "+itoa(int64(prev))+" in the one before", what+": headline previous")
+	list, _ := payingFrom(planOf(pid), -1, now())
+	uassert.Equal(t, listed, len(list), what+": listed")
 	active := len(SupportersOf(pid, 1))
-	uassert.Equal(t, paying+unpaid, active, what+": SupportersOf")
+	uassert.Equal(t, listed+unpaid, active, what+": SupportersOf")
 	if unpaid == 1 {
 		has(t, pp, "1 active mandate has not paid yet", what+": unpaid")
 	} else {
@@ -332,12 +413,12 @@ func checkCounts(t *testing.T, pid uint64, paying, unpaid int, what string) {
 	home := renders(t, "")
 	pe := renders(t, "payee/"+payee.String())
 	row := "| [Plan](" + base + ":plan/" + utoa(pid) + ") | 1 GNOT every minute | "
-	if paying > 0 {
+	if cur+prev > 0 {
 		has(t, home, "[Plan]("+base+":plan/"+utoa(pid)+")", what+": on home")
 	} else {
 		hasNot(t, home, "[Plan]("+base+":plan/"+utoa(pid)+")", what+": not on home")
 	}
-	has(t, pe, row+itoa(int64(paying))+" |", what+": payee table")
+	has(t, pe, row+itoa(int64(cur))+" / "+itoa(int64(prev))+" |", what+": payee table")
 }
 
 func TestExpirySequences(cur realm, t *testing.T) {
@@ -359,7 +440,6 @@ func TestExpirySequences(cur realm, t *testing.T) {
 	checkCounts(t, pid, 0, 1, "re-subscribed after expiry")
 	pullOK(payer, sessA, gnot)
 	checkCounts(t, pid, 1, 0, "paid again after expiry")
-	uassert.Equal(t, 2, planOf(pid).PaidOnce.N)
 
 	// 3. expire, then cancel the expired (unpruned) mandate, then come back
 	resetState()
@@ -387,7 +467,6 @@ func TestExpirySequences(cur realm, t *testing.T) {
 	subscribe(cur, payer, pid, sessA, now()+day)
 	pullOK(payer, sessA, gnot)
 	checkCounts(t, pid, 1, 0, "and back once more")
-	uassert.Equal(t, 3, planOf(pid).PaidOnce.N)
 
 	// 5. cancel a paying mandate, come back: counted once
 	resetState()
@@ -403,7 +482,6 @@ func TestExpirySequences(cur realm, t *testing.T) {
 	testing.SkipHeights(13) // next period: a second payment adds nothing to the lists
 	pullOK(payer, sessA, gnot)
 	checkCounts(t, pid, 1, 0, "paid twice")
-	uassert.Equal(t, 2, planOf(pid).PaidOnce.N)
 
 	// 5b. never paid, then expired: not "not yet paid" any more
 	resetState()

@@ -2,58 +2,104 @@ package mandate
 
 import "strconv"
 
-// chunkSize is the number of entries per chunk of a supporterList.
-const chunkSize = 32
+// fanout is the number of entries per chunk, and of chunks per super-chunk.
+const fanout = 32
 
-// supporterList is a plan's append-only list of mandates, oldest first. It
-// stores one short string per mandate (the payer's 40-character address
-// followed by the mandate id), never pointers: on
+// fixedList is an append-only list of strings of one fixed width, in two
+// levels of chunks. It holds values, never pointers to shared objects (on
 // chain, rewriting an array costs about 0.37M gas for every pointer to a
-// shared object it holds, which made appends cost up to 13M gas and the
-// list of chunks grow dearer with every 32 supporters (docs/design.md).
+// shared object it holds; docs/notes.md), and no array in it grows with the
+// list's length except supers, by one entry per fanout*fanout appends:
+//   - tail: the newest N % fanout entries, inside the owner object;
+//   - when tail is full it becomes a chunk, appended to the last
+//     super-chunk (at most fanout chunks each);
+//   - supers: the list of super-chunks.
 //
-// The newest entries live in tail, inside the plan itself; when tail is
-// full it becomes a chunk. So an append rewrites the plan and its tail (at
-// most chunkSize small values), and reads the list of chunks only once
-// every chunkSize appends. Reads resolve an entry through the payer's own
-// record (activeMandate), so they cost a lookup per entry: free reads only.
-type supporterList struct {
+// So an append rewrites the owner and its tail; every fanout appends it also
+// creates a chunk and rewrites one super-chunk (at most fanout pointers to
+// objects that only it holds); every fanout*fanout appends it rewrites
+// supers. set replaces an entry in place with one of the same width, so it
+// never changes the storage size. Appends happen only in transactions signed
+// with someone's own key (Subscribe, Offer), never under a session budget.
+type fixedList struct {
 	N      int
-	tail   []string      // the newest N % chunkSize entries
-	chunks []*entryChunk // full chunks of chunkSize entries, oldest first
+	tail   []string      // the newest N % fanout entries
+	supers []*superChunk // full chunks, fanout per super-chunk, oldest first
 }
 
-// entry is a decoded list item. Items are stored as strings: measured,
-// about 400 bytes less per mandate than this two-field struct and about 80
-// less than a pointer.
-type entry struct {
-	Payer address
-	ID    uint64 // mandate id
+type superChunk struct {
+	chunks []*strChunk
 }
 
-type entryChunk struct {
+type strChunk struct {
 	items []string
 }
 
-func (l *supporterList) add(e entry) {
-	l.tail = append(l.tail, e.Payer.String()+utoa(e.ID))
-	if len(l.tail) == chunkSize {
-		l.chunks = append(l.chunks, &entryChunk{items: l.tail})
-		l.tail = nil
-	}
+func (l *fixedList) add(s string) {
+	l.tail = append(l.tail, s)
 	l.N++
+	if len(l.tail) < fanout {
+		return
+	}
+	c := &strChunk{items: l.tail}
+	l.tail = nil
+	if n := len(l.supers); n == 0 || len(l.supers[n-1].chunks) == fanout {
+		l.supers = append(l.supers, &superChunk{chunks: []*strChunk{c}})
+		return
+	}
+	sc := l.supers[len(l.supers)-1]
+	sc.chunks = append(sc.chunks, c)
 }
 
 // at returns entry i (0 = oldest).
-func (l *supporterList) at(i int) entry {
-	var s string
-	if c := i / chunkSize; c < len(l.chunks) {
-		s = l.chunks[c].items[i%chunkSize]
-	} else {
-		s = l.tail[i%chunkSize]
+func (l *fixedList) at(i int) string {
+	c := i / fanout
+	if c < l.N/fanout {
+		return l.supers[c/fanout].chunks[c%fanout].items[i%fanout]
 	}
-	id, _ := strconv.ParseUint(s[40:], 10, 64)
-	return entry{Payer: address(s[:40]), ID: id}
+	return l.tail[i%fanout]
+}
+
+// set replaces entry i with s, which must have the same width.
+func (l *fixedList) set(i int, s string) {
+	c := i / fanout
+	if c < l.N/fanout {
+		l.supers[c/fanout].chunks[c%fanout].items[i%fanout] = s
+		return
+	}
+	l.tail[i%fanout] = s
+}
+
+// Supporter entries: the payer's 40-character address, the mandate id
+// padded to 10 digits, and one status character. Pull flips '0' to '1' at
+// a mandate's first payment and Cancel sets 'x', both in place.
+const (
+	statusUnpaid    = '0'
+	statusPaid      = '1'
+	statusCancelled = 'x'
+	entryWidth      = 40 + 10 + 1
+)
+
+// entry is a decoded supporter entry.
+type entry struct {
+	Payer  address
+	ID     uint64 // mandate id
+	Status byte
+}
+
+func encodeEntry(payer address, id uint64, status byte) string {
+	return payer.String() + pad(id) + string(status)
+}
+
+func decodeEntry(s string) entry {
+	id, _ := strconv.ParseUint(s[40:50], 10, 64)
+	return entry{Payer: address(s[:40]), ID: id, Status: s[50]}
+}
+
+// setStatus rewrites the status character of entry i (same width).
+func (l *fixedList) setStatus(i int, status byte) {
+	s := l.at(i)
+	l.set(i, s[:50]+string(status))
 }
 
 // activeMandate returns the mandate an entry names if it is still in its

@@ -64,7 +64,7 @@ func main(cur realm) {
 //
 // ## Supporter pages
 //
-// No plan has a paying supporter yet.
+// No plan has been paid for in its current or last period.
 //
 // Only plans that someone has paid for are listed here. [All plans, newest first](/r/mandate_dev/mandate:plans)
 //
@@ -77,7 +77,7 @@ func main(cur realm) {
 //
 // **1 GNOT every week** to [g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5)
 //
-// Plan 1 · published 2009-02-13 23:31 UTC · 0 paying supporters · 0 payments, 0 GNOT in total · last payment: never
+// Plan 1 · published 2009-02-13 23:31 UTC · 0 supporters paid in the current period (since 2009-02-12 00:00 UTC), 0 in the one before · 0 payments, 0 GNOT in total · last payment: never
 //
 // Plans never change. New terms are published as a new plan.
 //
@@ -114,7 +114,7 @@ func main(cur realm) {
 //
 // **0.25 GNOT every minute** to [g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5](/r/mandate_dev/mandate:payee/g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5) (a test plan: the period is under a day)
 //
-// Plan 2 · published 2009-02-13 23:31 UTC · 0 paying supporters · 0 payments, 0 GNOT in total · last payment: never
+// Plan 2 · published 2009-02-13 23:31 UTC · 0 supporters paid in the current period (since 2009-02-13 23:31 UTC), 0 in the one before · 0 payments, 0 GNOT in total · last payment: never
 //
 // Plans never change. New terms are published as a new plan.
 //
@@ -204,10 +204,10 @@ func main(cur realm) {
 //
 // ## Plans
 //
-// | Plan | Price | Supporters | Payments | Last payment |
+// | Plan | Price | Paid this / last period | Payments | Last payment |
 // |---|---|---|---|---|
-// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | 0 | 0 | never |
-// | [Demo \| one minute](/r/mandate_dev/mandate:plan/2) | 0.25 GNOT every minute | 0 | 0 | never |
+// | [Weekly \*coffee\* for&#32;g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5 \$5](/r/mandate_dev/mandate:plan/1) | 1 GNOT every week | 0 / 0 | 0 | never |
+// | [Demo \| one minute](/r/mandate_dev/mandate:plan/2) | 0.25 GNOT every minute | 0 / 0 | 0 | never |
 //
 // ---
 //
@@ -260,12 +260,12 @@ func main(cur realm) {
 // gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Cancel -args YOUR_ADDRESS -args COLLECTOR_ADDRESS -gas-fee 100000ugnot -gas-wanted 30000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY
 // ```
 //
-// ## Checking a mandate (free)
+// ## Checking a supporter (free)
 //
-// The realm's view, then the chain's view of the session. A mandate is only really active if both answer: the realm cannot see a revoke.
+// To decide whether to deliver something to a supporter, ask how long their latest payment covers them: `PaidThrough` returns a unix time (0 if they never paid or cancelled); deliver while now is before it. Do not rely on a mandate merely existing: anyone can record one without paying. A realm cannot see a session revoked on chain either, but a revoked supporter stops paying, so `PaidThrough` stops moving and runs out within one period. The second query shows the chain's view of the session.
 //
 // ```
-// gnokey query vm/qeval -data 'gno.land/r/mandate_dev/mandate.IsActive(address("PAYER"), PLAN_ID)' -remote https://rpc.onyx.testnets.gno.land:443
+// gnokey query vm/qeval -data 'gno.land/r/mandate_dev/mandate.PaidThrough(address("PAYER"), PLAN_ID)' -remote https://rpc.onyx.testnets.gno.land:443
 // gnokey query auth/accounts/PAYER/session/COLLECTOR_ADDRESS -remote https://rpc.onyx.testnets.gno.land:443
 // ```
 //

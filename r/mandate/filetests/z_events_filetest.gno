@@ -27,7 +27,7 @@ func main(cur realm) {
 	mandate.Subscribe(cross(cur), id, sess, time.Now().Unix()+86400)
 	testing.SetRealm(testing.NewUserRealm(payer))
 	mandate.Cancel(cross(cur), payer, sess)
-	println(mandate.IsActive(payer, id))
+	println(mandate.HasMandate(payer, id))
 }
 
 // Output:

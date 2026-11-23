@@ -60,6 +60,7 @@ func now() int64 { return time.Now().Unix() }
 func resetState() {
 	nextPlanID, nextMandateID = 0, 0
 	plans, payees, payers = avl.NewTree(), avl.NewTree(), avl.NewTree()
+	pullLog = nil
 	totalPulls, totalPaid = 0, 0
 }
 
@@ -96,6 +97,34 @@ func cancel(cur realm, who, p, sess address) {
 func pullOK(p address, sess address, amount int64) {
 	m, pl := checkPull(true, sess, []string{selfPaths}, p, ugnot(amount), now())
 	recordPull(m, pl, now())
+	pullLog = append(pullLog, pulled{plan: pl.ID, at: now()})
+}
+
+// pullLog records every payment the tests make, so expected per-period
+// counts are computed independently of the realm's counters.
+type pulled struct {
+	plan uint64
+	at   int64
+}
+
+var pullLog []pulled
+
+// expectedWindows counts the logged payments of a plan in the period window
+// containing now and in the one before.
+func expectedWindows(planID uint64, period int64) (current, previous int) {
+	w := now() / period
+	for _, x := range pullLog {
+		if x.plan != planID {
+			continue
+		}
+		switch x.at / period {
+		case w:
+			current++
+		case w - 1:
+			previous++
+		}
+	}
+	return
 }
 
 // snapshot is everything a refused call must leave unchanged.
@@ -109,11 +138,10 @@ func snapshot() string {
 	}
 	plans.Iterate("", "", func(_ string, v any) bool {
 		p := v.(*Plan)
-		b.WriteString(p.Title + itoa(p.Amount) + itoa(p.Period) + itoa(int64(p.Supporters.N)) + "c" + itoa(int64(p.Cancelled)) + "p" + itoa(int64(p.PaidOnce.N)) +
+		b.WriteString(p.Title + itoa(p.Amount) + itoa(p.Period) + itoa(int64(p.Supporters.N)) + "c" + itoa(int64(p.Cancelled)) + "w" + itoa(p.payWindow) + "/" + itoa(int64(p.paidThis)) + "/" + itoa(int64(p.paidPrev)) +
 			itoa(p.Pulls) + itoa(p.LastPullAt) + "\n")
 		for i := 0; i < p.Supporters.N; i++ {
-			e := p.Supporters.at(i)
-			b.WriteString(e.Payer.String() + "#" + utoa(e.ID) + ",")
+			b.WriteString(p.Supporters.at(i) + ",")
 		}
 		return false
 	})
@@ -204,6 +232,12 @@ func TestOfferRefusals(cur realm, t *testing.T) {
 		{"sep\u2028here", gnot, day, "single line"},
 		{"sep\u2029here", gnot, day, "single line"},
 		{"del\x7fhere", gnot, day, "single line"},
+		{"zero\u200bwidth", gnot, day, "invisible formatting"},
+		{"Fluxen\u202egnp.exe", gnot, day, "invisible formatting"},
+		{"\ufeffbom", gnot, day, "invisible formatting"},
+		{"iso\u2066late\u2069", gnot, day, "invisible formatting"},
+		{"soft\u00adhyphen", gnot, day, "invisible formatting"},
+		{"joiner\u200d", gnot, day, "invisible formatting"},
 		{"bad\xffutf8", gnot, day, "not valid UTF-8"},
 		{"ok", MinAmount - 1, day, "below the minimum"},
 		{"ok", 0, day, "below the minimum"},
@@ -229,6 +263,52 @@ func TestOfferRefusals(cur realm, t *testing.T) {
 	// Only direct calls from a user.
 	testing.SetRealm(testing.NewCodeRealm("gno.land/r/someone/proxy"))
 	fails(t, cur, "direct calls only", func() { Offer(cross(cur), "ok", gnot, day) }, "Offer from a realm")
+}
+
+func TestTitleCharacters(cur realm, t *testing.T) {
+	resetState()
+	// Visible non-ASCII text is fine; only invisible formatting is refused.
+	for _, title := range []string{"Café ☕ für alle", "Support Fluxen's work", "日本語のプラン", "Ünïcödé — dash"} {
+		id := offer(cur, payee, title, gnot, day)
+		p, _ := GetPlan(id)
+		uassert.Equal(t, title, p.Title)
+	}
+}
+
+// PaidThrough moves only with a successful payment: never before the first
+// one, payment time + period after each, and 0 once the mandate is
+// cancelled. IsPaidUp is now < PaidThrough, exclusive at the boundary.
+func TestPaidThrough(cur realm, t *testing.T) {
+	resetState()
+	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
+	uassert.Equal(t, int64(0), PaidThrough(payer, pid))
+	subscribe(cur, payer, pid, sessA, now()+600)
+	uassert.True(t, HasMandate(payer, pid))
+	uassert.Equal(t, int64(0), PaidThrough(payer, pid), "recorded, not paid")
+	uassert.False(t, IsPaidUp(payer, pid))
+
+	t0 := now()
+	pullOK(payer, sessA, gnot)
+	uassert.Equal(t, t0+MinPeriod, PaidThrough(payer, pid))
+	uassert.True(t, IsPaidUp(payer, pid))
+	uassert.Equal(t, int64(0), PaidThrough(payer2, pid), "another payer")
+	uassert.Equal(t, int64(0), PaidThrough(payer, pid+1), "another plan")
+
+	testing.SkipHeights(MinPeriod/5 - 1) // one block before the period ends
+	uassert.True(t, IsPaidUp(payer, pid))
+	testing.SkipHeights(1) // now == PaidThrough
+	uassert.False(t, IsPaidUp(payer, pid), "exclusive at the boundary")
+	uassert.Equal(t, t0+MinPeriod, PaidThrough(payer, pid), "unchanged without a payment")
+	uassert.True(t, HasMandate(payer, pid), "a mandate is not a payment")
+
+	t1 := now()
+	pullOK(payer, sessA, gnot)
+	uassert.Equal(t, t1+MinPeriod, PaidThrough(payer, pid))
+
+	cancel(cur, payer, payer, sessA)
+	uassert.Equal(t, int64(0), PaidThrough(payer, pid), "cancelled")
+	uassert.False(t, IsPaidUp(payer, pid))
+	uassert.False(t, HasMandate(payer, pid))
 }
 
 func TestSetCollectorKey(cur realm, t *testing.T) {
@@ -284,7 +364,7 @@ func TestSubscribe(cur realm, t *testing.T) {
 	uassert.Equal(t, "active", m.Status)
 	uassert.True(t, m.Due)
 	uassert.Equal(t, "auth/accounts/"+payer.String()+"/session/"+sessA.String(), m.SessionQuery)
-	uassert.True(t, IsActive(payer, pid))
+	uassert.True(t, HasMandate(payer, pid))
 	uassert.Equal(t, now(), NextPullAt(payer, pid))
 	uassert.Equal(t, 1, planOf(pid).Supporters.N)
 	uassert.Equal(t, int64(0), bal(realmAddr))
@@ -343,10 +423,10 @@ func TestResubscribeAfterCancelOrExpiry(cur realm, t *testing.T) {
 	pid := offer(cur, payee, "Plan", gnot, MinPeriod)
 	first := subscribe(cur, payer, pid, sessA, now()+day)
 	cancel(cur, payer, payer, sessA)
-	uassert.False(t, IsActive(payer, pid))
+	uassert.False(t, HasMandate(payer, pid))
 	second := subscribe(cur, payer, pid, sessA, now()+120)
 	uassert.True(t, second != first)
-	uassert.True(t, IsActive(payer, pid))
+	uassert.True(t, HasMandate(payer, pid))
 	m, _ := MandateOf(payer, sessA)
 	uassert.Equal(t, second, m.ID)
 	old := MandatesOf(payer, 1)[1] // newest first
@@ -354,10 +434,10 @@ func TestResubscribeAfterCancelOrExpiry(cur realm, t *testing.T) {
 	uassert.Equal(t, "cancelled", old.Status)
 	// Let it expire, then subscribe again with the same session.
 	testing.SkipHeights(24) // 120 s
-	uassert.False(t, IsActive(payer, pid))
+	uassert.False(t, HasMandate(payer, pid))
 	uassert.Equal(t, int64(0), NextPullAt(payer, pid))
 	third := subscribe(cur, payer, pid, sessA, now()+day)
-	uassert.True(t, IsActive(payer, pid))
+	uassert.True(t, HasMandate(payer, pid))
 	uassert.Equal(t, 3, len(MandatesOf(payer, 1)))
 	uassert.Equal(t, 1, len(SupportersOf(pid, 1))) // active ones only
 	m, _ = MandateOf(payer, sessA)
@@ -463,8 +543,8 @@ func TestPullCancelled(cur realm, t *testing.T) {
 	panicsLocal(t, cur, "cancelled", func() { checkPull(true, sessA, []string{selfPaths}, payer, ugnot(gnot), now()) }, "pull after cancel")
 	// The other payer's mandate on the same key is untouched.
 	pullOK(payer2, sessA, gnot)
-	uassert.False(t, IsActive(payer, pid))
-	uassert.True(t, IsActive(payer2, pid))
+	uassert.False(t, HasMandate(payer, pid))
+	uassert.True(t, HasMandate(payer2, pid))
 }
 
 func TestPullEntryPoint(cur realm, t *testing.T) {
@@ -530,15 +610,15 @@ func TestReadsArePlainCopies(cur realm, t *testing.T) {
 	uassert.Equal(t, "Original", p2.Title)
 	uassert.Equal(t, gnot, p2.Amount)
 	uassert.Equal(t, payee.String(), Plans(1)[0].Payee.String())
-	uassert.True(t, IsActive(payer, pid))
+	uassert.True(t, HasMandate(payer, pid))
 	_, ok := GetPlan(99)
 	uassert.False(t, ok)
 	_, ok = MandateOf(stranger, sessA)
 	uassert.False(t, ok)
 	_, ok = GetPayee(stranger)
 	uassert.False(t, ok)
-	uassert.False(t, IsActive(stranger, pid))
-	uassert.False(t, IsActive(payer, 99))
+	uassert.False(t, HasMandate(stranger, pid))
+	uassert.False(t, HasMandate(payer, 99))
 }
 
 func TestPaging(cur realm, t *testing.T) {

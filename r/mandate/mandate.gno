@@ -100,11 +100,19 @@ type Plan struct {
 	Period    int64 // seconds
 	CreatedAt int64 // unix seconds
 
-	Supporters supporterList // every mandate for this plan, oldest first
-	Cancelled  int           // how many of them were cancelled
-	PaidOnce   supporterList // mandates that have paid at least once (added at their first pull)
-	Pulls      int64         // successful pulls (paid = Pulls * Amount)
-	LastPullAt int64         // unix seconds, 0 = never
+	Supporters fixedList // every mandate for this plan, oldest first (see encodeEntry)
+	Cancelled  int       // how many of them were cancelled
+	Pulls      int64     // successful pulls (paid = Pulls * Amount)
+	LastPullAt int64     // unix seconds, 0 = never
+
+	// Payments per period window: window k is [k*Period, (k+1)*Period). A
+	// mandate pulls at most once per Period, so it pays at most once in a
+	// window and these count distinct payers. Read with paidWindows, which
+	// turns them into counts for the window containing "now" and the one
+	// before it, so they are true at any time without a transaction.
+	payWindow int64 // index of the window of the last payment
+	paidThis  int   // payments in window payWindow
+	paidPrev  int   // payments in window payWindow-1
 
 	payee *Payee // direct link, so Pull needs no lookup
 }
@@ -120,6 +128,7 @@ type Mandate struct {
 	ExpiresAt  int64 // unix seconds; pulls are refused from this time on
 	NextPullAt int64 // unix seconds; the first pull is due at once
 	Pulls      int64
+	Index      int // position in the plan's supporter list
 
 	CancelledAt int64 // 0 = not cancelled
 	CancelledBy address
@@ -132,7 +141,7 @@ type Mandate struct {
 type Payee struct {
 	Addr          address
 	Plans         int
-	PlanList      []*Plan
+	planIDs       fixedList // the payee's plan ids, padded (values, not pointers)
 	Pulls         int64
 	Paid          int64
 	LastPullAt    int64
@@ -205,7 +214,7 @@ func Offer(cur realm, title string, amountUgnot, periodSeconds int64) uint64 {
 	p.payee = pe
 	plans.Set(pad(p.ID), p)
 	pe.Plans++
-	pe.PlanList = append(pe.PlanList, p)
+	pe.planIDs.add(pad(p.ID))
 	chain.Emit("PlanOffered",
 		"plan", utoa(p.ID),
 		"payee", caller.String(),
@@ -296,13 +305,14 @@ func Subscribe(cur realm, planID uint64, sessionAddr address, expiresAtUnix int6
 		CreatedAt:   now,
 		ExpiresAt:   expiresAtUnix,
 		NextPullAt:  now,
+		Index:       p.Supporters.N,
 		plan:        p,
 		prevOfPayer: pr.Head,
 	}
 	pr.Head = m
 	pr.Active = append(pr.Active, activeRef{Session: sessionAddr, PlanID: planID, ID: m.ID, M: m})
 	pr.save(payer)
-	p.Supporters.add(entry{Payer: payer, ID: m.ID})
+	p.Supporters.add(encodeEntry(payer, m.ID, statusUnpaid))
 	chain.Emit("Subscribed",
 		"mandate", utoa(m.ID),
 		"plan", utoa(planID),
@@ -361,18 +371,20 @@ func checkPull(isSession bool, sess address, paths []string, payer address, sent
 }
 
 // recordPull updates the mandate, plan, payee and totals for one payment
-// and emits the event. Every field it writes already exists after the first
-// pull, so later pulls do not grow the realm's storage.
+// and emits the event. It never creates an object: Pull runs under the
+// payer's session budget, which also pays its storage deposit. A first pull
+// flips the mandate's entry in the plan's list from unpaid to paid in place
+// (same width) and sets fields that were zero (amino omits zero values), a
+// few dozen bytes at most; later pulls add nothing.
 func recordPull(m *Mandate, p *Plan, now int64) {
 	m.NextPullAt = now + p.Period
 	if m.Pulls == 0 {
-		// A supporter from the first payment on. Counts are computed when read
-		// (only mandates still active count), so expiry needs no transaction.
-		p.PaidOnce.add(entry{Payer: m.Payer, ID: m.ID})
+		p.Supporters.setStatus(m.Index, statusPaid)
 	}
 	m.Pulls++
 	p.Pulls++
 	p.LastPullAt = now
+	p.countPayment(now)
 	pe := p.payee
 	pe.Pulls++
 	pe.Paid += p.Amount
@@ -409,12 +421,39 @@ func Cancel(cur realm, payer address, sessionAddr address) {
 	m.CancelledAt = time.Now().Unix()
 	m.CancelledBy = caller
 	p.Cancelled++
+	p.Supporters.setStatus(m.Index, statusCancelled)
 	chain.Emit("Cancelled",
 		"mandate", utoa(m.ID),
 		"plan", utoa(p.ID),
 		"payer", m.Payer.String(),
 		"by", caller.String(),
 	)
+}
+
+// countPayment counts one payment at time now in its period window.
+func (p *Plan) countPayment(now int64) {
+	w := now / p.Period
+	switch w {
+	case p.payWindow:
+		p.paidThis++
+	case p.payWindow + 1:
+		p.paidPrev, p.paidThis = p.paidThis, 1
+	default:
+		p.paidPrev, p.paidThis = 0, 1
+	}
+	p.payWindow = w
+}
+
+// paidWindows returns how many supporters paid in the period window that
+// contains now, and in the window before it.
+func (p *Plan) paidWindows(now int64) (current, previous int) {
+	switch now / p.Period {
+	case p.payWindow:
+		return p.paidThis, p.paidPrev
+	case p.payWindow + 1:
+		return 0, p.paidThis
+	}
+	return 0, 0
 }
 
 // directCaller is the guard shared by every crossing function except Pull:
@@ -482,6 +521,12 @@ func validateTitle(s string) string {
 	for _, r := range s {
 		if unicode.IsControl(r) || r == '\u2028' || r == '\u2029' {
 			return "mandate: title must be a single line without control characters"
+		}
+		if unicode.Is(unicode.Cf, r) {
+			// format characters: bidi controls (U+202A-U+202E, U+2066-U+2069),
+			// zero-width ones (U+200B-U+200F, U+FEFF) and the like, which can make
+			// a title display differently from what it says
+			return "mandate: title must not contain invisible formatting characters"
 		}
 	}
 	return ""
