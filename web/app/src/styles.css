@@ -873,13 +873,13 @@ main:focus-visible {
   gap: 2px;
 }
 .cap-meter-price {
-  width: var(--price-pct, 74%);
+  width: calc(var(--price-n, 74.5) * 1%);
   background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 80%, transparent), var(--accent));
   border-radius: 0.2rem 0 0 0.2rem;
   transform-origin: left center;
 }
 .cap-meter-fee {
-  width: var(--fee-pct, 8%);
+  width: calc(var(--fee-n, 7.5) * 1%);
   background: repeating-linear-gradient(
     -45deg,
     color-mix(in oklab, var(--signal-bright) 82%, transparent) 0 4px,
@@ -894,8 +894,8 @@ main:focus-visible {
   box-shadow: 0 0 8px color-mix(in oklab, var(--signal-bright) 65%, transparent);
 }
 .cap-meter-beyond {
-  width: var(--beyond-pct, 18%);
-  flex: 1 1 var(--beyond-pct, 18%);
+  width: calc(var(--beyond-n, 18) * 1%);
+  flex: 1 1 calc(var(--beyond-n, 18) * 1%);
   background: repeating-linear-gradient(
     -45deg,
     color-mix(in oklab, var(--danger) 38%, transparent) 0 4px,
@@ -1029,7 +1029,7 @@ main:focus-visible {
   place-items: center;
   width: 100%;
   max-width: 3.4rem;
-  height: var(--h, 75%);
+  height: calc(var(--h-n, 75) * 1%);
   border-radius: 0.25rem 0.25rem 0.1rem 0.1rem;
   background: linear-gradient(180deg, var(--accent), color-mix(in oklab, var(--accent) 32%, transparent));
   border: 1px solid color-mix(in oklab, var(--accent) 70%, transparent);
@@ -1120,8 +1120,7 @@ main:focus-visible {
   display: inline-grid;
   place-items: center;
   width: 1.5rem;
-  height: max(0.85rem, calc(2.25rem * var(--h, 75%) / 100));
-  min-height: 1.15rem;
+  height: 1.5rem;
   border-radius: 0.25rem;
   flex: none;
 }

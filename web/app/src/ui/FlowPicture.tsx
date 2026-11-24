@@ -6,9 +6,9 @@
 import { useState } from "react";
 import { Icon } from "./parts";
 
-export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { amount?: string; period?: string; cap?: string }) {
+export function FlowPicture({ amount = "1", period = "30 days", cap = "1.1" }: { amount?: string; period?: string; cap?: string }) {
   const label =
-    `How a payment moves. Once: the supporter allows the creator’s collector at most ${cap} GNOT a ${period}, ` +
+    `How a payment moves. Once: the supporter allows the creator’s collector at most ${cap} GNOT every ${period}, ` +
     `through Mandate only, until they stop. Then every ${period}: the collector asks for ${amount} GNOT, ` +
     `Mandate checks who is asking, how much and whether it is due, and the coins go straight to the creator.`;
   const [paused, setPaused] = useState(false);
@@ -34,12 +34,12 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
         <rect x="10" y="10" width="700" height="58" rx="12" className="flow-ceiling-band" />
         <line x1="16" y1="68" x2="704" y2="68" className="flow-ceiling-line" />
         <g className="flow-cap">
-          <rect x="26" y="21" width="288" height="36" rx="8" className="flow-capbox" />
+          <rect x="26" y="21" width="308" height="36" rx="8" className="flow-capbox" />
           <text x="40" y="36" className="flow-eyebrow">
             SET ONCE · SIGNED BY YOU
           </text>
           <text x="40" y="51" className="flow-cap-strong">
-            AT MOST {cap} GNOT A {period.toUpperCase()}
+            AT MOST {cap} GNOT EVERY {period.toUpperCase()}
           </text>
           <path d="M116 68 V116" className="flow-thread" />
         </g>
@@ -152,7 +152,7 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
           SET ONCE · SIGNED BY YOU
         </text>
         <text x="170" y="56" textAnchor="middle" className="flow-cap-strong">
-          AT MOST {cap} GNOT A {period.toUpperCase()}
+          AT MOST {cap} GNOT EVERY {period.toUpperCase()}
         </text>
         <line x1="16" y1="80" x2="324" y2="80" className="flow-ceiling-line" />
         <path d="M170 72 V102" className="flow-thread" />
@@ -213,7 +213,7 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
       </svg>
 
       <figcaption className="muted small">
-        <p>Nothing is locked up front: each payment goes from the supporter to the creator in one transaction, and the realm keeps nothing.</p>
+        <p>No escrow: subscribing holds a storage deposit, each payment goes from the supporter to the creator in one transaction, and the realm keeps nothing.</p>
         {/* the picture loops: a way to stop it (WCAG 2.2.2); hidden under reduced motion, where it is still */}
         <button type="button" className="btn btn-quiet flow-toggle" onClick={() => setPaused((p) => !p)} aria-pressed={paused}>
           <Icon name={paused ? "play" : "pause"} />

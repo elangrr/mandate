@@ -4,6 +4,7 @@ import type { Mandate, Plan } from "../lib/amino";
 import { date, dateTime, gnot, isTestPeriod, period, plural, price, relative, shortAddr, thousands } from "../lib/format";
 import { isAddress, read, type Session, type SessionEntry } from "../lib/rpc";
 import { LoosePermission, StopControls, SubscribePanel } from "./actions";
+import { FIRST_DEPOSIT_UGNOT, LATER_DEPOSIT_UGNOT } from "../lib/flows";
 import { usePending } from "../lib/pending";
 import { allowPath } from "../lib/tx";
 import { FlowPicture } from "./FlowPicture";
@@ -24,10 +25,12 @@ import {
   RhythmStrip,
   SlotGauge,
 } from "./parts";
-import { possiblePayments, type MandateTimelineStatus } from "./mandateView";
+import { isCarriedPeriodCurrent, possiblePayments, type MandateTimelineStatus } from "./mandateView";
 import { useWallet } from "./WalletContext";
 
 const PLAN_WALK_PAGES = 10; // the home page looks at the newest 200 plans
+const EXAMPLE_AMOUNT_UGNOT = 1_000_000n;
+const EXAMPLE_CAP_UGNOT = EXAMPLE_AMOUNT_UGNOT + rules.feeAllowanceUgnot;
 
 /** Runs `children` only once the realm is live; otherwise the calm waiting state. */
 function WhenLive({ children }: { children: ReactNode }) {
@@ -64,8 +67,6 @@ function PlanCard({ p }: { p: Plan }) {
 // ------------------------------------------------------------------ home
 
 export function Home() {
-  const examplePrice = 1_000_000n;
-  const exampleCap = examplePrice + rules.feeAllowanceUgnot;
   return (
     <>
       <section className="hero">
@@ -95,7 +96,7 @@ export function Home() {
               <span className="console-stamp-example mono">Example</span>
             </div>
             <div className="console-amount">
-              <span className="console-figure mono">{gnot(examplePrice)}</span>
+              <span className="console-figure mono">{gnot(EXAMPLE_AMOUNT_UGNOT)}</span>
               <span className="console-unit">
                 <strong className="mono">GNOT</strong>
                 <span className="muted small">every 30 days</span>
@@ -103,15 +104,15 @@ export function Home() {
             </div>
             <RhythmStrip
               kicker="Example"
-              amount={examplePrice}
-              cap={exampleCap}
+              amount={EXAMPLE_AMOUNT_UGNOT}
+              cap={EXAMPLE_CAP_UGNOT}
               periodLabel="30 days"
               ticks={["M1", "M2", "M3", "M4", "M5", "M6"]}
             />
             <div className="console-specs">
               <div>
                 <span className="console-spec-k">No escrow</span>
-                <span className="console-spec-v mono">~0.54 GNOT storage deposit</span>
+                <span className="console-spec-v mono">~{gnot(FIRST_DEPOSIT_UGNOT)} GNOT storage deposit</span>
               </div>
               <div>
                 <span className="console-spec-k">Fee allowance</span>
@@ -125,7 +126,7 @@ export function Home() {
           </aside>
         </div>
       </section>
-      <FlowPicture amount={gnot(examplePrice)} cap={gnot(exampleCap)} />
+      <FlowPicture amount={gnot(EXAMPLE_AMOUNT_UGNOT)} period="30 days" cap={gnot(EXAMPLE_CAP_UGNOT)} />
       <Limits />
       <WhenLive>
         <Numbers />
@@ -401,7 +402,10 @@ function PlanBody({ id }: { id: bigint }) {
           </li>
           <li>
             <span>Once, to set it up</span>
-            <span>a storage deposit of about 0.54 GNOT the first time you subscribe to anything here (about 0.19 GNOT after), plus network fees</span>
+            <span>
+              a storage deposit of about {gnot(FIRST_DEPOSIT_UGNOT)} GNOT the first time you subscribe to anything here (about{" "}
+              {gnot(LATER_DEPOSIT_UGNOT)} GNOT after), plus network fees
+            </span>
           </li>
           <li>
             <span>One plan per creator</span>
@@ -657,7 +661,7 @@ function MandateList({ payer }: { payer: string }) {
           const timelineStatus: MandateTimelineStatus =
             m.status === "cancelled"
               ? "cancelled"
-              : m.status === "expired"
+              : m.status === "expired" || now >= m.expiresAt
                 ? "expired"
                 : !session
                   ? "stopped"
@@ -706,7 +710,7 @@ function MandateList({ payer }: { payer: string }) {
                   </dd>
                 </div>
               </dl>
-              {m.status === "active" && m.pulls === 0n && m.paidThrough > 0n && (
+              {isCarriedPeriodCurrent(m, now) && (
                 <p className="small muted mandate-carry">Your current period is already paid (time carried over from an earlier mandate for this plan).</p>
               )}
               <StopControls m={m} all={all} payer={payer} now={now} sessions={sessions} onChanged={reload} />
@@ -881,7 +885,7 @@ export function How() {
         <h1>How Mandate works</h1>
         <p className="lede">A subscription you control on gno.land, built on the chain’s session keys. Two minutes to read.</p>
       </div>
-      <FlowPicture />
+      <FlowPicture amount={gnot(EXAMPLE_AMOUNT_UGNOT)} period="30 days" cap={gnot(EXAMPLE_CAP_UGNOT)} />
       <section aria-labelledby="steps-title">
         <div className="section-head">
           <h2 id="steps-title">Four steps from plan to payment</h2>

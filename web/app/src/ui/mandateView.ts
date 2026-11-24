@@ -69,6 +69,11 @@ function inactiveReason(status: Exclude<MandateTimelineStatus, "active">, expire
   }
 }
 
+/** Whether a mandate's current period is still covered by carried-over time. */
+export function isCarriedPeriodCurrent(m: { status: string; pulls: bigint; paidThrough: bigint }, now: bigint): boolean {
+  return m.status === "active" && m.pulls === 0n && m.paidThrough > 0n && now < m.paidThrough;
+}
+
 /**
  * Facts-only view of a mandate:
  * 1. Payments made = exact `pulls` (at most 6 marks + "+N earlier"). Never inferred from dates.
@@ -77,10 +82,11 @@ function inactiveReason(status: Exclude<MandateTimelineStatus, "active">, expire
  */
 export function buildMandateTimeline(input: MandateTimelineInput): MandateTimelineModel {
   const { pulls, period, nextPullAt, paidThrough, expiresAt, now, status, permissionExpiresAt } = input;
+  const effectiveStatus: MandateTimelineStatus = status === "active" && now >= expiresAt ? "expired" : status;
   const safePulls = pulls < 0n ? 0n : pulls;
   const paidMarks = safePulls > BigInt(MAX_PAID_MARKS) ? MAX_PAID_MARKS : Number(safePulls);
   const paidEarlier = safePulls > BigInt(MAX_PAID_MARKS) ? safePulls - BigInt(MAX_PAID_MARKS) : 0n;
-  const hasCarriedOver = safePulls === 0n && paidThrough > now;
+  const hasCarriedOver = safePulls === 0n && paidThrough > 0n;
 
   let paidSummary: string;
   if (safePulls === 0n && !hasCarriedOver) {
@@ -98,27 +104,27 @@ export function buildMandateTimeline(input: MandateTimelineInput): MandateTimeli
       carriedOver: safePulls === 0n,
       label: safePulls === 0n ? `paid until ${date(paidThrough)} (carried over)` : `paid until ${date(paidThrough)}`,
     };
-  } else if (status === "active") {
+  } else if (effectiveStatus === "active") {
     nowState = { kind: "due", carriedOver: false, label: "payment due" };
   } else {
-    const info = inactiveReason(status, expiresAt, permissionExpiresAt);
+    const info = inactiveReason(effectiveStatus, expiresAt, permissionExpiresAt);
     nowState = { kind: "inactive", carriedOver: false, label: info.short };
   }
 
   let possibleTotal = 0n;
   let stoppedReason: string | null = null;
-  if (status === "active") {
+  if (effectiveStatus === "active") {
     const firstAllowed = now > nextPullAt ? now : nextPullAt;
     possibleTotal = possiblePayments(firstAllowed, expiresAt, period);
   } else {
-    stoppedReason = inactiveReason(status, expiresAt, permissionExpiresAt).reason;
+    stoppedReason = inactiveReason(effectiveStatus, expiresAt, permissionExpiresAt).reason;
   }
 
   const possibleMarks = possibleTotal > BigInt(MAX_POSSIBLE_MARKS) ? MAX_POSSIBLE_MARKS : Number(possibleTotal);
   const possibleMore = possibleTotal > BigInt(MAX_POSSIBLE_MARKS) ? possibleTotal - BigInt(MAX_POSSIBLE_MARKS) : 0n;
 
   const possibleSentence =
-    status !== "active"
+    effectiveStatus !== "active"
       ? stoppedReason!
       : possibleTotal === 0n
         ? `No more payments possible before ${date(expiresAt)}.`

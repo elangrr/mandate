@@ -120,9 +120,9 @@ export function CapMeter({ amount, feeAllowance, periodSec }: { amount: bigint; 
   const cap = amount + feeAllowance;
   const { pricePct, feePct, beyondPct, notToScale } = scaleCapMeter(amount, feeAllowance);
   const style = {
-    "--price-pct": `${pricePct}%`,
-    "--fee-pct": `${feePct}%`,
-    "--beyond-pct": `${beyondPct}%`,
+    "--price-n": pricePct,
+    "--fee-n": feePct,
+    "--beyond-n": beyondPct,
   } as CSSProperties;
   return (
     <div className="cap-meter" style={style}>
@@ -203,7 +203,7 @@ export function RhythmStrip({
         <div className="rhythm-ceiling" />
         <div className="rhythm-bars" style={{ "--cols": shown } as CSSProperties}>
           {ticks.map((t, i) => (
-            <div key={t} className="rhythm-col" style={{ "--i": i, "--h": `${heightPct}%` } as CSSProperties}>
+            <div key={t} className="rhythm-col" style={{ "--i": i, "--h-n": heightPct } as CSSProperties}>
               <span className="rhythm-bar">
                 <span className="rhythm-bar-cap" />
               </span>
@@ -252,17 +252,15 @@ export function MandatePeriods({
     status,
     permissionExpiresAt,
   });
-  const tone = status === "active" ? "ok" : status === "stopped" || status === "permission-expired" ? "warn" : "off";
-  const barScale = cap !== null ? scaleBarHeight(m.amount, cap) : { heightPct: 75, notToScale: false };
+  const effectiveStatus: MandateTimelineStatus = status === "active" && now >= m.expiresAt ? "expired" : status;
+  const tone = effectiveStatus === "active" ? "ok" : effectiveStatus === "stopped" || effectiveStatus === "permission-expired" ? "warn" : "off";
+  const activeCap = effectiveStatus === "active" ? cap : null;
 
   return (
     <div className={`mandate-timeline mandate-timeline-${tone}`}>
       <p className="sr-only">{model.summaryText}</p>
       <div className="mt-head mono" aria-hidden="true">
-        <span>
-          {cap !== null ? `Cap ${gnot(cap)} GNOT` : "No active permission"}
-          {cap !== null && barScale.notToScale ? " · not to scale" : ""}
-        </span>
+        <span>{activeCap !== null ? `Cap ${gnot(activeCap)} GNOT` : "No active permission"}</span>
         <span className="muted">Ends {date(m.expiresAt)}</span>
       </div>
       <div className="mt-grid" aria-hidden="true">
@@ -272,7 +270,7 @@ export function MandatePeriods({
             {model.paidEarlier > 0n && <span className="mt-overflow mono">+{thousands(model.paidEarlier)} earlier</span>}
             {model.paidMarks > 0 ? (
               Array.from({ length: model.paidMarks }, (_, i) => (
-                <span key={i} className="mt-mark mt-mark-paid" style={{ "--h": `${barScale.heightPct}%` } as CSSProperties}>
+                <span key={i} className="mt-mark mt-mark-paid">
                   <span className="mt-mark-glyph">✓</span>
                 </span>
               ))
@@ -289,11 +287,11 @@ export function MandatePeriods({
 
         <div className="mt-section mt-section-possible">
           <span className="mt-label mono">Still possible before end</span>
-          {status === "active" ? (
+          {effectiveStatus === "active" ? (
             model.possibleMarks > 0 ? (
               <div className="mt-marks">
                 {Array.from({ length: model.possibleMarks }, (_, i) => (
-                  <span key={i} className="mt-mark mt-mark-possible" style={{ "--h": `${barScale.heightPct}%` } as CSSProperties} />
+                  <span key={i} className="mt-mark mt-mark-possible" />
                 ))}
                 {model.possibleMore > 0n && <span className="mt-overflow mono">+{thousands(model.possibleMore)} more</span>}
               </div>

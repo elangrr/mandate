@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildMandateTimeline, possiblePayments, scaleBarHeight, scaleCapMeter } from "./mandateView";
+import { buildMandateTimeline, isCarriedPeriodCurrent, possiblePayments, scaleBarHeight, scaleCapMeter } from "./mandateView";
 
 const DAY = 86_400n;
 const MIN = 60n;
@@ -115,6 +115,48 @@ describe("buildMandateTimeline", () => {
     expect(m.nowState.label).toContain("paid until");
     expect(m.nowState.label).toContain("carried over");
     expect(m.summaryText).not.toContain("none yet");
+  });
+
+  it("carried-over time that has passed: keeps carried-over paidSummary, shows payment due (not carried over) now", () => {
+    const period = 30n * DAY;
+    const paidThrough = BASE + 15n * DAY;
+    const now = BASE + 20n * DAY;
+    const expiresAt = BASE + 365n * DAY;
+    const m = buildMandateTimeline({
+      pulls: 0n,
+      period,
+      nextPullAt: paidThrough,
+      paidThrough,
+      expiresAt,
+      now,
+      status: "active",
+    });
+    expect(m.paidSummary).toBe("0 payments on this mandate (time carried over)");
+    expect(m.paidSummary).not.toBe("none yet");
+    expect(m.nowState.kind).toBe("due");
+    expect(m.nowState.label).toBe("payment due");
+    expect(m.nowState.carriedOver).toBe(false);
+    expect(isCarriedPeriodCurrent({ status: "active", pulls: 0n, paidThrough }, BASE + 10n * DAY)).toBe(true);
+    expect(isCarriedPeriodCurrent({ status: "active", pulls: 0n, paidThrough }, now)).toBe(false);
+  });
+
+  it("active status when now >= expiresAt: treated as expired so it never shows payment due", () => {
+    const period = 30n * DAY;
+    const expiresAt = BASE + 90n * DAY;
+    const now = expiresAt;
+    const m = buildMandateTimeline({
+      pulls: 1n,
+      period,
+      nextPullAt: BASE + 30n * DAY,
+      paidThrough: BASE + 30n * DAY,
+      expiresAt,
+      now,
+      status: "active",
+    });
+    expect(m.nowState.kind).toBe("inactive");
+    expect(m.nowState.label).toBe("ended");
+    expect(m.possibleTotal).toBe(0n);
+    expect(m.stoppedReason).toContain("Ended");
   });
 
   it("a mandate that paid 3 times and was stopped: keeps 3 paid marks, 0 possible marks, and states why", () => {
