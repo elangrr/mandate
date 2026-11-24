@@ -9,7 +9,7 @@ import { allowPath } from "../lib/tx";
 import { FlowPicture } from "./FlowPicture";
 import { go, useAsync } from "./hooks";
 import { useLive } from "./live";
-import { Addr, Empty, ExplorerAccount, Gnot, Icon, Loading, NotLive, ReadFailed } from "./parts";
+import { Addr, CapMeter, Empty, ExplorerAccount, Gnot, Icon, Loading, NotLive, ReadFailed, RhythmStrip, SlotGauge } from "./parts";
 import { useWallet } from "./WalletContext";
 
 const PLAN_WALK_PAGES = 10; // the home page looks at the newest 200 plans
@@ -24,16 +24,22 @@ function WhenLive({ children }: { children: ReactNode }) {
 }
 
 function PlanCard({ p }: { p: Plan }) {
+  const cap = p.amount + rules.feeAllowanceUgnot;
   return (
     <li className="plan-card">
       <a href={`#/plan/${p.id}`} className="plan-card-link">
-        <span className="plan-card-title">
-          <span className="plan-num">#{p.id.toString()}</span> {p.title}
+        <span className="plan-card-main">
+          <span className="plan-card-title">
+            <span className="plan-num mono">#{p.id.toString()}</span> {p.title}
+          </span>
+          <span className="plan-card-meta">
+            {plural(p.paidThisPeriod, "payment")} this period · {plural(p.paidLastPeriod, "payment")} the one before
+            {isTestPeriod(p.period) && <span className="badge">test plan</span>}
+          </span>
         </span>
-        <span className="plan-card-price">{price(p.amount, p.period)}</span>
-        <span className="plan-card-meta">
-          {plural(p.paidThisPeriod, "payment")} this period · {plural(p.paidLastPeriod, "payment")} the one before
-          {isTestPeriod(p.period) && <span className="badge">test plan</span>}
+        <span className="plan-card-right">
+          <span className="plan-card-price">{price(p.amount, p.period)}</span>
+          <span className="plan-card-cap mono">cap {gnot(cap)} GNOT</span>
         </span>
       </a>
     </li>
@@ -46,18 +52,61 @@ export function Home() {
   return (
     <>
       <section className="hero">
-        <h1>Support a creator every month, with a cap you set yourself.</h1>
-        <p className="lede">
-          You sign one permission from your own wallet: <em>at most this much, every period, through Mandate only, until you stop</em>. The
-          creator’s collector takes each payment when it is due, and Mandate checks who, how much and when before any coin moves.
-        </p>
-        <div className="hero-actions">
-          <a className="btn btn-primary" href="#/plans">
-            See the plans <Icon name="arrow-right" />
-          </a>
-          <a className="btn btn-quiet" href="#/how">
-            How it works
-          </a>
+        <div className="hero-grid">
+          <div className="hero-copy">
+            <span className="eyebrow mono">
+              <span className="status-dot status-dot-accent" aria-hidden="true" />
+              Direct debit on GNOT · capped on chain
+            </span>
+            <h1>Support a creator every month, with a cap you set yourself.</h1>
+            <p className="lede">
+              You sign one permission from your own wallet: <em>at most this much, every period, through Mandate only, until you stop</em>. The
+              creator’s collector takes each payment when it is due, and Mandate checks who, how much and when before any coin moves.
+            </p>
+            <div className="hero-actions">
+              <a className="btn btn-primary" href="#/plans">
+                See the plans <Icon name="arrow-right" />
+              </a>
+              <a className="btn btn-quiet" href="#/how">
+                How it works
+              </a>
+            </div>
+          </div>
+          <aside className="hero-console" aria-hidden="true">
+            <div className="console-bar">
+              <span className="console-kicker">Standing order · example</span>
+              <span className="console-stamp mono">ENFORCED</span>
+            </div>
+            <div className="console-amount">
+              <span className="console-figure mono">1.00</span>
+              <span className="console-unit">
+                <strong className="mono">GNOT</strong>
+                <span className="muted small">every 30 days</span>
+              </span>
+            </div>
+            <RhythmStrip
+              amountLabel="1"
+              capLabel="1.1"
+              periodLabel="30 DAYS"
+              tone="ok"
+              ratio={1 / 1.1}
+              ticks={["M1", "M2", "M3", "M4", "M5", "M6"]}
+            />
+            <div className="console-specs">
+              <div>
+                <span className="console-spec-k">Locked up front</span>
+                <span className="console-spec-v mono">0 GNOT</span>
+              </div>
+              <div>
+                <span className="console-spec-k">Fee allowance</span>
+                <span className="console-spec-v mono">0.1 GNOT</span>
+              </div>
+              <div>
+                <span className="console-spec-k">Revocation</span>
+                <span className="console-spec-v mono">Any time</span>
+              </div>
+            </div>
+          </aside>
         </div>
       </section>
       <FlowPicture />
@@ -73,7 +122,10 @@ export function Home() {
 function Limits() {
   return (
     <section className="limits" aria-labelledby="limits-title">
-      <h2 id="limits-title">The honest limits</h2>
+      <div className="section-head">
+        <h2 id="limits-title">The honest limits</h2>
+        <span className="console-kicker">Protocol guarantees</span>
+      </div>
       <ul className="limit-grid">
         <li>
           <strong>Direct debit, not escrow.</strong> Nothing is locked up front. You can stop at any time, and a creator is only paid when a
@@ -100,19 +152,19 @@ function Numbers() {
   const { plans, mandates, pulls, paid } = t.value;
   return (
     <section className="numbers" aria-label="Mandate in numbers">
-      <div>
+      <div className="num-cell">
         <span className="num">{thousands(plans)}</span>
         <span className="num-label">plans</span>
       </div>
-      <div>
+      <div className="num-cell">
         <span className="num">{thousands(mandates)}</span>
         <span className="num-label">mandates recorded</span>
       </div>
-      <div>
+      <div className="num-cell">
         <span className="num">{thousands(pulls)}</span>
         <span className="num-label">payments</span>
       </div>
-      <div>
+      <div className="num-cell num-cell-accent">
         <span className="num">{gnot(paid)}</span>
         <span className="num-label">GNOT paid to creators</span>
       </div>
@@ -136,7 +188,9 @@ function PaidPlans() {
     <section aria-labelledby="paid-title">
       <div className="section-head">
         <h2 id="paid-title">Plans people pay for</h2>
-        <a href="#/plans">All plans</a>
+        <a href="#/plans" className="section-link">
+          All plans <Icon name="arrow-right" />
+        </a>
       </div>
       {s.status === "loading" && <Loading what="the plans" />}
       {s.status === "error" && <ReadFailed error={s.error} retry={reload} />}
@@ -228,16 +282,25 @@ function PlanBody({ id }: { id: bigint }) {
   const { plan: p, counts, now } = s.value;
   const cap = p.amount + rules.feeAllowanceUgnot;
   const until = now + 365n * 86400n;
+  const capRatio = cap > 0n ? Number((p.amount * 100n) / cap) / 100 : 0.9;
   return (
     <article className="plan-page">
-      <h1>{p.title}</h1>
-      <p className="plan-meta">
-        Plan #{p.id.toString()} by <Addr a={p.payee} to={`#/creator/${p.payee}`} />
-        {isTestPeriod(p.period) && <span className="badge">test plan: shorter than a day</span>}
-      </p>
-      <p className="plan-price">
-        <Gnot ugnot={p.amount} strong /> <span>every {period(p.period)}</span>
-      </p>
+      <header className="plan-hero card">
+        <p className="plan-meta">
+          <span className="plan-id-chip mono">Plan #{p.id.toString()}</span>
+          <span>
+            by <Addr a={p.payee} to={`#/creator/${p.payee}`} />
+          </span>
+          {isTestPeriod(p.period) && <span className="badge">test plan: shorter than a day</span>}
+        </p>
+        <h1>{p.title}</h1>
+        <div className="plan-financials">
+          <p className="plan-price">
+            <Gnot ugnot={p.amount} strong /> <span>every {period(p.period)}</span>
+          </p>
+          <CapMeter amount={p.amount} feeAllowance={rules.feeAllowanceUgnot} periodSec={p.period} />
+        </div>
+      </header>
 
       <dl className="stats">
         <div>
@@ -265,11 +328,25 @@ function PlanBody({ id }: { id: bigint }) {
       )}
 
       <section className="card allow" aria-labelledby="allow-title">
+        <div className="allow-rail">
+          <span className="console-kicker">Standing order authorization</span>
+          <span className="allow-cap-chip mono">HARD CAP {gnot(cap)} GNOT</span>
+        </div>
         <h2 id="allow-title">What supporting this plan means</h2>
         <p className="allow-sentence">
           You allow the creator’s collector to take <strong>at most {gnot(cap)} GNOT every {period(p.period)}</strong>, through Mandate only,
           until <strong>{date(until)}</strong>. You can stop at any time.
         </p>
+        <RhythmStrip
+          amountLabel={gnot(p.amount)}
+          capLabel={gnot(cap)}
+          periodLabel={period(p.period).toUpperCase()}
+          endLabel={date(until).toUpperCase()}
+          tone="ok"
+          ratio={capRatio}
+          wide
+          ticks={["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12"]}
+        />
         <ul className="costs">
           <li>
             <span>Each period</span>
@@ -323,7 +400,10 @@ function Supporters({ plan, now }: { plan: Plan; now: bigint }) {
   }
   return (
     <section aria-labelledby="sup-title">
-      <h2 id="sup-title">Supporters</h2>
+      <div className="section-head">
+        <h2 id="sup-title">Supporters</h2>
+        {list.length > 0 && <span className="console-kicker mono">{plural(list.length, "supporter")} shown</span>}
+      </div>
       <p className="muted small">People with an active mandate who have paid at least once, newest first.</p>
       {first.status === "loading" && <Loading what="the supporters" />}
       {first.status === "error" && <ReadFailed error={first.error} retry={reload} />}
@@ -333,7 +413,7 @@ function Supporters({ plan, now }: { plan: Plan; now: bigint }) {
           {list.map((m) => (
             <li key={m.id.toString()}>
               <Addr a={m.payer} to={`#/mine?a=${m.payer}`} />
-              <span>{plural(Number(m.pulls), "payment")}</span>
+              <span className="sup-count mono">{plural(Number(m.pulls), "payment")}</span>
               <span className="muted">paid through {date(m.paidThrough)}</span>
               <span className="muted">since {relative(m.createdAt, now)}</span>
             </li>
@@ -368,7 +448,7 @@ function AddressForm({ value, label, submit: submitLabel, onAddress }: { value: 
     onAddress(a);
   }
   return (
-    <form className="addr-form" onSubmit={submit} noValidate>
+    <form className="addr-form card" onSubmit={submit} noValidate>
       <label htmlFor="addr">{label}</label>
       <div className="addr-row">
         <input
@@ -383,7 +463,7 @@ function AddressForm({ value, label, submit: submitLabel, onAddress }: { value: 
           aria-invalid={bad}
           aria-describedby={bad ? "addr-err" : undefined}
         />
-        <button type="submit" className="btn btn-quiet">
+        <button type="submit" className="btn btn-primary">
           {submitLabel}
         </button>
         {wallet.address ? (
@@ -412,8 +492,11 @@ export function Mine({ address }: { address: string }) {
   const a = address || wallet.address || "";
   return (
     <>
-      <h1>My mandates</h1>
-      <p className="lede">Every mandate a wallet has given, with what the chain itself says about each permission.</p>
+      <div className="page-head">
+        <span className="console-kicker">Supporter ledger · chain verified</span>
+        <h1>My mandates</h1>
+        <p className="lede">Every mandate a wallet has given, with what the chain itself says about each permission.</p>
+      </div>
       <AddressForm key={a} value={a} label="Wallet address" submit="Show mandates" onAddress={(x) => go(`/mine?a=${x}`)} />
       {a && isAddress(a) && (
         <WhenLive>
@@ -468,14 +551,17 @@ function MandateList({ payer }: { payer: string }) {
   const loose = sessions.filter((x) => x.allowPaths.length === 1 && x.allowPaths[0] === allowPath() && !rows.some((r) => r.m.session === x.address));
   const looseList = loose.length > 0 && (
     <section className="loose" aria-labelledby="loose-h">
-      <h2 id="loose-h">Permissions without a mandate</h2>
+      <div className="section-head">
+        <h2 id="loose-h">Permissions without a mandate</h2>
+        <span className="console-kicker mono">{plural(loose.length, "permission")}</span>
+      </div>
       <p className="muted small">
         These permissions for Mandate are on chain, but no mandate listed here uses them: a collector key its creator has since replaced, a subscription
         started and not finished, or a mandate older than the history shown.
       </p>
       <ul className="mandate-list">
         {loose.map((x) => (
-          <li key={x.address} className="card mandate">
+          <li key={x.address} className="card mandate" data-tone="warn">
             <div className="mandate-head">
               <span className="mandate-title">
                 Permission for key <Addr a={x.address} />
@@ -497,25 +583,48 @@ function MandateList({ payer }: { payer: string }) {
       </Empty>
     );
   const active = rows.filter((r) => r.m.status === "active").length;
+  const nearLimit = active >= rules.maxActive - 2;
   return (
     <>
-      <p className={active >= rules.maxActive - 2 ? "notice notice-warn" : "muted small"}>
-        {plural(active, "active mandate")} of the {rules.maxActive} a wallet can hold.
-        {active >= rules.maxActive - 2 && " You are close to the limit: cancel one you no longer need before adding another."}
-      </p>
+      <div className={nearLimit ? "capacity-bar notice notice-warn" : "capacity-bar"}>
+        <div className="capacity-copy">
+          <p className={nearLimit ? "" : "muted small"}>
+            {plural(active, "active mandate")} of the {rules.maxActive} a wallet can hold.
+            {nearLimit && " You are close to the limit: cancel one you no longer need before adding another."}
+          </p>
+        </div>
+        <SlotGauge active={active} max={rules.maxActive} />
+      </div>
       <ul className="mandate-list">
         {rows.map(({ m, plan, session }) => {
           const st = mandateState(m, session, now);
+          const cap = session ? session.spendLimit : m.amount + rules.feeAllowanceUgnot;
+          const capRatio = cap > 0n ? Number((m.amount * 100n) / cap) / 100 : 0.9;
           return (
-            <li key={m.id.toString()} className="card mandate">
+            <li key={m.id.toString()} className="card mandate" data-tone={st.tone}>
               <div className="mandate-head">
                 <a href={`#/plan/${m.planId}`} className="mandate-title">
-                  <span className="plan-num">#{m.planId.toString()}</span> {plan?.title ?? "plan"}
+                  <span className="plan-num mono">#{m.planId.toString()}</span> {plan?.title ?? "plan"}
                 </a>
                 <span className={`pill pill-${st.tone}`}>{st.label}</span>
               </div>
-              <p className="mandate-price">{price(m.amount, m.period)}</p>
-              <p className="small">{st.note}</p>
+              <div className="mandate-amount-row">
+                <p className="mandate-price">{price(m.amount, m.period)}</p>
+                <span className="mandate-cap-tag mono">cap {gnot(cap)} GNOT</span>
+              </div>
+              <p className="mandate-note small">{st.note}</p>
+              {st.tone !== "off" && (
+                <RhythmStrip
+                  amountLabel={gnot(m.amount)}
+                  capLabel={gnot(cap)}
+                  periodLabel={period(m.period).toUpperCase()}
+                  endLabel={date(m.expiresAt).toUpperCase()}
+                  tone={st.tone}
+                  ratio={capRatio}
+                  wide
+                  ticks={["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10", "P11", "P12"]}
+                />
+              )}
               <dl className="mandate-facts">
                 <div>
                   <dt>Payments</dt>
@@ -539,7 +648,7 @@ function MandateList({ payer }: { payer: string }) {
                 </div>
               </dl>
               {m.status === "active" && m.pulls === 0n && m.paidThrough > 0n && (
-                <p className="small muted">Your current period is already paid (time carried over from an earlier mandate for this plan).</p>
+                <p className="small muted mandate-carry">Your current period is already paid (time carried over from an earlier mandate for this plan).</p>
               )}
               <StopControls m={m} all={all} payer={payer} now={now} sessions={sessions} onChanged={reload} />
             </li>

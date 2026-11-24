@@ -94,6 +94,25 @@ test("while the realm waits for approval: a calm state, no errors", async ({ pag
     await expect(page.getByRole("heading", { name: "Deployed, waiting for the network’s approval" })).toBeVisible();
   }
   await expect(page.getByRole("link", { name: /approval status/ })).toBeVisible();
+  // Capture waiting-for-approval screenshots at desktop and phone, light and dark
+  mkdirSync("e2e/out/shots", { recursive: true });
+  for (const [w, h, size] of [
+    [1280, 800, "desktop"],
+    [390, 844, "phone"],
+  ] as const) {
+    await page.setViewportSize({ width: w, height: h });
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
+      await page.goto("./#/plan/1");
+      await expect(page.getByRole("heading", { name: "Deployed, waiting for the network’s approval" })).toBeVisible();
+      await page.waitForTimeout(250);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow, `waiting-plan ${size}: no sideways scroll`).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: `e2e/out/shots/onyx-waiting-${size}-${scheme}.png`, fullPage: true });
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
   await page.goto("./#/how");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("How Mandate works");
 });

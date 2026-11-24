@@ -53,7 +53,7 @@ execFileSync("npx", ["vite", "build", "--outDir", "e2e/out/dist", "--emptyOutDir
 });
 
 const dist = join(app, "e2e/out/dist");
-const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".png": "image/png" };
+const types = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".svg": "image/svg+xml", ".json": "application/json", ".png": "image/png", ".woff2": "font/woff2" };
 const port = await freePort();
 server = createServer((req, res) => {
   const url = new URL(req.url, "http://x");

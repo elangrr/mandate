@@ -30,6 +30,7 @@ function csp(mode: string): Plugin {
     "default-src 'none'",
     "script-src 'self'",
     "style-src 'self'",
+    "font-src 'self'",
     "img-src 'self' data:",
     `connect-src ${rpc}${coingecko}`,
     "base-uri 'none'",

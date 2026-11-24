@@ -1,6 +1,6 @@
-import { type ReactNode } from "react";
+import { type CSSProperties, type ReactNode } from "react";
 import { config, explorerAccount, pkgStatusPage } from "../config";
-import { gnot, shortAddr } from "../lib/format";
+import { gnot, period, shortAddr } from "../lib/format";
 import { ReadError, type PackageStatus } from "../lib/rpc";
 import { DecodeError } from "../lib/amino";
 import { Usd } from "./price";
@@ -19,6 +19,7 @@ const PATHS = {
   stop: "M7 7h10v10H7z",
   pause: "M9 6v12M15 6v12",
   play: "M8 5.5v13l11-6.5-11-6.5Z",
+  shield: "M12 3l7 3v5c0 4.5-3 8.2-7 10-4-1.8-7-5.5-7-10V6l7-3Z",
 } as const;
 
 export type IconName = keyof typeof PATHS;
@@ -96,6 +97,109 @@ export function ReadFailed({ error, retry }: { error: Error; retry?: () => void 
 }
 
 /**
+ * Visual cap ceiling meter: shows how the plan's price and the collector's
+ * fee allowance fit inside the hard cap enforced by the chain.
+ */
+export function CapMeter({ amount, feeAllowance, periodSec }: { amount: bigint; feeAllowance: bigint; periodSec: bigint }) {
+  const cap = amount + feeAllowance;
+  const rawPct = cap > 0n ? Number((amount * 1000n) / cap) / 10 : 90;
+  // Keep both segments visibly legible even for very large or very small plans.
+  const pricePct = Math.min(92, Math.max(18, rawPct));
+  const feePct = 100 - pricePct;
+  const style = { "--price-pct": `${pricePct}%`, "--fee-pct": `${feePct}%` } as CSSProperties;
+  return (
+    <div className="cap-meter" style={style}>
+      <div className="cap-meter-head">
+        <span className="console-kicker">Cap ceiling · enforced per {period(periodSec)}</span>
+        <span className="cap-meter-ceiling mono">MAX {gnot(cap)} GNOT</span>
+      </div>
+      <div className="cap-meter-track" aria-hidden="true">
+        <span className="cap-meter-price" />
+        <span className="cap-meter-fee" />
+        <span className="cap-meter-pin" />
+      </div>
+      <div className="cap-meter-legend">
+        <span className="cap-legend-item">
+          <span className="cap-swatch cap-swatch-price" aria-hidden="true" />
+          <span className="muted">Price</span> <strong className="mono">{gnot(amount)} GNOT</strong>
+        </span>
+        <span className="cap-legend-item">
+          <span className="cap-swatch cap-swatch-fee" aria-hidden="true" />
+          <span className="muted">Fee allowance</span> <strong className="mono">+{gnot(feeAllowance)} GNOT</strong>
+        </span>
+        <span className="cap-legend-item cap-legend-cap">
+          <span className="cap-swatch cap-swatch-cap" aria-hidden="true" />
+          <span className="muted">Hard cap</span> <strong className="mono">{gnot(cap)} GNOT</strong>
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Payment rhythm strip: recurring period beats rendered strictly under the
+ * amber cap ceiling line so the cadence and limit are legible at a glance.
+ */
+export function RhythmStrip({
+  amountLabel,
+  capLabel,
+  periodLabel,
+  endLabel,
+  tone = "ok",
+  ratio = 0.86,
+  ticks = ["P1", "P2", "P3", "P4", "P5", "P6"],
+  wide = false,
+}: {
+  amountLabel: string;
+  capLabel: string;
+  periodLabel: string;
+  endLabel?: string;
+  tone?: "ok" | "warn" | "off";
+  ratio?: number;
+  ticks?: string[];
+  wide?: boolean;
+}) {
+  const pct = Math.round(Math.min(86, Math.max(44, ratio * 88)));
+  return (
+    <div className={`rhythm rhythm-${tone}${wide ? " rhythm-wide" : ""}`} aria-hidden="true">
+      <div className="rhythm-top">
+        <span className="rhythm-cap-tag mono">CEILING {capLabel} GNOT</span>
+        <span className="rhythm-cadence mono">
+          {amountLabel} GNOT / {periodLabel}
+          {endLabel ? ` · UNTIL ${endLabel}` : ""}
+        </span>
+      </div>
+      <div className="rhythm-stage">
+        <div className="rhythm-overband" />
+        <div className="rhythm-ceiling" />
+        <div className="rhythm-bars">
+          {ticks.map((t, i) => (
+            <div key={t} className="rhythm-col" style={{ "--i": i, "--h": `${pct}%` } as CSSProperties}>
+              <span className="rhythm-bar">
+                <span className="rhythm-bar-cap" />
+              </span>
+              <span className="rhythm-tick mono">{t}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** 16-slot visual capacity gauge for a wallet's active mandates. */
+export function SlotGauge({ active, max }: { active: number; max: number }) {
+  const warn = active >= max - 2;
+  return (
+    <div className={warn ? "slot-gauge slot-gauge-warn" : "slot-gauge"} aria-hidden="true">
+      {Array.from({ length: max }, (_, i) => (
+        <span key={i} className={i < active ? "slot-cell slot-cell-on" : "slot-cell"} />
+      ))}
+    </div>
+  );
+}
+
+/**
  * The calm state while the realm is deployed but parked until the network's
  * approver enables it (or not there at all). Never an error: nothing is wrong.
  */
@@ -104,37 +208,59 @@ export function NotLive({ status }: { status: PackageStatus }) {
   const parked = status.status === "inert";
   return (
     <section className="notlive card" aria-labelledby="notlive-title">
-      <div className="notlive-mark" aria-hidden="true">
-        <Icon name="clock" />
+      <div className="notlive-rail">
+        <span className="notlive-beacon">
+          <span className="status-dot status-dot-signal" aria-hidden="true" />
+          <span className="mono">{parked ? "STANDBY · AWAITING PACKAGE APPROVAL" : "STANDBY · NOT DEPLOYED"}</span>
+        </span>
+        <span className="notlive-net mono">{config.networkName}</span>
       </div>
-      <h2 id="notlive-title">{parked ? "Deployed, waiting for the network’s approval" : "Not on this network yet"}</h2>
-      {parked ? (
-        <p>
-          Mandate is on the {config.networkName}, but new code there stays parked until the network’s package approver enables it. Until then nobody
-          can read or use it, so there are no plans to show yet. Nothing is wrong, and nothing is needed from you: this page fills itself the
-          moment the approval lands.
-        </p>
-      ) : (
-        <p>Mandate has not been published on the {config.networkName} yet.</p>
-      )}
+      <div className="notlive-body">
+        <div className="notlive-mark" aria-hidden="true">
+          <Icon name="clock" />
+        </div>
+        <div className="notlive-copy">
+          <h2 id="notlive-title">{parked ? "Deployed, waiting for the network’s approval" : "Not on this network yet"}</h2>
+          {parked ? (
+            <p>
+              Mandate is on the {config.networkName}, but new code there stays parked until the network’s package approver enables it. Until then nobody
+              can read or use it, so there are no plans to show yet. Nothing is wrong, and nothing is needed from you: this page fills itself the
+              moment the approval lands.
+            </p>
+          ) : (
+            <p>Mandate has not been published on the {config.networkName} yet.</p>
+          )}
+        </div>
+      </div>
       <ul className="notlive-links">
         <li>
-          <a href="#/how">How Mandate works</a>, in two minutes
+          <a href="#/how" className="notlive-link">
+            <span>
+              <strong>How Mandate works</strong>
+              <span className="muted small">, in two minutes</span>
+            </span>
+            <Icon name="arrow-right" />
+          </a>
         </li>
         {gpas && parked && (
           <li>
-            <a href={gpas} target="_blank" rel="noreferrer noopener" className="ext">
-              The approval status <Icon name="external" />
+            <a href={gpas} target="_blank" rel="noreferrer noopener" className="notlive-link ext">
+              <span>The approval status</span>
+              <Icon name="external" />
             </a>
           </li>
         )}
         <li>
-          <a href={config.sourceUrl} target="_blank" rel="noreferrer noopener" className="ext">
-            The source code <Icon name="external" />
+          <a href={config.sourceUrl} target="_blank" rel="noreferrer noopener" className="notlive-link ext">
+            <span>The source code</span>
+            <Icon name="external" />
           </a>
         </li>
       </ul>
-      <p className="muted small mono">{config.realmPath}</p>
+      <div className="notlive-realm">
+        <span className="console-kicker">Realm path</span>
+        <p className="muted small mono break">{config.realmPath}</p>
+      </div>
     </section>
   );
 }

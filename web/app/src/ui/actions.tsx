@@ -606,6 +606,13 @@ function SubscribeBody({
       const need = st.deposit + st.fees + plan.amount + rules.feeAllowanceUgnot;
       return (
         <div className="confirm">
+          <div className="confirm-head">
+            <span className="console-kicker">
+              <span className="status-dot status-dot-accent" aria-hidden="true" />
+              Ready to sign
+            </span>
+            <span className="mono small muted">Cap {gnot(st.cap)} GNOT / {period(plan.period)}</span>
+          </div>
           <p className="confirm-sentence">
             From this wallet: <strong>at most {gnot(st.cap)} GNOT every {period(plan.period)}</strong>, through Mandate only, until{" "}
             <strong>{date(st.end)}</strong>.

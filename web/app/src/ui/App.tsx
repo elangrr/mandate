@@ -96,12 +96,13 @@ function WalletButton() {
     );
   if (!w.onRightNetwork)
     return (
-      <button type="button" className="btn btn-quiet" onClick={() => void w.switchNetwork()} disabled={w.busy}>
+      <button type="button" className="btn btn-quiet btn-signal" onClick={() => void w.switchNetwork()} disabled={w.busy}>
         Switch to {config.chainId}
       </button>
     );
   return (
-    <a className="btn btn-quiet mono" href={`#/mine?a=${w.address}`} title={w.address}>
+    <a className="btn btn-quiet btn-wallet mono" href={`#/mine?a=${w.address}`} title={w.address}>
+      <span className="status-dot status-dot-ok" aria-hidden="true" />
       {shortAddr(w.address)}
     </a>
   );
@@ -110,8 +111,9 @@ function WalletButton() {
 function Mark() {
   return (
     <svg className="brand-mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false">
-      <rect x="1" y="1" width="26" height="26" rx="8" fill="currentColor" />
-      <path d="M8 18.5v-9l6 6 6-6v9" fill="none" stroke="var(--accent-ink)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+      <rect x="1" y="1" width="26" height="26" rx="7" className="brand-mark-bg" />
+      <path d="M6.5 7.5h15" className="brand-mark-cap" />
+      <path d="M7.5 20.5v-8.5l6.5 5.5 6.5-5.5v8.5" className="brand-mark-m" />
     </svg>
   );
 }
@@ -162,7 +164,7 @@ function Shell() {
         <div className="top-inner">
           <a className="brand" href="#/" translate="no">
             <Mark />
-            Mandate
+            <span className="brand-name">Mandate</span>
           </a>
           <nav className="nav" aria-label="Main">
             <NavLink to="/plans">Plans</NavLink>
@@ -171,15 +173,21 @@ function Shell() {
             <NavLink to="/how">How it works</NavLink>
           </nav>
           <div className="top-tools">
-            <span className="net">{config.networkName} · test GNOT</span>
+            <span className="net">
+              <span className="status-dot status-dot-accent" aria-hidden="true" />
+              {config.networkName} · test GNOT
+            </span>
             <ThemeButton />
             <WalletButton />
           </div>
         </div>
         {w.error && (
-          <p className="top-inner notice notice-error" role="alert">
-            {w.error}
-          </p>
+          <div className="top-alert-wrap">
+            <p className="notice notice-error" role="alert">
+              <Icon name="alert" />
+              <span>{w.error}</span>
+            </p>
+          </div>
         )}
       </header>
       <main id="main" tabIndex={-1}>
@@ -190,12 +198,17 @@ function Shell() {
       </main>
       <footer className="foot">
         <div className="foot-inner">
-          <p>Mandate runs on the {config.networkName} with test GNOT. Nothing here is real money.</p>
-          <p>
-            <a href={config.sourceUrl} target="_blank" rel="noreferrer noopener">
-              Source code
-            </a>
-          </p>
+          <div className="foot-row">
+            <p className="foot-note">
+              <span className="status-dot status-dot-signal" aria-hidden="true" />
+              Mandate runs on the {config.networkName} with test GNOT. Nothing here is real money.
+            </p>
+            <p className="foot-links">
+              <a href={config.sourceUrl} target="_blank" rel="noreferrer noopener" className="ext">
+                Source code <Icon name="external" />
+              </a>
+            </p>
+          </div>
           <PriceFootnote />
         </div>
       </footer>

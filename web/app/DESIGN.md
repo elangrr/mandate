@@ -1,40 +1,52 @@
-# Mandate web app: design direction
+# Mandate web app: design direction — Night Console
 
 ## The scene
 
-A supporter at their desk, checking what they agreed to pay and when the next payment comes; a creator glancing at who paid this month. Daytime and evening, a laptop or a phone. They come to read numbers they can trust and to act once in a while. So: a calm instrument, not a campaign. Mode: **Operate** for plans, mandates and the creator page; **Read** for how it works; the home page persuades with facts, not with spectacle.
+A supporter or creator opening a precision financial instrument at night or at their desk: checking exact GNOT amounts, seeing the hard cap that the chain enforces, and watching the monthly rhythm of payments stay cleanly below that ceiling. Mandate is direct debit with an unbreakable cap — not a generic dashboard and not a warm-paper bounty board. Every screen treats the cap and the payment cadence as tangible, legible objects.
 
-Not QuestMaster: no warm paper, no green-on-cream, no bounty-board cards. Mandate is a standing order on clean paper: cool neutral ground, ink type, one cobalt blue for what you can act on.
+Dark theme is the primary voice (**Night Console**: deep obsidian ground, layered slate-navy surfaces with fine top-edge light catches, electric cyan for active flow and controls, and signal amber exclusively for the cap ceiling, warnings, and standby states). Light theme (**Daylight Console**) carries the exact same machined hierarchy on cool titanium paper with deep instrument teal and burnished amber.
 
-## Colour (tokens in styles.css; contrast checked, AA for text)
+## Colour (tokens in `src/styles.css`; AA contrast verified ≥ 4.5:1 for text, ≥ 3:1 for large type and control borders)
 
-| Token | Light | Dark | Use |
+| Token | Dark (Night Console) | Light (Daylight Console) | Role |
 |---|---|---|---|
-| `--bg` | #f4f6f8 | #0e1319 | page |
-| `--surface` | #ffffff | #161d26 | panels, inputs |
-| `--ink` | #111821 | #e8edf3 | text |
-| `--ink-2` | #4a5664 | #a3afbd | secondary text (≥ 4.5:1 on bg and surface) |
-| `--line` | #d9dfe6 | #263140 | borders, rules |
-| `--accent` | #1f4fd1 | #7aa2ff | links, primary actions, focus |
-| `--accent-ink` | #ffffff | #0b1220 | text on accent |
-| `--ok` | #146c43 | #5fd39a | active, paid |
-| `--warn` | #8a5300 | #f0b45a | stopped on chain, blocked key |
-| `--danger` | #b42318 | #ff8a80 | read errors |
+| `--bg` | `#090c12` | `#eef2f6` | page ground (with subtle ambient top radial depth) |
+| `--surface` | `#101622` | `#ffffff` | primary console cards, panels |
+| `--surface-2` | `#161e2e` | `#e3e9f1` | recessed telemetry wells, meters, inputs |
+| `--surface-3` | `#1d273b` | `#d8e0eb` | interactive hover wells |
+| `--ink` | `#edf2f9` | `#0c131d` | primary text and numerals |
+| `--ink-2` | `#96a7be` | `#425166` | secondary text, labels (≥ 6:1 on ground and surfaces) |
+| `--line` / `--line-strong` | `#232e42` / `#32425e` | `#cdd6e2` / `#b4c0d0` | hairline structural dividers |
+| `--field-line` | `#637590` | `#69798e` | input and control borders (≥ 3:1) |
+| `--accent` | `#38e8d6` | `#006c64` | luminous cyan / machined teal: primary actions, active flow, focus |
+| `--accent-ink` | `#041618` | `#ffffff` | text on primary accent |
+| `--signal` / `--warn` | `#f5b544` | `#945400` | cap ceiling line, fee allowance, standby/waiting, caution |
+| `--ok` | `#4be096` | `#0d6840` | active mandates, verified checks, confirmed payments |
+| `--danger` | `#ff8484` | `#b82222` | read errors, destructive stop confirmations |
 
-One accent only. No violet, no gradients, no glass. Status colour always comes with a word.
+Status colour is always paired with a word and a geometric shape or beacon dot.
 
 ## Type
 
-The platform's UI sans (no web fonts: the app loads nothing from third parties). Scale in rem, one step ratio about 1.25: 0.8125 (small), 1 (body), 1.125, 1.375, 1.75, 2.25, and a clamp(2rem, 1.4rem + 2.6vw, 3.1rem) display for the home heading only. Body line height 1.55, headings 1.15, measure 65ch. Numbers use tabular figures everywhere they line up. Addresses and keys are monospace because they are data.
+Two self-hosted SIL OFL 1.1 variable fonts committed in `public/fonts/` (Latin subset, ~52.5 KB total, `font-display: swap`, `font-src 'self'` in CSP):
 
-## Space and shape
+- **Space Grotesk** (400–700): headings, display figures, and UI prose — geometric, tight-tracked (`-0.025em` to `-0.032em` on display), with unmistakable oversized tabular numerals (`clamp(2.1rem, 1.45rem + 2.4vw, 3.25rem)` for hero amounts and chain totals).
+- **JetBrains Mono** (400–700): kickers, cap ceiling tags, period ticks, status stamps, wallet addresses, and structured ledger facts.
 
-A 0.25rem base: 0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4rem. Tight inside a group, generous between groups, more above a heading than below it. One radius scale: 0.5rem controls, 0.875rem panels, 999px pills. Borders are 1px `--line`; shadows only on lifted panels, soft and offset. Content width 68rem; text blocks 40rem. Every tap target at least 44px tall.
+Body size `1rem` / `1.58` line-height, max prose measure `42rem`. All numeric readouts use `font-variant-numeric: tabular-nums`.
+
+## Signature elements by screen
+
+- **Shared shell**: Sticky translucent command bar with a 2px cyan-to-amber top hairline, custom capped-channel `M` emblem (amber ceiling bar over cyan M-pulse), active nav indicator line, live network beacon pill, and hardware-key wallet pill.
+- **Home**: Split hero pairing the display statement with a **Standing-Order Specimen Console** (`1.00 GNOT / 30 days` pulsing below a dashed amber `1.1 GNOT` ceiling), followed by an upgraded **Payment Channel Schematic** (`FlowPicture`) with an overhead hard-cap ceiling band, chambered rulebook verifier (`who`, `how much`, `when`), and period timeline rail; numbered `01–04` honest-limits cards; and an oversized 4-cell chain telemetry strip.
+- **Plan page**: Oversized financial header paired with the **Cap Ceiling Meter** (`CapMeter` splitting price vs fee allowance against the vertical amber ceiling pin), 4-cell telemetry bar, and a **Standing-Order Authorization Console** combining the recurring `RhythmStrip` timeline with a highlighted "Ready to sign" slip.
+- **Waiting for approval (`NotLive`)**: Amber-edged **Console Standby Panel** with a `STANDBY · AWAITING PACKAGE APPROVAL` beacon, structured action rows, and a recessed mono realm-path readout.
+- **My mandates**: Command-bar address lookup, a **16-segment Wallet Capacity Gauge** beside the active count, and tone-coded **Standing-Order Pass** cards (emerald / amber / slate left edge, status stamp, oversized price + cap chip, cadence rhythm strip, and recessed 4-cell facts grid).
 
 ## Motion
 
-One authored moment: the how-it-works picture, a coin travelling from supporter to creator while the three checks light in turn (CSS only). Everything else is quiet: a page fades in over 160 ms, links underline, buttons darken on hover and press down 1px. Ease-out, never bounce. Under `prefers-reduced-motion` the picture is still and nothing moves.
+CSS only (zero animation libraries). Subtle upward hero stagger (`420ms ease-out`), cap-meter fill entrance, gentle period-bar rhythm pulse under the cap ceiling, the looping payment pulse & check illumination in `FlowPicture` (with an explicit Pause/Play button), tactile button press (`translateY(1px) scale(0.985)`), and wallet-step pulse ring. Under `@media (prefers-reduced-motion: reduce)`, every animation stops cleanly and every diagram renders complete and still.
 
 ## Voice
 
-Plain words from GLOSSARY.md. Second person, short sentences, the number first. Every state says what happens next ("Next payment from 24 Dec"), every error names the problem and the way out. No hype, no exclamation marks, no "seamless". GNOT amounts exact, the dollar figure marked as approximate. Plan titles are strangers' words: shown as plain text only. Examples are Fluxen's supporter pages only.
+Plain words from `GLOSSARY.md`. Exact GNOT numbers first, approximate USD clearly marked, strangers' plan titles always rendered as plain text, and all risk, limit, and wallet wording kept exact.

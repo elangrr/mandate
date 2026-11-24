@@ -1,7 +1,7 @@
-// The picture of the flow: the supporter sets a cap once, the creator's
-// collector asks for each period's payment, and the realm checks who, how
-// much and when before the coins move. CSS animates it (styles.css,
-// "flow-"); under prefers-reduced-motion it is a still picture.
+// The picture of the flow: the supporter sets a hard cap ceiling once, the
+// creator's collector asks for each period's payment, and the realm checks
+// who, how much and when before the coins move. CSS animates it (styles.css,
+// "flow-"); under prefers-reduced-motion it is a still, complete console diagram.
 
 import { useState } from "react";
 import { Icon } from "./parts";
@@ -14,142 +14,205 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
   const [paused, setPaused] = useState(false);
   return (
     <figure className={paused ? "flow flow-paused" : "flow"}>
-      <svg viewBox="0 4 668 266" role="img" aria-label={label} className="flow-svg">
-        {/* the cap, set once by the supporter */}
+      <div className="flow-header">
+        <span className="console-kicker">Payment channel · live telemetry</span>
+        <span className="flow-cap-pill mono">CAP CEILING {cap} GNOT / {period.toUpperCase()}</span>
+      </div>
+
+      {/* Wide instrument schematic */}
+      <svg viewBox="0 0 720 306" role="img" aria-label={label} className="flow-svg">
+        <defs>
+          <pattern id="flow-grid" width="24" height="24" patternUnits="userSpaceOnUse">
+            <path d="M 24 0 L 0 0 0 24" fill="none" className="flow-grid-line" />
+          </pattern>
+        </defs>
+
+        {/* Subtle instrument background well + grid */}
+        <rect x="8" y="8" width="704" height="290" rx="14" className="flow-frame-bg" />
+        <rect x="8" y="8" width="704" height="290" rx="14" fill="url(#flow-grid)" className="flow-frame" />
+
+        {/* Hard cap ceiling band across the top of the channel */}
+        <rect x="10" y="10" width="700" height="58" rx="12" className="flow-ceiling-band" />
+        <line x1="16" y1="68" x2="704" y2="68" className="flow-ceiling-line" />
         <g className="flow-cap">
-          <rect x="14" y="18" width="270" height="58" rx="14" className="flow-capbox" />
-          <text x="149" y="42" textAnchor="middle" className="flow-small">
-            set once, signed by you
+          <rect x="26" y="21" width="288" height="36" rx="8" className="flow-capbox" />
+          <text x="40" y="36" className="flow-eyebrow">
+            SET ONCE · SIGNED BY YOU
           </text>
-          <text x="149" y="63" textAnchor="middle" className="flow-strong">
-            at most {cap} GNOT a {period}
+          <text x="40" y="51" className="flow-cap-strong">
+            AT MOST {cap} GNOT A {period.toUpperCase()}
           </text>
-          <path d="M149 76 V112" className="flow-thread" />
+          <path d="M116 68 V116" className="flow-thread" />
         </g>
 
-        {/* supporter */}
+        {/* Collector cadence callout on upper right */}
+        <g className="flow-cadence">
+          <path d="M492 40 a14 14 0 1 1 -1 -6" className="flow-loop" />
+          <path d="M493 29 l-1 6 -6 -2" className="flow-loop" />
+          <text x="518" y="36" className="flow-small">
+            every {period}, the creator’s
+          </text>
+          <text x="518" y="52" className="flow-small">
+            collector asks for {amount} GNOT
+          </text>
+        </g>
+
+        {/* Payment tracks under the ceiling */}
+        <path d="M180 162 H262" className="flow-track" />
+        <path d="M458 162 H540" className="flow-track" />
+        <path d="M180 162 H262" className="flow-track-glow" />
+        <path d="M458 162 H540" className="flow-track-glow" />
+
+        {/* Supporter node */}
         <g className="flow-node">
-          <circle cx="110" cy="170" r="46" className="flow-disc" />
-          <path d="M88 160 h44 a6 6 0 0 1 6 6 v24 a6 6 0 0 1 -6 6 h-44 a6 6 0 0 1 -6 -6 v-24 a6 6 0 0 1 6 -6 Z M120 178 h10" className="flow-glyph" />
-          <text x="110" y="240" textAnchor="middle" className="flow-label">
+          <rect x="34" y="116" width="146" height="92" rx="12" className="flow-panel" />
+          <path d="M90 144 h34 a5 5 0 0 1 5 5 v18 a5 5 0 0 1 -5 5 h-34 a5 5 0 0 1 -5 -5 v-18 a5 5 0 0 1 5 -5 Z M116 158 h8" className="flow-glyph" />
+          <text x="107" y="191" textAnchor="middle" className="flow-label">
             Supporter
           </text>
+          <text x="107" y="226" textAnchor="middle" className="flow-micro">
+            YOUR WALLET
+          </text>
         </g>
 
-        {/* the realm */}
+        {/* Mandate rulebook chamber */}
         <g className="flow-node">
-          <circle cx="320" cy="170" r="58" className="flow-disc flow-realm" />
-          <text x="320" y="158" textAnchor="middle" className="flow-strong">
+          <rect x="262" y="96" width="196" height="132" rx="14" className="flow-panel flow-realm" />
+          <text x="360" y="121" textAnchor="middle" className="flow-strong">
             Mandate
           </text>
-          {/* the three checks, drawn ticks (not a text glyph) */}
+          <line x1="280" y1="132" x2="440" y2="132" className="flow-divider" />
           {[
-            ["who", 182],
-            ["how much", 198],
-            ["when", 214],
+            ["who", 156],
+            ["how much", 180],
+            ["when", 204],
           ].map(([word, y], i) => (
             <g key={word} className={`flow-check flow-check-${i + 1}`}>
-              <path d={`M282 ${Number(y) - 4} l3 3 6 -7`} className="flow-tick" />
-              <text x="296" y={y}>
+              <rect x="284" y={Number(y) - 13} width="152" height="20" rx="5" className="flow-check-bg" />
+              <path d={`M294 ${Number(y) - 3} l3 3 6 -7`} className="flow-tick" />
+              <text x="312" y={Number(y) + 1}>
                 {word}
               </text>
             </g>
           ))}
-          <text x="320" y="252" textAnchor="middle" className="flow-label">
-            the rulebook
+          <text x="360" y="244" textAnchor="middle" className="flow-micro">
+            THE RULEBOOK · ENFORCED ON CHAIN
           </text>
         </g>
 
-        {/* creator */}
+        {/* Creator node */}
         <g className="flow-node">
-          <circle cx="530" cy="170" r="46" className="flow-disc" />
-          <path d="M530 150 l6 13 14 2 -10 10 2 14 -12 -7 -12 7 2 -14 -10 -10 14 -2 Z" className="flow-glyph" />
-          <text x="530" y="240" textAnchor="middle" className="flow-label">
+          <rect x="540" y="116" width="146" height="92" rx="12" className="flow-panel" />
+          <path d="M613 139 l5 10 11 1.5 -8 8 2 11 -10 -5.5 -10 5.5 2 -11 -8 -8 11 -1.5 Z" className="flow-glyph" />
+          <text x="613" y="191" textAnchor="middle" className="flow-label">
             Creator
           </text>
+          <text x="613" y="226" textAnchor="middle" className="flow-micro">
+            DIRECT TRANSFER
+          </text>
         </g>
 
-        {/* the path of a payment */}
-        <path d="M158 170 H260" className="flow-track" />
-        <path d="M380 170 H482" className="flow-track" />
-        <path id="flow-route" d="M158 170 H482" fill="none" stroke="none" />
+        {/* Travelling payment pulse */}
         <g className="flow-coin">
-          <circle r="11" className="flow-coin-disc" />
+          <circle r="18" className="flow-coin-halo" />
+          <circle r="13" className="flow-coin-disc" />
           <text y="4" textAnchor="middle" className="flow-coin-text">
             {amount}
           </text>
         </g>
 
-        {/* every period */}
-        <path d="M420 92 a24 24 0 1 1 -2 -10" className="flow-loop" />
-        <path d="M420 74 l-2 8 -8 -3" className="flow-loop" />
-        <text x="470" y="84" className="flow-small">
-          every {period}, the creator’s
-        </text>
-        <text x="470" y="100" className="flow-small">
-          collector asks for {amount} GNOT
-        </text>
+        {/* Monthly rhythm pulse baseline */}
+        <g className="flow-timeline">
+          <line x1="34" y1="274" x2="686" y2="274" className="flow-time-axis" />
+          {[0, 1, 2, 3, 4, 5].map((i) => {
+            const x = 86 + i * 110;
+            return (
+              <g key={i} className={`flow-beat flow-beat-${i + 1}`}>
+                <line x1={x} y1="266" x2={x} y2="274" className="flow-beat-tick" />
+                <circle cx={x} cy="274" r="3.5" className="flow-beat-dot" />
+                <text x={x} y="290" textAnchor="middle" className="flow-micro">
+                  {period === "month" ? `M${i + 1}` : `P${i + 1}`}
+                </text>
+              </g>
+            );
+          })}
+        </g>
       </svg>
 
-      {/* the same picture stacked, for narrow screens (CSS shows one of the two) */}
+      {/* Stacked console schematic for narrow screens */}
       <svg viewBox="0 0 340 540" role="img" aria-label={label} className="flow-svg flow-svg-narrow">
-        <rect x="35" y="8" width="270" height="56" rx="14" className="flow-capbox" />
-        <text x="170" y="31" textAnchor="middle" className="flow-small">
-          set once, signed by you
+        <defs>
+          <pattern id="flow-grid-narrow" width="24" height="24" patternUnits="userSpaceOnUse">
+            <path d="M 24 0 L 0 0 0 24" fill="none" className="flow-grid-line" />
+          </pattern>
+        </defs>
+        <rect x="6" y="6" width="328" height="528" rx="14" className="flow-frame-bg" />
+        <rect x="6" y="6" width="328" height="528" rx="14" fill="url(#flow-grid-narrow)" className="flow-frame" />
+        <rect x="16" y="16" width="308" height="56" rx="10" className="flow-capbox" />
+        <text x="170" y="36" textAnchor="middle" className="flow-eyebrow">
+          SET ONCE · SIGNED BY YOU
         </text>
-        <text x="170" y="52" textAnchor="middle" className="flow-strong">
-          at most {cap} GNOT a {period}
+        <text x="170" y="56" textAnchor="middle" className="flow-cap-strong">
+          AT MOST {cap} GNOT A {period.toUpperCase()}
         </text>
-        <path d="M170 64 V88" className="flow-thread" />
+        <line x1="16" y1="80" x2="324" y2="80" className="flow-ceiling-line" />
+        <path d="M170 72 V102" className="flow-thread" />
 
-        <circle cx="170" cy="130" r="40" className="flow-disc" />
-        <path d="M150 121 h40 a5 5 0 0 1 5 5 v20 a5 5 0 0 1 -5 5 h-40 a5 5 0 0 1 -5 -5 v-20 a5 5 0 0 1 5 -5 Z M178 136 h9" className="flow-glyph" />
-        <text x="222" y="135" className="flow-label">
+        <rect x="55" y="102" width="230" height="68" rx="12" className="flow-panel" />
+        <path d="M84 126 h30 a4 4 0 0 1 4 4 v14 a4 4 0 0 1 -4 4 h-30 a4 4 0 0 1 -4 -4 v-14 a4 4 0 0 1 4 -4 Z M106 137 h7" className="flow-glyph" />
+        <text x="134" y="135" className="flow-label">
           Supporter
         </text>
-
-        <path d="M170 172 V222" className="flow-track" />
-        <circle cx="170" cy="280" r="56" className="flow-disc flow-realm" />
-        <text x="170" y="266" textAnchor="middle" className="flow-strong">
-          Mandate
+        <text x="134" y="152" className="flow-micro">
+          YOUR WALLET
         </text>
+
+        <path d="M170 170 V218" className="flow-track" />
+        <rect x="44" y="218" width="252" height="128" rx="14" className="flow-panel flow-realm" />
+        <text x="170" y="242" textAnchor="middle" className="flow-strong">
+          Mandate · the rulebook
+        </text>
+        <line x1="64" y1="252" x2="276" y2="252" className="flow-divider" />
         {[
-          ["who", 288],
-          ["how much", 304],
-          ["when", 320],
+          ["who", 275],
+          ["how much", 299],
+          ["when", 323],
         ].map(([word, y], i) => (
           <g key={word} className={`flow-check flow-check-${i + 1}`}>
-            <path d={`M132 ${Number(y) - 4} l3 3 6 -7`} className="flow-tick" />
-            <text x="146" y={y}>
+            <rect x="74" y={Number(y) - 13} width="192" height="20" rx="5" className="flow-check-bg" />
+            <path d={`M86 ${Number(y) - 3} l3 3 6 -7`} className="flow-tick" />
+            <text x="104" y={Number(y) + 1}>
               {word}
             </text>
           </g>
         ))}
-        <text x="102" y="285" textAnchor="end" className="flow-label">
-          the rulebook
-        </text>
 
-        <path d="M170 338 V388" className="flow-track" />
-        <circle cx="170" cy="430" r="40" className="flow-disc" />
-        <path d="M170 410 l6 13 14 2 -10 10 2 14 -12 -7 -12 7 2 -14 -10 -10 14 -2 Z" className="flow-glyph" />
-        <text x="222" y="435" className="flow-label">
+        <path d="M170 346 V394" className="flow-track" />
+        <rect x="55" y="394" width="230" height="68" rx="12" className="flow-panel" />
+        <path d="M99 415 l4.5 9 10 1.5 -7 7 1.5 10 -9 -4.8 -9 4.8 1.5 -10 -7 -7 10 -1.5 Z" className="flow-glyph" />
+        <text x="134" y="427" className="flow-label">
           Creator
         </text>
+        <text x="134" y="444" className="flow-micro">
+          DIRECT TRANSFER
+        </text>
 
-        <path id="flow-route-v" d="M170 172 V388" fill="none" stroke="none" />
         <g className="flow-coin flow-coin-v">
-          <circle r="11" className="flow-coin-disc" />
+          <circle r="17" className="flow-coin-halo" />
+          <circle r="12" className="flow-coin-disc" />
           <text y="4" textAnchor="middle" className="flow-coin-text">
             {amount}
           </text>
         </g>
-        <text x="170" y="500" textAnchor="middle" className="flow-small">
+
+        <text x="170" y="492" textAnchor="middle" className="flow-small">
           every {period}, the creator’s collector
         </text>
-        <text x="170" y="518" textAnchor="middle" className="flow-small">
+        <text x="170" y="510" textAnchor="middle" className="flow-small">
           asks for {amount} GNOT
         </text>
       </svg>
+
       <figcaption className="muted small">
         <p>Nothing is locked up front: each payment goes from the supporter to the creator in one transaction, and the realm keeps nothing.</p>
         {/* the picture loops: a way to stop it (WCAG 2.2.2); hidden under reduced motion, where it is still */}
