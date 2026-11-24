@@ -4,6 +4,7 @@
 
 import { useEffect, useSyncExternalStore } from "react";
 import { config } from "../config";
+import { dateTime } from "../lib/format";
 import { COINGECKO_URL, formatPrice, formatUsd, loadPrice, manualPrice, PRICE_TIMEOUT_MS, type GnotPrice } from "../lib/price";
 
 type PriceState = { status: "loading" } | { status: "ok"; price: GnotPrice } | { status: "off" };
@@ -53,8 +54,9 @@ export function usePrice(): PriceState {
   return s;
 }
 
+/** In UTC, as every other time on the site: "24 Nov 2026, 21:05 UTC". */
 function when(ms: number): string {
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return dateTime(BigInt(Math.floor(ms / 1000)));
 }
 
 export function priceNote(p: GnotPrice): string {

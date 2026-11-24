@@ -13,10 +13,14 @@ import { date, gnot, period } from "./format";
 import type { SessionEntry } from "./rpc";
 import { allowPath, capFor, defaultEnd, GAS, minFee } from "./tx";
 
-/** About what a first mandate stores (measured on a local chain: 5,367 bytes at 100 ugnot a byte). */
+// Storage deposits, from the latest measurement (M1.5 in docs/design.md) at the chain's storage price of
+// 100 ugnot a byte (params/vm:p:storage_price on Onyx). The balance check sets each one aside rounded up.
+/** A wallet's first mandate: 5,367 bytes = 536,700 ugnot; shown as about 0.54 GNOT, and set aside as that. */
 export const FIRST_DEPOSIT_UGNOT = 540_000n;
-/** About what a later mandate stores (1,844 bytes). */
-export const LATER_DEPOSIT_UGNOT = 190_000n;
+/** Each later mandate: 1,844 bytes = 184,400 ugnot; shown as about 0.18 GNOT. */
+export const LATER_DEPOSIT_UGNOT = 180_000n;
+/** What the balance check sets aside for a later mandate: the measured 184,400 ugnot rounded up, as for the first. */
+export const LATER_DEPOSIT_SET_ASIDE_UGNOT = 190_000n;
 
 const DAY = 86_400n;
 
@@ -60,7 +64,8 @@ export type SubscribeState =
       end: bigint;
       cap: bigint;
       paidThrough: bigint; // > now: the first payment waits until then; 0: due at once
-      deposit: bigint; // approximate storage deposit
+      deposit: bigint; // the storage deposit the balance checks set aside (rounded up)
+      depositShown: bigint; // the approximate storage deposit the page states
       fees: bigint; // approximate network fees for the approvals
       /** the wallet covers the deposit and fees but not also the first payment and the fee allowance */
       lowBalance: boolean;
@@ -147,7 +152,7 @@ export function subscribeState(v: ChainView): SubscribeState {
     return { kind: "blocked", title: "Your wallet is full", reason: `You already hold ${rules.maxActive} active mandates, the most a wallet can. Stop one you no longer need first.` };
 
   const end = session && session.expiresAt !== 0n ? session.expiresAt : defaultEnd(now);
-  const deposit = v.hasHistory ? LATER_DEPOSIT_UGNOT : FIRST_DEPOSIT_UGNOT;
+  const deposit = v.hasHistory ? LATER_DEPOSIT_SET_ASIDE_UGNOT : FIRST_DEPOSIT_UGNOT;
   const fees = BigInt(session ? 0 : Math.ceil(minFee(GAS.session, v.gasPrice) * 1.5)) + BigInt(minFee(25_000_000, v.gasPrice)); // a Subscribe signs about 10M to 25M gas
   const paidThrough = v.paidThrough > now ? v.paidThrough : 0n;
   if (v.balance < deposit + fees)
@@ -174,6 +179,7 @@ export function subscribeState(v: ChainView): SubscribeState {
     cap: capFor(plan),
     paidThrough,
     deposit,
+    depositShown: v.hasHistory ? LATER_DEPOSIT_UGNOT : FIRST_DEPOSIT_UGNOT,
     fees,
     lowBalance: v.balance < deposit + fees + firstPayment,
   };
@@ -207,11 +213,17 @@ export function termsCheck(v: ChainView, signed: SignedPermission): string | nul
   return null;
 }
 
-/** What a permission for Mandate without an active mandate still allows, in plain words (`now`: the chain's time). */
-export function permissionAllows(s: SessionEntry, now: bigint): string {
+/**
+ * What a permission for Mandate without an active mandate still allows, in plain words (`now`: the chain's time).
+ * `own`: the wallet that gave it is the connected one, so the words may say "yours".
+ */
+export function permissionAllows(s: SessionEntry, now: bigint, own = true): string {
   if (s.expiresAt !== 0n && s.expiresAt <= now)
     return `This permission expired on ${date(s.expiresAt)}: nobody can use it any more. It is still listed on chain, though, and takes one of the ${rules.maxActive} permissions this wallet can hold until it is removed.`;
-  return `This permission is still on chain${s.expiresAt > 0n ? ` until ${date(s.expiresAt)}` : ""}. No payment can go through without an active mandate, but whoever holds its key (a creator’s collector) can still use it to call Mandate for this wallet and spend up to ${gnot(s.spendLimit)} GNOT every ${period(s.spendPeriod)} of yours on the network fees of those calls. Remove it unless you plan to subscribe again soon.`;
+  const still = `This permission is still on chain${s.expiresAt > 0n ? ` until ${date(s.expiresAt)}` : ""}. No payment can go through without an active mandate, but whoever holds its key (a creator’s collector) can still use it to call Mandate for this wallet and spend up to ${gnot(s.spendLimit)} GNOT`;
+  return own
+    ? `${still} every ${period(s.spendPeriod)} of yours on the network fees of those calls. Remove it unless you plan to subscribe again soon.`
+    : `${still} from this wallet every ${period(s.spendPeriod)} on the network fees of those calls.`;
 }
 
 /** What the page shows for a mandate's stop controls (from the page's own reads). */

@@ -1,7 +1,7 @@
 import { type CSSProperties, type ReactNode } from "react";
 import { config, explorerAccount, pkgStatusPage } from "../config";
-import type { Mandate, Plan, PlanCounts } from "../lib/amino";
-import { date, gnot, period, shortAddr, thousands } from "../lib/format";
+import type { Mandate, Plan } from "../lib/amino";
+import { date, gnot, period, shortAddr, thousands, windowCounts } from "../lib/format";
 import { ReadError, type PackageStatus } from "../lib/rpc";
 import { DecodeError } from "../lib/amino";
 import { buildMandateTimeline, scaleBarHeight, scaleCapMeter, type MandateTimelineStatus } from "./mandateView";
@@ -329,39 +329,40 @@ export function SlotGauge({ active, max, incomplete = false }: { active: number;
 }
 
 /**
- * Creator payments-per-period bar chart built strictly from the real counts
- * already read by loadCreator (paidThisPeriod and paidLastPeriod).
+ * Creator payments bar chart built strictly from the real counts in each
+ * plan as read (paidThisPeriod and paidLastPeriod, counted in the realm's
+ * fixed windows that began at periodStart).
  */
-export function CreatorChart({ plans, counts }: { plans: Plan[]; counts: PlanCounts[] }) {
-  const maxVal = counts.reduce((acc, c) => Math.max(acc, c.paidThisPeriod, c.paidLastPeriod), 0);
+export function CreatorChart({ plans }: { plans: Plan[] }) {
+  const maxVal = plans.reduce((acc, p) => Math.max(acc, p.paidThisPeriod, p.paidLastPeriod), 0);
   return (
     <section className="card creator-chart" aria-labelledby="cchart-title">
       <div className="creator-chart-head">
         <div>
-          <h2 id="cchart-title">Payments per period</h2>
+          <h2 id="cchart-title">Payments by counting window</h2>
           <p className="muted small">
-            In each plan’s current and previous period, across {thousands(plans.length)} {plans.length === 1 ? "plan" : "plans"}
+            In each plan’s current counting window and the one before, across {thousands(plans.length)} {plans.length === 1 ? "plan" : "plans"}. A window is
+            one period of the plan on the UTC clock, the same for every supporter: not anyone’s paid period.
           </p>
         </div>
         <div className="creator-chart-legend mono" aria-hidden="true">
           <span className="cap-legend-item">
             <span className="cap-swatch cap-swatch-price" />
-            This period
+            Current window
           </span>
           <span className="cap-legend-item">
             <span className="cap-swatch cap-swatch-prev" />
-            Last period
+            Window before
           </span>
         </div>
       </div>
       {maxVal === 0 ? (
-        <p className="muted small creator-chart-empty">No payments recorded in any plan’s current or previous period yet.</p>
+        <p className="muted small creator-chart-empty">No payments recorded in any plan’s current or previous counting window yet.</p>
       ) : (
         <ul className="creator-chart-list">
-          {plans.map((p, i) => {
-            const c = counts[i];
-            const thisPct = Math.round((c.paidThisPeriod / maxVal) * 100);
-            const lastPct = Math.round((c.paidLastPeriod / maxVal) * 100);
+          {plans.map((p) => {
+            const thisPct = Math.round((p.paidThisPeriod / maxVal) * 100);
+            const lastPct = Math.round((p.paidLastPeriod / maxVal) * 100);
             return (
               <li key={p.id.toString()} className="creator-chart-row">
                 <div className="creator-chart-label">
@@ -369,15 +370,15 @@ export function CreatorChart({ plans, counts }: { plans: Plan[]; counts: PlanCou
                     <span className="plan-num mono">#{p.id.toString()}</span> {p.title}
                   </a>
                   <span className="creator-chart-nums mono">
-                    {thousands(c.paidThisPeriod)} this · {thousands(c.paidLastPeriod)} last
+                    {windowCounts(p.paidThisPeriod, p.paidLastPeriod, p.periodStart, p.period)}
                   </span>
                 </div>
                 <div className="creator-chart-tracks" aria-hidden="true">
                   <div className="creator-track">
-                    <span className="creator-bar creator-bar-this" style={{ width: `${c.paidThisPeriod > 0 ? Math.max(4, thisPct) : 0}%` }} />
+                    <span className="creator-bar creator-bar-this" style={{ width: `${p.paidThisPeriod > 0 ? Math.max(4, thisPct) : 0}%` }} />
                   </div>
                   <div className="creator-track creator-track-last">
-                    <span className="creator-bar creator-bar-last" style={{ width: `${c.paidLastPeriod > 0 ? Math.max(4, lastPct) : 0}%` }} />
+                    <span className="creator-bar creator-bar-last" style={{ width: `${p.paidLastPeriod > 0 ? Math.max(4, lastPct) : 0}%` }} />
                   </div>
                 </div>
               </li>

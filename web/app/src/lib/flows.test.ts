@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Mandate, Payee, Plan } from "./amino";
-import { FIRST_DEPOSIT_UGNOT, LATER_DEPOSIT_UGNOT, permissionAllows, permissionFits, removeCheck, stopCheck, stopState, subscribeState, termsCheck, type ChainView } from "./flows";
+import { FIRST_DEPOSIT_UGNOT, LATER_DEPOSIT_SET_ASIDE_UGNOT, LATER_DEPOSIT_UGNOT, permissionAllows, permissionFits, removeCheck, stopCheck, stopState, subscribeState, termsCheck, type ChainView } from "./flows";
 import type { SessionEntry } from "./rpc";
 import { allowPath, defaultEnd } from "./tx";
 
@@ -48,6 +48,7 @@ describe("subscribeState", () => {
     expect(s.end).toBe(defaultEnd(NOW));
     expect(s.cap).toBe(1_100_000n);
     expect(s.deposit).toBe(FIRST_DEPOSIT_UGNOT);
+    expect(s.depositShown).toBe(FIRST_DEPOSIT_UGNOT);
     expect(s.fees).toBe(7_500n + 25_000n);
     expect(s.paidThrough).toBe(0n);
     expect(s.lowBalance).toBe(false);
@@ -93,8 +94,17 @@ describe("subscribeState", () => {
   it("a cancelled or ended mandate for the key is not active; the deposit is the later one", () => {
     for (const gone of [cancelled({ planId: plan.id }), mandate({ planId: plan.id, expiresAt: NOW })]) {
       const s = subscribeState(view({ byKey: gone, hasHistory: true }));
-      expect(s.kind === "ready" && s.deposit).toBe(LATER_DEPOSIT_UGNOT);
+      // shown as the measured 184,400 ugnot (1,844 bytes at 100 ugnot a byte) rounds, about 0.18 GNOT; the balance check sets aside 0.19
+      expect(s.kind === "ready" && s.depositShown).toBe(LATER_DEPOSIT_UGNOT);
+      expect(s.kind === "ready" && s.deposit).toBe(LATER_DEPOSIT_SET_ASIDE_UGNOT);
     }
+  });
+
+  it("the deposits: the latest measurement (M1.5) at 100 ugnot a byte, shown rounded, set aside rounded up", () => {
+    expect(FIRST_DEPOSIT_UGNOT).toBe(540_000n); // 5,367 bytes
+    expect(FIRST_DEPOSIT_UGNOT >= 5_367n * 100n).toBe(true);
+    expect(LATER_DEPOSIT_UGNOT).toBe(180_000n); // 1,844 bytes = 184,400 ugnot, about 0.18 GNOT
+    expect(LATER_DEPOSIT_SET_ASIDE_UGNOT >= 1_844n * 100n).toBe(true);
   });
 
   it("one plan per creator: another active plan of the same creator uses the key", () => {
@@ -192,6 +202,11 @@ describe("permissionAllows (a permission without an active mandate)", () => {
     expect(t).toMatch(/^This permission is still on chain until /);
     expect(t).toMatch(/spend up to 1\.1 GNOT every 30 days of yours on the network fees/);
     expect(permissionAllows(session({ expiresAt: 0n }), NOW)).toMatch(/^This permission is still on chain\. No payment/);
+  });
+  it("on another wallet's page: no 'yours', no advice to the visitor", () => {
+    const t = permissionAllows(session(), NOW, false);
+    expect(t).toMatch(/spend up to 1\.1 GNOT from this wallet every 30 days on the network fees of those calls\.$/);
+    expect(t).not.toMatch(/\byou(rs?)?\b/i);
   });
   it("an expired one: cannot be used, only takes one of the wallet's 16 places until removed", () => {
     for (const end of [NOW, NOW - 30n * DAY]) {

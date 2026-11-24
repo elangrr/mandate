@@ -662,7 +662,7 @@ function SubscribeBody({
                 : oneApproval()
                   ? "One approval in Adena (experimental: not yet tried with the real wallet)."
                   : "Two approvals in Adena: the permission, then the terms. The second opens once the first is on chain."}{" "}
-              Adena shows the exact network fee before you sign; expect about {gnot(st.fees)} GNOT in all, plus a storage deposit of about {gnot(st.deposit)} GNOT.
+              Adena shows the exact network fee before you sign; expect about {gnot(st.fees)} GNOT in all, plus a storage deposit of about {gnot(st.depositShown)} GNOT.
             </li>
           </ul>
           {st.lowBalance && (
@@ -798,8 +798,8 @@ export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: M
 }
 
 /** What a permission for Mandate without an active mandate still allows, in plain words. */
-function PermissionAllows({ s, now }: { s: SessionEntry; now: bigint }) {
-  return <p className="small">{permissionAllows(s, now)}</p>;
+function PermissionAllows({ s, now, own = true }: { s: SessionEntry; now: bigint; own?: boolean }) {
+  return <p className="small">{permissionAllows(s, now, own)}</p>;
 }
 
 /**
@@ -829,7 +829,7 @@ export function LoosePermission({ s, payer, now, onChanged }: { s: SessionEntry;
   }
   return (
     <div className="stop">
-      <PermissionAllows s={s} now={now} />
+      <PermissionAllows s={s} now={now} own={w.address === payer} />
       <RunnerStatus r={r} />
       {w.address === payer ? (
         <button type="button" className="btn btn-quiet" onClick={() => void remove()} disabled={r.busy || pending !== null || !s.pubKey}>

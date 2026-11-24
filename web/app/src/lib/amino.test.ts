@@ -47,6 +47,11 @@ describe("decoders on real chain data", () => {
     expect(p.pulls).toBe(5n);
     expect(p.paid).toBe(5_000_000n);
     expect(p.lastPullAt > 0n).toBe(true);
+    // the counting window the counts are in: the realm's now / period * period, so a whole multiple of the period,
+    // and the 5 payments counted in it were all made after it began
+    expect(p.periodStart > 0n).toBe(true);
+    expect(p.periodStart % p.period).toBe(0n);
+    expect(p.lastPullAt >= p.periodStart && p.lastPullAt < p.periodStart + p.period).toBe(true);
     expect(decodeGetPlan(q("GetPlan(99)").data)).toBeNull();
   });
 

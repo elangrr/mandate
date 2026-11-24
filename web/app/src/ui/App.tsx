@@ -5,7 +5,8 @@ import { parseRoute, useRoute, useTheme, type Theme } from "./hooks";
 import { LiveProvider } from "./live";
 import { PendingNotices } from "./actions";
 import { CollectorGuide, Publish } from "./creatorActions";
-import { AllPlans, Creator, Home, How, Mine, PlanPage } from "./pages";
+import { isAddress } from "../lib/rpc";
+import { AllPlans, Creator, Home, How, Mine, PlanPage, planNumber } from "./pages";
 import { Icon } from "./parts";
 import { PriceFootnote } from "./price";
 import { useWallet, WalletProvider } from "./WalletContext";
@@ -56,23 +57,37 @@ function Routes() {
   return <NotFound />;
 }
 
-function titleFor(path: string): string {
+/** The tab title: what the page body shows for this route (the same checks of plan numbers and addresses), and `wallet` the connected one. */
+export function titleFor(path: string, query: URLSearchParams = new URLSearchParams(), wallet: string | null = null): string {
   const site = "Mandate";
   let m: RegExpExecArray | null;
   if (path === "/" || path === "") return `${site} · subscriptions on GNOT with a cap you set`;
-  const fixed: Record<string, string> = { "/plans": "All plans", "/how": "How it works", "/mine": "My mandates", "/creator": "Creator", "/publish": "Publish", "/collector": "Collector guide" };
+  if (path === "/mine") {
+    // as the page decides: the link's address, else the connected wallet's; "My" only for the connected wallet's own
+    const a = query.get("a") || wallet || "";
+    if (!a || a === wallet) return `My mandates · ${site}`;
+    return isAddress(a) ? `Mandates of ${shortAddr(a)} · ${site}` : `Mandates: not an address · ${site}`;
+  }
+  const fixed: Record<string, string> = { "/plans": "All plans", "/how": "How it works", "/creator": "Creator", "/publish": "Publish", "/collector": "Collector guide" };
   if (fixed[path]) return `${fixed[path]} · ${site}`;
-  if ((m = /^\/plan\/(\d+)$/.exec(path))) return `Plan #${m[1]} · ${site}`;
-  if ((m = /^\/creator\/(g1[0-9a-z]{38})$/.exec(path))) return `Creator ${shortAddr(m[1])} · ${site}`;
+  if ((m = /^\/plan\/([^/]+)$/.exec(path))) {
+    const n = planNumber(m[1]);
+    return n === null ? `No such plan · ${site}` : `Plan #${n} · ${site}`;
+  }
+  if ((m = /^\/creator\/([^/]+)$/.exec(path))) return isAddress(m[1]) ? `Creator ${shortAddr(m[1])} · ${site}` : `Creator: not an address · ${site}`;
   return `Page not found · ${site}`;
 }
 
 /** New title, back to the top and focus on main after each route change (not the first). */
 function PageFrame() {
-  const { path } = parseRoute(useRoute());
+  const { path, query } = parseRoute(useRoute());
+  const wallet = useWallet().address;
+  const title = titleFor(path, query, wallet);
   const first = useRef(true);
   useEffect(() => {
-    document.title = titleFor(path);
+    document.title = title;
+  }, [title]);
+  useEffect(() => {
     if (first.current) {
       first.current = false;
       return;

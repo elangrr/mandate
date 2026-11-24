@@ -44,6 +44,10 @@ _Avoid_: fee, rate
 The time between two payments of a plan, from one minute to 30 days.
 _Avoid_: interval, cycle, term
 
+**Counting window**:
+A fixed stretch of one period on the UTC clock in which a plan's payments are counted; windows start at whole multiples of the period since 1 Jan 1970, 00:00 UTC. It is the same for every supporter and is not anyone's paid period, so the current one can have begun before the plan existed. Wherever its count is shown, say when it began ("1 payment since 3 Nov 2026, 00:00 UTC").
+_Avoid_: this period, last period, current period (for these counts)
+
 **Cap**:
 The most a permission lets the collector take per period: the price plus the fee allowance.
 _Avoid_: spend limit (outside commands), budget, maximum

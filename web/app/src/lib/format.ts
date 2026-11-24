@@ -50,9 +50,9 @@ const DATETIME = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 });
 
-/** Unix seconds -> "24 Nov 2026" (UTC). */
+/** Unix seconds -> "24 Nov 2026 UTC": the day in UTC, which says so (east of UTC+3 a late evening is already the next day). */
 export function date(unix: bigint): string {
-  return DATE.format(new Date(Number(unix) * 1000));
+  return DATE.format(new Date(Number(unix) * 1000)) + " UTC";
 }
 
 /** Unix seconds -> "24 Nov 2026, 10:05 UTC". */
@@ -75,6 +75,21 @@ export function relative(target: bigint, now: bigint): string {
 
 export function plural(n: number, one: string, many = one + "s"): string {
   return `${thousands(n)} ${n === 1 ? one : many}`;
+}
+
+/** The noun alone, singular for exactly 1: a label beside its count ("1" / "plan", "4" / "plans"). */
+export function word(n: number | bigint, one: string, many = one + "s"): string {
+  return BigInt(n) === 1n ? one : many;
+}
+
+/**
+ * A plan's payment counts as the realm keeps them: in its current counting
+ * window, which began at `start` (the realm's PeriodStart, a whole multiple of
+ * the period on the UTC clock, the same for every supporter), and in the
+ * window of one period before that. "1 payment since 3 Nov 2026, 00:00 UTC · 0 in the 30 days before that".
+ */
+export function windowCounts(thisWindow: number, windowBefore: number, start: bigint, periodSec: bigint): string {
+  return `${plural(thisWindow, "payment")} since ${dateTime(start)} · ${thousands(windowBefore)} in the ${period(periodSec)} before that`;
 }
 
 /** g1jg8mtu…sqf5 for tables. */

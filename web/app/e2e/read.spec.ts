@@ -37,18 +37,23 @@ test("plan page: price, counts, what you allow, supporters", async ({ page }) =>
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("Support Fluxen's work");
   await expect(page.locator(".plan-price")).toContainText("1 GNOT");
   await expect(page.locator(".plan-price")).toContainText("every 30 days");
-  await expect(page.locator(".stats")).toContainText("Payments this period5");
+  // the realm's counting window, with when it began: never "this period", which reads as a supporter's own period
+  await expect(page.locator(".stats")).toContainText(/Payments since \d{1,2} \w{3} \d{4}, 00:00 UTC5/);
+  await expect(page.locator(".stats")).toContainText("In the 30 days before that0");
   await expect(page.getByText(/3 mandates recorded but not paid yet/)).toBeVisible();
   await expect(page.locator(".allow-sentence")).toContainText("at most 1.1 GNOT every 30 days");
   await expect(page.locator(".sup-list li")).toHaveCount(5);
+  await expect(page.locator(".sup-list li").first()).toContainText(/paid through \d{1,2} \w{3} \d{4} UTC/);
+  await expect(page.locator(".sup-list li").first()).toContainText(/mandate recorded (just now|\d+ (minute|hour|day)s? ago)/);
   await expect(page.getByRole("button", { name: "Show more supporters" })).toHaveCount(0); // cursor -1: stop
   await expect(page.getByRole("link", { name: /open plan #1 on gnoweb/ })).toHaveAttribute("href", /:plan\/1$/);
 });
 
-test("all plans: a page past the last one says so and links back", async ({ page }) => {
-  await page.goto("./#/plans?page=2");
+test("all plans: a page past the last one says so and links straight to the first", async ({ page }) => {
+  await page.goto("./#/plans?page=99");
   await expect(page.getByText("No plans on this page.")).toBeVisible();
-  await page.getByRole("link", { name: "Previous page" }).click();
+  await expect(page.getByRole("link", { name: "Previous page" })).toHaveCount(0); // page 98 is empty too: no dead end
+  await page.getByRole("link", { name: "Go to the first page" }).click();
   await expect(page.locator(".plans-summary")).toContainText("Shown on page 1");
   await expect(page.locator(".plan-list .plan-card")).toHaveCount(4);
   await expect(page.getByText("No plans on this page.")).toHaveCount(0);
@@ -59,6 +64,10 @@ test("a plan that does not exist says so and links to all plans", async ({ page 
   await expect(page.getByText("There is no plan #99.")).toBeVisible();
   await page.locator(".empty").getByRole("link", { name: "All plans" }).click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("All plans");
+  // a number that cannot be a plan: the tab says what the page says
+  await page.goto("./#/plan/0");
+  await expect(page.getByText("There is no plan with that number.")).toBeVisible();
+  await expect(page).toHaveTitle("No such plan · Mandate");
 });
 
 test("a stranger's plan title is shown as text, never as HTML or a link", async ({ page }) => {
@@ -75,6 +84,9 @@ test("my mandates: the realm's view and the chain's, by address", async ({ page 
   await expect(card).toContainText("Support Fluxen's work");
   await expect(card.locator(".pill")).toHaveText("Active");
   await expect(card).toContainText("Paid through");
+  await expect(card.locator(".mandate-facts")).toContainText(/Ends\d{1,2} \w{3} \d{4} UTC/);
+  // no wallet connected: not "My mandates"
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(/^Mandates of g1/);
   await expect(page.getByText(/1 active mandate of the 16/)).toBeVisible();
   // a wrong address is refused at the field
   await page.getByLabel("Wallet address").fill("g1notanaddress");
@@ -92,8 +104,18 @@ test("creator page: plans, counts and the collector key", async ({ page }) => {
   const rows = page.locator(".table tbody tr");
   await expect(rows).toHaveCount(4);
   await expect(rows.filter({ hasText: "Support Fluxen's work" })).toContainText("5 / 0");
+  await expect(page.locator(".creator-chart")).toContainText(/5 payments since \d{1,2} \w{3} \d{4}, 00:00 UTC · 0 in the 30 days before that/);
+  await expect(page.locator(".creator-chart")).not.toContainText("This period");
   await expect(page.getByText(collector)).toBeVisible();
   await expect(page.getByText(/must never receive coins/)).toBeVisible();
+});
+
+test("creator page with a malformed address: says so, and the tab agrees", async ({ page }) => {
+  await page.goto("./#/creator/g1bad");
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("Creator");
+  await expect(page.getByText(/That is not a gno.land address/)).toBeVisible();
+  await expect(page.getByLabel("Creator address")).toHaveAttribute("aria-invalid", "true");
+  await expect(page).toHaveTitle("Creator: not an address · Mandate");
 });
 
 test("while the realm waits for approval: a calm state, no errors", async ({ page }) => {

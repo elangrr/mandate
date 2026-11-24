@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { config, gnowebPage, rules } from "../config";
 import type { Mandate, Plan } from "../lib/amino";
-import { date, dateTime, gnot, isTestPeriod, period, plural, price, relative, shortAddr, thousands } from "../lib/format";
+import { date, dateTime, gnot, isTestPeriod, period, plural, price, relative, shortAddr, thousands, windowCounts, word } from "../lib/format";
 import { isAddress, read, type Session, type SessionEntry } from "../lib/rpc";
 import { LoosePermission, StopControls, SubscribePanel } from "./actions";
 import { FIRST_DEPOSIT_UGNOT, LATER_DEPOSIT_UGNOT } from "../lib/flows";
@@ -42,7 +42,7 @@ function PlanCard({ p }: { p: Plan }) {
             <span className="plan-num mono">#{p.id.toString()}</span> {p.title}
           </span>
           <span className="plan-card-meta">
-            {plural(p.paidThisPeriod, "payment")} this period · {plural(p.paidLastPeriod, "payment")} the one before
+            {windowCounts(p.paidThisPeriod, p.paidLastPeriod, p.periodStart, p.period)}
             {isTestPeriod(p.period) && <span className="badge">test plan</span>}
           </span>
         </span>
@@ -161,15 +161,15 @@ function Numbers() {
     <section className="numbers" aria-label="Mandate in numbers">
       <div className="num-cell">
         <span className="num">{thousands(plans)}</span>
-        <span className="num-label">plans</span>
+        <span className="num-label">{word(plans, "plan")}</span>
       </div>
       <div className="num-cell">
         <span className="num">{thousands(mandates)}</span>
-        <span className="num-label">mandates recorded</span>
+        <span className="num-label">{word(mandates, "mandate")} recorded</span>
       </div>
       <div className="num-cell">
         <span className="num">{thousands(pulls)}</span>
-        <span className="num-label">payments</span>
+        <span className="num-label">{word(pulls, "payment")}</span>
       </div>
       <div className="num-cell num-cell-accent">
         <span className="num">{gnot(paid)}</span>
@@ -207,7 +207,7 @@ function PaidPlans() {
           if (paid.length === 0)
             return (
               <Empty>
-                No plan has been paid for in its current or last period yet. <a href="#/plans">See every plan</a>
+                No plan has had a payment in its current or previous counting window yet. <a href="#/plans">See every plan</a>
               </Empty>
             );
           return (
@@ -242,12 +242,18 @@ function PlansPage({ page }: { page: number }) {
   const [s, reload] = useAsync(() => read.plans(page), [page]);
   if (s.status === "loading") return <Loading what="the plans" />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
+  // past the last page every page before it can be empty too: link straight to the first, never only one page back
   if (s.value.length === 0)
     return (
-      <>
-        <Empty>No plans on this page.</Empty>
-        <Pager base="#/plans" page={page} more={false} />
-      </>
+      <Empty>
+        No plans on this page.
+        {page > 1 && (
+          <>
+            {" "}
+            <a href="#/plans">Go to the first page</a>
+          </>
+        )}
+      </Empty>
     );
   const withPayments = s.value.filter((p) => p.paidThisPeriod + p.paidLastPeriod > 0).length;
   const testPlans = s.value.filter((p) => isTestPeriod(p.period)).length;
@@ -263,7 +269,7 @@ function PlansPage({ page }: { page: number }) {
           <dd>{thousands(withPayments)}</dd>
         </div>
         <div>
-          <dt>Test plans</dt>
+          <dt>{word(testPlans, "Test plan")}</dt>
           <dd>{thousands(testPlans)}</dd>
         </div>
       </dl>
@@ -299,8 +305,16 @@ function Pager({ base, page, more }: { base: string; page: number; more: boolean
 
 // ------------------------------------------------------------------ plan page
 
+/** The plan number in a link, or null when it cannot be one (plans count from 1; 19 digits always fit the realm's uint64). */
+export function planNumber(s: string): bigint | null {
+  if (!/^\d{1,19}$/.test(s)) return null;
+  const n = BigInt(s);
+  return n > 0n ? n : null;
+}
+
 export function PlanPage({ id }: { id: string }) {
-  if (!/^\d{1,19}$/.test(id) || id === "0")
+  const n = planNumber(id);
+  if (n === null)
     return (
       <Empty>
         There is no plan with that number. <a href="#/plans">All plans</a>
@@ -308,7 +322,7 @@ export function PlanPage({ id }: { id: string }) {
     );
   return (
     <WhenLive>
-      <PlanBody id={BigInt(id)} />
+      <PlanBody id={n} />
     </WhenLive>
   );
 }
@@ -355,14 +369,18 @@ function PlanBody({ id }: { id: bigint }) {
         </div>
       </header>
 
+      {/* the realm counts in fixed windows of one period on the UTC clock (from PeriodStart), not in any supporter's own period:
+          the counts and their start come from the same read of the plan */}
       <dl className="stats">
         <div>
-          <dt>Payments this period</dt>
-          <dd>{thousands(counts.paidThisPeriod)}</dd>
+          <dt>
+            {word(p.paidThisPeriod, "Payment")} since {dateTime(p.periodStart)}
+          </dt>
+          <dd>{thousands(p.paidThisPeriod)}</dd>
         </div>
         <div>
-          <dt>The period before</dt>
-          <dd>{thousands(counts.paidLastPeriod)}</dd>
+          <dt>In the {period(p.period)} before that</dt>
+          <dd>{thousands(p.paidLastPeriod)}</dd>
         </div>
         <div>
           <dt>Paid to the creator</dt>
@@ -471,7 +489,7 @@ function Supporters({ plan, now }: { plan: Plan; now: bigint }) {
               <Addr a={m.payer} to={`#/mine?a=${m.payer}`} />
               <span className="sup-count mono">{plural(Number(m.pulls), "payment")}</span>
               <span className="muted">paid through {date(m.paidThrough)}</span>
-              <span className="muted">since {relative(m.createdAt, now)}</span>
+              <span className="muted">mandate recorded {relative(m.createdAt > now ? now : m.createdAt, now)}</span>
             </li>
           ))}
         </ul>
@@ -490,7 +508,8 @@ function Supporters({ plan, now }: { plan: Plan; now: bigint }) {
 
 function AddressForm({ value, label, submit: submitLabel, onAddress }: { value: string; label: string; submit: string; onAddress: (a: string) => void }) {
   const [text, setText] = useState(value);
-  const [bad, setBad] = useState(false);
+  // an address from the link that cannot be one says so at once, as a typed one does
+  const [bad, setBad] = useState(() => value !== "" && !isAddress(value));
   const wallet = useWallet();
   function submit(e: FormEvent) {
     e.preventDefault();
@@ -546,17 +565,29 @@ function AddressForm({ value, label, submit: submitLabel, onAddress }: { value: 
 export function Mine({ address }: { address: string }) {
   const wallet = useWallet();
   const a = address || wallet.address || "";
+  // "My" only for the connected wallet's own address: how the visitor arrived says nothing about whose wallet this is
+  const own = !!wallet.address && a === wallet.address;
   return (
     <>
       <div className="page-head">
-        <h1>My mandates</h1>
+        <h1>
+          {own || !a ? (
+            "My mandates"
+          ) : isAddress(a) ? (
+            <>
+              Mandates of <span className="mono" title={a} translate="no">{shortAddr(a)}</span>
+            </>
+          ) : (
+            "Mandates"
+          )}
+        </h1>
         <p className="lede">Every mandate a wallet has given, with what the chain itself says about each permission.</p>
       </div>
       <AddressForm key={a} value={a} label="Wallet address" submit="Show mandates" onAddress={(x) => go(`/mine?a=${x}`)} />
       {a && isAddress(a) && (
         <WhenLive>
           {/* keyed on the address: another address's cards and their controls are never shown for this one */}
-          <MandateList key={a} payer={a} />
+          <MandateList key={a} payer={a} own={own} />
         </WhenLive>
       )}
     </>
@@ -600,7 +631,7 @@ export function mandateState(m: Mandate, session: Session | null, now: bigint): 
   return { label: "Active", tone: "ok", note: m.due ? "A payment is due now: the creator’s collector takes it on its next run." : `Next payment from ${dateTime(m.nextPullAt)}.` };
 }
 
-function MandateList({ payer }: { payer: string }) {
+function MandateList({ payer, own }: { payer: string; own: boolean }) {
   const pending = usePending(payer);
   const [s, reload] = useAsync(() => loadMandates(payer), [payer], [pending ? 1 : 0]);
   if (s.status === "loading") return <Loading what="the mandates" />;
@@ -644,6 +675,7 @@ function MandateList({ payer }: { payer: string }) {
     );
   const readActive = rows.filter((r) => r.m.status === "active").length;
   const nearLimit = readActive >= rules.maxActive - 2;
+  const nearLimitNote = own ? " You are close to the limit: cancel one you no longer need before adding another." : " This wallet is close to the limit.";
   return (
     <>
       <div className={nearLimit ? "capacity-bar notice notice-warn" : "capacity-bar"}>
@@ -651,12 +683,12 @@ function MandateList({ payer }: { payer: string }) {
           {historyComplete ? (
             <p className={nearLimit ? "" : "muted small"}>
               {plural(readActive, "active mandate")} of the {rules.maxActive} a wallet can hold.
-              {nearLimit && " You are close to the limit: cancel one you no longer need before adding another."}
+              {nearLimit && nearLimitNote}
             </p>
           ) : (
             <p className={nearLimit ? "" : "muted small"}>
               At least {plural(readActive, "active mandate")} of the {rules.maxActive} a wallet can hold (only the latest {thousands(rows.length)} mandates were read).
-              {nearLimit && " You are close to the limit: cancel one you no longer need before adding another."}
+              {nearLimit && nearLimitNote}
             </p>
           )}
         </div>
@@ -698,7 +730,7 @@ function MandateList({ payer }: { payer: string }) {
               />
               <dl className="mandate-facts">
                 <div>
-                  <dt>Payments</dt>
+                  <dt>{word(m.pulls, "Payment")}</dt>
                   <dd>
                     {thousands(m.pulls)} · {gnot(m.paid)} GNOT
                   </dd>
@@ -719,7 +751,9 @@ function MandateList({ payer }: { payer: string }) {
                 </div>
               </dl>
               {isCarriedPeriodCurrent(m, now) && (
-                <p className="small muted mandate-carry">Your current period is already paid (time carried over from an earlier mandate for this plan).</p>
+                <p className="small muted mandate-carry">
+                  {own ? "Your" : "This mandate’s"} current period is already paid (time carried over from an earlier mandate for this plan).
+                </p>
               )}
               <StopControls m={m} all={all} payer={payer} now={now} sessions={sessions} onChanged={reload} />
             </li>
@@ -819,11 +853,11 @@ function CreatorBody({ payee }: { payee: string }) {
 
       <dl className="stats">
         <div>
-          <dt>Plans</dt>
+          <dt>{word(info.plans, "Plan")}</dt>
           <dd>{thousands(info.plans)}</dd>
         </div>
         <div>
-          <dt>Payments received</dt>
+          <dt>{word(info.pulls, "Payment")} received</dt>
           <dd>{thousands(info.pulls)}</dd>
         </div>
         <div>
@@ -836,7 +870,7 @@ function CreatorBody({ payee }: { payee: string }) {
         </div>
       </dl>
 
-      <CreatorChart plans={plans} counts={counts} />
+      <CreatorChart plans={plans} />
 
       <section className="card collector-card" data-tone={keyTone} aria-labelledby="key-title">
         <div className="collector-head">
@@ -874,7 +908,7 @@ function CreatorBody({ payee }: { payee: string }) {
               <tr>
                 <th scope="col">Plan</th>
                 <th scope="col">Price</th>
-                <th scope="col">Payments this / last period</th>
+                <th scope="col">Payments: current / previous window</th>
                 <th scope="col">Not paid yet</th>
                 <th scope="col">Received</th>
               </tr>
@@ -888,8 +922,8 @@ function CreatorBody({ payee }: { payee: string }) {
                     </a>
                   </td>
                   <td data-label="Price">{price(p.amount, p.period)}</td>
-                  <td data-label="Payments this / last period">
-                    {counts[i].paidThisPeriod} / {counts[i].paidLastPeriod}
+                  <td data-label="Payments: current / previous window" title={windowCounts(p.paidThisPeriod, p.paidLastPeriod, p.periodStart, p.period)}>
+                    {p.paidThisPeriod} / {p.paidLastPeriod}
                   </td>
                   <td data-label="Not paid yet">
                     {counts[i].unpaid}

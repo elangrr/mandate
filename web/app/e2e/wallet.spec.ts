@@ -225,7 +225,13 @@ test("the creator's collector takes the first payment; my mandates show it", asy
   await page.goto(`./#/mine?a=${supporter.address}`);
   const card = page.locator(".mandate").first();
   await expect(card.locator(".pill")).toHaveText("Active");
-  await expect(card).toContainText("Payments1 · 1 GNOT");
+  await expect(card).toContainText("Payment1 · 1 GNOT");
+  // not connected: the page cannot know this is the visitor's wallet, so it never says "My"
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText(/^Mandates of g1/);
+  await expect(page).toHaveTitle(/^Mandates of g1.+ · Mandate$/);
+  await page.getByRole("button", { name: "Connect wallet" }).first().click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("My mandates");
+  await expect(page).toHaveTitle("My mandates · Mandate");
 });
 
 test("one plan per creator: a second plan of the same creator is refused before any popup", async ({ page }) => {
