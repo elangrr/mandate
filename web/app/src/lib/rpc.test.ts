@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseBalance, parseSession, ReadError } from "./rpc";
+import { parseBalance, parseSession, parseSessions, ReadError } from "./rpc";
 
 const ok = (data: string) => ({ data, error: null, log: "" });
 
@@ -18,5 +18,10 @@ describe("chain answers parsed strictly", () => {
     expect(parseBalance(ok('"999xugnot"'))).toBe(0n);
     expect(parseBalance(ok("123ugnot"))).toBe(123n);
     expect(parseBalance(ok('""'))).toBe(0n);
+  });
+
+  it("a wallet's permission list: JSON null is none; an empty or malformed answer is unreadable, never none", () => {
+    expect(parseSessions(ok("null"))).toEqual([]);
+    for (const bad of ["", "{}", "[{}]", '[{"BaseSessionAccount":{"BaseAccount":{"address":"nope"}}}]']) expect(() => parseSessions(ok(bad))).toThrow(ReadError);
   });
 });

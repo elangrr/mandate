@@ -38,3 +38,14 @@ REQUESTS=<this repo>/web/adena-check/app-requests.json corepack yarn jest --ci s
 ```
 
 Last run (v1.22.5): 7 of 7 passed.
+
+## How the web app calls DoContract
+
+`popup-options.spec.ts` loads Adena's own injected API (`src/inject.ts`) and calls `window.adena.DoContract(request, { isVisibleResult: false })` the way the web app does, for every request in `app-requests.json`. It checks that the request reaching the approval popup carries `isVisibleResult: false` and `commit: true`, so the popup's own test (`requestData?.data?.isVisibleResult !== false`) turns its result screen off. The popup then sends the transaction's real reply and closes itself once the block is in, instead of waiting on a result screen where closing the window would reach the page as TRANSACTION_REJECTED although the transaction went out. Closing the window while Adena still waits for the block is still reported as TRANSACTION_REJECTED, so the page always reads the chain before saying that nothing happened.
+
+```
+cp <this repo>/web/adena-check/popup-options.spec.ts packages/adena-extension/src/mandate-check/
+REQUESTS=<this repo>/web/adena-check/app-requests.json corepack yarn jest --ci src/mandate-check/popup-options.spec.ts
+```
+
+Last run (v1.22.5): 7 of 7 passed (and `app-request.spec.ts` 7 of 7).

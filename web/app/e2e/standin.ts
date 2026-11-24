@@ -44,6 +44,12 @@ export interface StandinOptions {
   queuedOnly?: boolean;
   /** wait this long before broadcasting: a slow block */
   delayMs?: number;
+  /**
+   * the person closes Adena's window: Adena then answers TRANSACTION_REJECTED although the transaction went out
+   * (inject/message/methods/common.ts, onRemoved). "before-block": closed while it waits for the block;
+   * "after-block": closed on the result screen (Adena shows one unless the page asks isVisibleResult: false).
+   */
+  closeWindow?: "before-block" | "after-block";
   /** replace the reply with something of another shape (after the transaction went out, unless `skipSend`) */
   mangle?: (reply: any) => any;
   skipSend?: boolean;
@@ -116,7 +122,7 @@ async function signAndBroadcast(c: StandinChain, o: { key: string; address: stri
 const failure = (type: string, data: any = {}) => ({ code: 4000, status: "failure", type, message: type, data });
 
 /** Signs and sends one request the way Adena does; returns what Adena's DoContract would. */
-export async function signAndSend(c: StandinChain, o: StandinOptions, params: any): Promise<any> {
+export async function signAndSend(c: StandinChain, o: StandinOptions, params: any, options?: any): Promise<any> {
   if (!params || !Array.isArray(params.messages) || !Number.isSafeInteger(params.gasWanted) || !Number.isSafeInteger(params.gasFee) || params.gasWanted <= 0 || params.gasFee <= 0)
     return failure("INVALID_FORMAT");
   if (o.refuse?.(params.messages)) return failure("TRANSACTION_REJECTED");
@@ -127,6 +133,17 @@ export async function signAndSend(c: StandinChain, o: StandinOptions, params: an
     if (o.delayMs) await sleep(o.delayMs);
     return signAndBroadcast(c, o, params);
   };
+  if (o.closeWindow === "before-block") {
+    void go().catch(() => undefined);
+    return failure("TRANSACTION_REJECTED");
+  }
+  if (o.closeWindow === "after-block") {
+    // with isVisibleResult: false Adena closes the popup itself right after the block, so this is the worst case:
+    // the window closed at that very moment (or a wallet that ignores the option)
+    void options;
+    await go();
+    return failure("TRANSACTION_REJECTED");
+  }
   if (params.commit !== true || o.queuedOnly) {
     // the mempool took it; the block comes later
     void go().catch(() => undefined);
@@ -146,11 +163,13 @@ export async function signAndSend(c: StandinChain, o: StandinOptions, params: an
 }
 
 /** Installs the stand-in in a page. Call before page.goto. */
-export async function installStandin(page: Page, c: StandinChain, o: StandinOptions): Promise<{ calls: any[] }> {
+export async function installStandin(page: Page, c: StandinChain, o: StandinOptions): Promise<{ calls: any[]; options: any[] }> {
   const calls: any[] = [];
-  await page.exposeFunction("__standinDoContract", async (params: any) => {
+  const options: any[] = [];
+  await page.exposeFunction("__standinDoContract", async (params: any, opts: any) => {
     calls.push(params);
-    return signAndSend(c, o, params);
+    options.push(opts);
+    return signAndSend(c, o, params, opts);
   });
   await page.addInitScript(
     ({ address, chainId }) => {
@@ -164,13 +183,13 @@ export async function installStandin(page: Page, c: StandinChain, o: StandinOpti
           return ok({});
         },
         AddNetwork: async () => ok({}),
-        DoContract: async (p: unknown) => (window as any).__standinDoContract(p),
+        DoContract: async (p: unknown, opts?: unknown) => (window as any).__standinDoContract(p, opts ?? null),
         On: () => undefined,
       };
     },
     { address: o.address, chainId: o.chainId ?? "dev" },
   );
-  return { calls };
+  return { calls, options };
 }
 
 /** Signs and sends a request outside the page (another tab of the same wallet), waiting for the block; true if the chain took it. */

@@ -1338,3 +1338,11 @@ main:focus-visible {
 .other-ways {
   margin-block: var(--s4) 0;
 }
+
+/* M2b-fix2: steps that may have been sent and are not on chain yet; permissions without a mandate */
+.pending {
+  margin-block-end: var(--s4);
+}
+.loose {
+  margin-block-start: var(--s6);
+}

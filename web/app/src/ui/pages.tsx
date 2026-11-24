@@ -3,7 +3,9 @@ import { config, gnowebPage, rules } from "../config";
 import type { Mandate, Plan } from "../lib/amino";
 import { date, dateTime, gnot, isTestPeriod, period, plural, price, relative, shortAddr, thousands } from "../lib/format";
 import { isAddress, read, type Session, type SessionEntry } from "../lib/rpc";
-import { StopControls, SubscribePanel } from "./actions";
+import { LoosePermission, StopControls, SubscribePanel } from "./actions";
+import { usePending } from "../lib/pending";
+import { allowPath } from "../lib/tx";
 import { FlowPicture } from "./FlowPicture";
 import { go, useAsync } from "./hooks";
 import { useLive } from "./live";
@@ -430,7 +432,7 @@ interface MandateRow {
 
 async function loadMandates(payer: string): Promise<{ rows: MandateRow[]; now: bigint; sessions: SessionEntry[] }> {
   const ms: Mandate[] = [];
-  for (let page = 1; page <= 10; page++) {
+  for (let page = 1; page <= rules.historyPages; page++) {
     const list = await read.mandatesOf(payer, page);
     ms.push(...list);
     if (list.length < rules.pageSize) break;
@@ -456,11 +458,38 @@ export function mandateState(m: Mandate, session: Session | null, now: bigint): 
 }
 
 function MandateList({ payer }: { payer: string }) {
-  const [s, reload] = useAsync(() => loadMandates(payer), [payer]);
+  const pending = usePending(payer);
+  const [s, reload] = useAsync(() => loadMandates(payer), [payer, pending ? 1 : 0]);
   if (s.status === "loading") return <Loading what="the mandates" />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
   const { rows, now, sessions } = s.value;
   const all = rows.map((r) => r.m);
+  // permissions for Mandate that no mandate shown here uses
+  const loose = sessions.filter((x) => x.allowPaths.length === 1 && x.allowPaths[0] === allowPath() && !rows.some((r) => r.m.session === x.address));
+  const looseList = loose.length > 0 && (
+    <section className="loose" aria-labelledby="loose-h">
+      <h2 id="loose-h">Permissions without a mandate</h2>
+      <p className="muted small">
+        These permissions for Mandate are on chain, but no mandate listed here uses them: a collector key its creator has since replaced, a subscription
+        started and not finished, or a mandate older than the history shown.
+      </p>
+      <ul className="mandate-list">
+        {loose.map((x) => (
+          <li key={x.address} className="card mandate">
+            <div className="mandate-head">
+              <span className="mandate-title">
+                Permission for key <Addr a={x.address} />
+              </span>
+              <span className="pill pill-warn">No mandate</span>
+            </div>
+            <p className="mandate-price">At most {price(x.spendLimit, x.spendPeriod)}</p>
+            <LoosePermission s={x} payer={payer} onChanged={reload} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+  if (rows.length === 0 && loose.length > 0) return <>{looseList}</>;
   if (rows.length === 0)
     return (
       <Empty>
@@ -517,6 +546,7 @@ function MandateList({ payer }: { payer: string }) {
           );
         })}
       </ul>
+      {looseList}
     </>
   );
 }

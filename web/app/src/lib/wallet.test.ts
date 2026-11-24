@@ -6,12 +6,14 @@ const SIGNER = "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5";
 const PARAMS = { messages: [{}], memo: "", gasWanted: 5_000_000, gasFee: 7_500, commit: true as const };
 
 /** A fake injected wallet whose DoContract answers `reply`, as Adena v1.22.5 would. */
+const options: unknown[] = [];
 function wallet(reply: unknown) {
   const calls: unknown[] = [];
   (globalThis as any).adena = {
     GetAccount: async () => ({ status: "success", type: "SUCCESS", code: 0, message: "", data: { address: SIGNER, chainId: config.chainId } }),
-    DoContract: async (p: unknown) => {
+    DoContract: async (p: unknown, o: unknown) => {
       calls.push(p);
+      options.push(o);
       if (reply instanceof Error) throw reply;
       return reply;
     },
@@ -31,6 +33,8 @@ describe("send: what the wallet's reply means", () => {
     const calls = wallet(okBlock);
     expect(await send(SIGNER, PARAMS)).toEqual({ kind: "in-block", hash: "A1B2C3", height: 120n });
     expect((calls[0] as any).commit).toBe(true);
+    // Adena closes its popup itself and always delivers the real reply
+    expect(options[options.length - 1]).toEqual({ isVisibleResult: false });
   });
 
   it("a reply without a block result (only queued) is unconfirmed: the page must read the chain", async () => {
@@ -67,10 +71,11 @@ describe("send: what the wallet's reply means", () => {
     expect((await send(SIGNER, PARAMS).catch((x) => x)).kind).toBe("refused");
   });
 
-  it("cancelled in Adena: nothing was sent", async () => {
+  it("cancelled in Adena (or its window closed): 'rejected', never 'nothing was sent' (the page reads the chain first)", async () => {
     wallet({ status: "failure", type: "TRANSACTION_REJECTED", data: {} });
     const e = await send(SIGNER, PARAMS).catch((x) => x);
     expect(e.kind).toBe("rejected");
+    expect(e.message).not.toMatch(/nothing was sent/i);
   });
 
   it("a time-out, a failure without the chain's answer, a throw, or an odd shape: unconfirmed, never success", async () => {

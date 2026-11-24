@@ -51,27 +51,53 @@ function toBase64(s: string): string {
   return btoa(bin);
 }
 
+/** No read waits longer than this: a silent network must never keep the page waiting (and its buttons disabled) for ever. */
+export const READ_TIMEOUT_MS = 10_000;
+
+/** fetch and read the JSON body, the whole of it within the time limit. Throws on a time-out or transport problem. */
+export async function fetchJson(url: string, init: RequestInit = {}, fetchFn: typeof fetch = fetch, ms = READ_TIMEOUT_MS): Promise<{ ok: boolean; status: number; json: any }> {
+  const ctl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const limit = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      ctl?.abort();
+      reject(new Error("timed out"));
+    }, ms);
+  });
+  try {
+    return await Promise.race([
+      (async () => {
+        const res = await fetchFn(url, { ...init, signal: ctl?.signal });
+        if (!res.ok) return { ok: false, status: res.status, json: null };
+        return { ok: true, status: res.status, json: await res.json() };
+      })(),
+      limit,
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 const networkError = () => new ReadError("network", `Could not reach the ${config.networkName}. Check your connection and try again.`);
 
 /** One abci_query call. Throws ReadError("network") on transport problems. */
 export async function abciQuery(path: string, data: string, fetchFn: typeof fetch = fetch): Promise<AbciResult> {
-  let res: Response;
+  let r: { ok: boolean; status: number; json: any };
   try {
-    res = await fetchFn(config.rpcUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "abci_query", params: { path, data: toBase64(data) } }),
-    });
+    r = await fetchJson(
+      config.rpcUrl,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: ++rpcId, method: "abci_query", params: { path, data: toBase64(data) } }),
+      },
+      fetchFn,
+    );
   } catch {
     throw networkError();
   }
-  if (!res.ok) throw new ReadError("network", `The ${config.networkName} did not answer (HTTP ${res.status}). Try again in a moment.`);
-  let json: any;
-  try {
-    json = await res.json();
-  } catch {
-    throw networkError();
-  }
+  if (!r.ok) throw new ReadError("network", `The ${config.networkName} did not answer (HTTP ${r.status}). Try again in a moment.`);
+  const json = r.json;
   if (json.error) throw new ReadError("network", `The network returned an error: ${String(json.error.message ?? json.error.data ?? "unknown")}`);
   const base = json?.result?.response?.ResponseBase;
   if (!base) throw networkError();
@@ -190,7 +216,8 @@ export function parseSessions(r: AbciResult): SessionEntry[] {
   if (r.error) throw new ReadError("chain", r.error);
   let d: any;
   try {
-    d = JSON.parse(r.data || "null");
+    // the chain answers JSON null for a wallet without permissions; an empty or other answer is unreadable, never "none"
+    d = JSON.parse(r.data);
   } catch {
     throw new ReadError("chain", "unexpected sessions data");
   }
@@ -199,7 +226,8 @@ export function parseSessions(r: AbciResult): SessionEntry[] {
   return d.map((item: any) => {
     const s = parseSession({ data: JSON.stringify(item), error: null, log: "" })!;
     const base = item?.BaseSessionAccount?.BaseAccount ?? {};
-    const address = typeof base.address === "string" && isAddress(base.address) ? base.address : "";
+    if (typeof base.address !== "string" || !isAddress(base.address)) throw new ReadError("chain", "unexpected sessions data");
+    const address = base.address;
     const pk = base.public_key;
     const pubKey = pk && pk["@type"] === "/tm.PubKeySecp256k1" && typeof pk.value === "string" ? pk.value : "";
     return { ...s, address, pubKey };
@@ -286,13 +314,12 @@ export const read = {
   /** The time of the chain's latest block (unix seconds): "now" for due dates. */
   chainTime: (): Promise<bigint> =>
     cached("time", async () => {
-      let res: Response;
+      let j: any;
       try {
-        res = await fetch(config.rpcUrl.replace(/\/$/, "") + "/status");
+        j = (await fetchJson(config.rpcUrl.replace(/\/$/, "") + "/status")).json;
       } catch {
         throw networkError();
       }
-      const j = await res.json().catch(() => null);
       const t = j?.result?.sync_info?.latest_block_time;
       // RFC 3339 with nanoseconds: keep milliseconds, which every Date parser accepts.
       const ms = typeof t === "string" ? Date.parse(t.replace(/(\.\d{3})\d*(Z|[+-]\d\d:\d\d)$/, "$1$2")) : NaN;

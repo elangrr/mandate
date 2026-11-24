@@ -1,14 +1,15 @@
-import { useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { config, explorerTx, gnowebPage, rules } from "../config";
 import type { Mandate, Plan } from "../lib/amino";
 import { date, dateTime, gnot, period } from "../lib/format";
-import { isActive, permissionFits, removeCheck, stopCheck, stopState, subscribeState, type ChainView, type FreshKey, type SubscribeState } from "../lib/flows";
+import { isActive, removeCheck, stopCheck, stopState, subscribeState, type ChainView, type FreshKey, type SubscribeState } from "../lib/flows";
 import { invalidate, read, type SessionEntry } from "../lib/rpc";
 import {
   buildCancel,
   buildCreateSession,
   buildRevokeSession,
   buildSubscribe,
+  capFor,
   collectorKeyProblem,
   doContractParams,
   fromBase64,
@@ -16,6 +17,7 @@ import {
   type Gas,
   type Msg,
 } from "../lib/tx";
+import { allPending, clearPending, getPending, onChain, setPending, usePending, usePendingAll, type Pending, type PendingCheck } from "../lib/pending";
 import { send, WalletError } from "../lib/wallet";
 import { useAsync } from "./hooks";
 import { Icon, Loading, ReadFailed } from "./parts";
@@ -28,8 +30,8 @@ const DAY = 86_400n;
 /**
  * Where one approval stands. A step is done only when the chain shows its
  * result (the permission or the mandate read back), never on the wallet's
- * word alone; "pending" means the wallet sent it and the chain does not show
- * it yet.
+ * word alone; "pending" means it may have been sent and the chain does not
+ * show it yet (kept in lib/pending.ts until it does).
  */
 type StepState = "waiting" | "wallet" | "block" | "done" | "failed" | "pending";
 interface Step {
@@ -38,13 +40,14 @@ interface Step {
   hash?: string;
 }
 
-/** One approval: what to sign, and how to see on chain that it happened. */
+/** One approval: what to sign, how to see on chain that it happened, and what to check again right before it. */
 interface StepPlan {
   label: string;
   messages: () => Msg[];
   gas: Gas;
-  /** reads the chain afresh; true once the step's result is there */
-  onChain: () => Promise<boolean>;
+  check: PendingCheck;
+  /** read afresh right before this step (not the first: `prepare` did that); a sentence = what changed, send nothing */
+  precheck?: () => Promise<string | null>;
 }
 
 const STEP_NOTE: Record<StepState, string> = {
@@ -53,7 +56,7 @@ const STEP_NOTE: Record<StepState, string> = {
   block: ": waiting for the network to include it",
   done: ": done",
   failed: ": not done",
-  pending: ": sent, not on chain yet",
+  pending: ": not on chain yet",
 };
 
 function Steps({ steps }: { steps: Step[] }) {
@@ -70,7 +73,7 @@ function Steps({ steps }: { steps: Step[] }) {
             <span className="visually-hidden">{STEP_NOTE[s.state]}</span>
             {s.state === "wallet" && <span className="muted small"> · approve it in Adena</span>}
             {s.state === "block" && <span className="muted small"> · waiting for the network</span>}
-            {s.state === "pending" && <span className="muted small"> · sent, not on chain yet</span>}
+            {s.state === "pending" && <span className="muted small"> · not on chain yet</span>}
             {s.hash && (
               <>
                 {" "}
@@ -88,7 +91,7 @@ function Steps({ steps }: { steps: Step[] }) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-/** Reads the chain until `check` holds or `ms` have passed. */
+/** Reads the chain until `check` holds or `ms` have passed. Every read has its own time limit (rpc.ts). */
 async function waitFor(check: () => Promise<boolean>, ms: number): Promise<boolean> {
   const until = Date.now() + ms;
   for (;;) {
@@ -103,53 +106,84 @@ async function waitFor(check: () => Promise<boolean>, ms: number): Promise<boole
   }
 }
 
-type RunResult = "done" | "partial" | "failed" | "changed" | "pending";
+/** How long the page reads the chain after Adena reports "cancelled", in case its window was closed after the transaction went out. */
+const AFTER_CANCEL_MS = 10_000;
+
+type RunResult = "done" | "failed" | "changed" | "pending";
+
+const quote = (labels: string[]) => labels.map((l) => `“${l}”`).join(", ");
 
 /**
  * Runs approvals in order. Each approval opens only after the one before is
- * on chain. Keeps the steps, a message for the polite live region, an error
- * (role=alert) and the pending state, and never lets an exception escape.
+ * on chain, and only if its fresh check still holds. Keeps the steps, a
+ * message for the polite live region and an error (role=alert), and never
+ * lets an exception escape.
  */
 function useRunner() {
   const [steps, setSteps] = useState<Step[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [pending, setPending] = useState<{ check: () => Promise<boolean>; rest: StepPlan[]; tries: number } | null>(null);
   const busyRef = useRef(false);
 
   async function runSteps(signer: string, plan: StepPlan[], s: Step[]): Promise<RunResult> {
-    for (let i = 0; i < plan.length; i++) {
-      const k = i;
+    const done = () => s.filter((x) => x.state === "done").map((x) => x.label);
+    for (let k = 0; k < plan.length; k++) {
+      const step = plan[k];
+      const seen = () => onChain(signer, step.check);
+      if (k > 0 && step.precheck) {
+        const why = await step.precheck().catch(() => "Unable to read the chain just now.");
+        if (why) {
+          setError(`${why} So “${step.label}” was not sent. What went through before stays on chain: ${quote(done())}. The page now shows what is left.`);
+          return "changed";
+        }
+      }
       s[k] = { ...s[k], state: "wallet" };
       setSteps([...s]);
-      setMessage(`${plan[i].label}: approve it in Adena.`);
+      setMessage(`${step.label}: approve it in Adena.`);
       let hash: string | null = null;
       try {
-        const out = await send(signer, doContractParams(plan[i].messages(), plan[i].gas));
-        hash = out.hash;
+        hash = (await send(signer, doContractParams(step.messages(), step.gas))).hash;
       } catch (e) {
+        if (e instanceof WalletError && e.kind === "rejected") {
+          // Adena says "rejected" also when its window is closed after the transaction went out: look on chain first
+          s[k] = { ...s[k], state: "block" };
+          setSteps([...s]);
+          setMessage(`${step.label}: Adena reports it cancelled. Checking the chain to be sure.`);
+          if (await waitFor(seen, AFTER_CANCEL_MS)) {
+            s[k] = { ...s[k], state: "done" };
+            setSteps([...s]);
+            setMessage(`${step.label}: done (it went out before Adena’s window closed).`);
+            continue;
+          }
+          s[k] = { ...s[k], state: "failed" };
+          setSteps([...s]);
+          const before = done();
+          setError(
+            `You cancelled “${step.label}” in Adena, or closed its window, and the chain does not show it. If you closed the window after approving, it may still arrive: look at the page again in a minute before repeating it (a repeat costs a network fee at most).` +
+              (before.length ? ` What went through before stays on chain: ${quote(before)}.` : ""),
+          );
+          return "failed";
+        }
         s[k] = { ...s[k], state: "failed" };
         setSteps([...s]);
-        const before = s.slice(0, k).filter((x) => x.state === "done");
-        if (e instanceof WalletError && e.kind === "rejected" && before.length > 0)
-          setError(`You cancelled “${plan[i].label}” in Adena, so it was not sent. What went through before stays on chain: ${before.map((x) => `“${x.label}”`).join(", ")}. The page now shows what is left.`);
-        else setError(e instanceof Error ? e.message : "Adena could not complete this.");
+        const before = done();
+        setError((e instanceof Error ? e.message : "Adena could not complete this.") + (before.length ? ` What went through before stays on chain: ${quote(before)}.` : ""));
         return "failed";
       }
       s[k] = { ...s[k], state: "block", hash: hash ?? undefined };
       setSteps([...s]);
-      setMessage(`${plan[i].label}: sent. Waiting until the chain shows it.`);
-      if (!(await waitFor(plan[i].onChain, config.confirmWaitMs))) {
+      setMessage(`${step.label}: ${hash ? "sent" : "Adena did not say whether it was sent"}. Waiting until the chain shows it.`);
+      if (!(await waitFor(seen, config.confirmWaitMs))) {
         s[k] = { ...s[k], state: "pending" };
         setSteps([...s]);
-        setPending({ check: plan[i].onChain, rest: plan.slice(i + 1), tries: 0 });
-        setMessage(`${plan[i].label}: sent, but the chain does not show it yet.`);
+        setPending({ payer: signer, label: step.label, hash, check: step.check, tries: 0 });
+        setMessage(`${step.label}: not on chain yet.`);
         return "pending";
       }
       s[k] = { ...s[k], state: "done" };
       setSteps([...s]);
-      setMessage(`${plan[i].label}: done.`);
+      setMessage(`${step.label}: done.`);
     }
     return "done";
   }
@@ -164,8 +198,11 @@ function useRunner() {
     setBusy(true);
     setError("");
     setMessage("");
-    setPending(null);
     try {
+      if (getPending(signer)) {
+        setError("A step you approved earlier is not on chain yet. Check it first (at the top of the page).");
+        return "failed";
+      }
       let plan: StepPlan[] | string;
       try {
         invalidate();
@@ -183,7 +220,7 @@ function useRunner() {
       setSteps([...s]);
       return await runSteps(signer, plan, s);
     } catch {
-      setError("Something went wrong on this page. Check the page before trying again: part of it may have gone through.");
+      setError("Something went wrong on this page. Look at the page again before repeating anything: part of it may have gone through.");
       return "failed";
     } finally {
       invalidate();
@@ -192,55 +229,13 @@ function useRunner() {
     }
   }
 
-  /**
-   * The pending step: read the chain again. Once it is there the run ends; any
-   * approval left is offered again from a fresh read (Finish subscribing, Cancel
-   * it in Mandate), never sent from messages built before the wait.
-   */
-  async function checkAgain(): Promise<RunResult> {
-    const p = pending;
-    if (!p || busyRef.current) return "pending";
-    busyRef.current = true;
-    setBusy(true);
-    try {
-      if (!(await waitFor(p.check, 3000))) {
-        setPending({ ...p, tries: p.tries + 1 });
-        setMessage("Still not on chain.");
-        return "pending";
-      }
-      setSteps((cur) => cur.map((x) => (x.state === "pending" ? { ...x, state: "done" } : x)));
-      setPending(null);
-      if (p.rest.length === 0) return "done";
-      setMessage("It is on chain now. The next step is below.");
-      return "partial";
-    } catch {
-      return "pending";
-    } finally {
-      invalidate();
-      busyRef.current = false;
-      setBusy(false);
-    }
-  }
-
-  return {
-    steps,
-    busy,
-    message,
-    error,
-    pending: pending !== null,
-    pendingTries: pending?.tries ?? 0,
-    setMessage,
-    run,
-    checkAgain,
-    /** give up waiting: show the options again (repeating costs a network fee at most) */
-    forget: () => setPending(null),
-  };
+  return { steps, busy, message, error, setMessage, run };
 }
 
 type Runner = ReturnType<typeof useRunner>;
 
-/** The live region, the steps, the error and the pending notice of one runner. */
-function RunnerStatus({ r, after }: { r: Runner; after: (out: RunResult) => void }) {
+/** The live region, the steps and the error of one runner. */
+function RunnerStatus({ r }: { r: Runner }) {
   return (
     <>
       <div role="status" aria-live="polite" className="visually-hidden">
@@ -253,40 +248,73 @@ function RunnerStatus({ r, after }: { r: Runner; after: (out: RunResult) => void
           <p>{r.error}</p>
         </div>
       )}
-      {r.pending && (
-        <div className="notice notice-warn" role="alert">
+    </>
+  );
+}
+
+/**
+ * The steps that may have been sent and are not on chain yet, at the top of
+ * every page (they survive a reload, a network switch and leaving the page).
+ * Dropped when the chain shows the result or another account is connected.
+ */
+export function PendingNotices() {
+  const all = usePendingAll();
+  const w = useWallet();
+  const [checking, setChecking] = useState(false);
+  useEffect(() => {
+    for (const p of all) if (w.address && w.address !== p.payer) clearPending(p.payer);
+  }, [all, w.address]);
+  useEffect(() => {
+    // on arrival (a reload, another page) look once
+    let stop = false;
+    void (async () => {
+      for (const p of allPending()) {
+        invalidate();
+        if (!stop && (await onChain(p.payer, p.check).catch(() => false))) clearPending(p.payer);
+      }
+    })();
+    return () => {
+      stop = true;
+    };
+  }, []);
+  if (all.length === 0) return null;
+  async function check(p: Pending) {
+    setChecking(true);
+    try {
+      if (await waitFor(() => onChain(p.payer, p.check), 3000)) clearPending(p.payer);
+      else setPending({ ...p, tries: p.tries + 1 });
+    } finally {
+      setChecking(false);
+    }
+  }
+  return (
+    <>
+      {all.map((p) => (
+        <div key={p.payer} className="notice notice-warn pending" role="alert">
           <Icon name="clock" />
           <div>
             <p>
-              <strong>Sent, but not on chain yet.</strong> Adena sent it, and the network has not included it so far. Do not approve it again: wait a minute,
-              then check.
+              <strong>{p.hash ? "Sent, but not on chain yet:" : "Adena did not say whether this was sent:"}</strong> “{p.label}”. The chain does not show it so far.
+              Do not approve it again: wait a minute, then check.
             </p>
-            {r.pendingTries > 0 && (
+            {p.tries > 0 && (
               <p className="small">
                 Still not there. If it does not appear within a few minutes, it was most likely not included; repeating it then costs at most a network fee.
               </p>
             )}
             <div className="confirm-actions">
-              <button type="button" className="btn btn-quiet" disabled={r.busy} onClick={() => void r.checkAgain().then(after)}>
-                {r.busy ? "Checking the chain…" : "Check again"}
+              <button type="button" className="btn btn-quiet" disabled={checking} onClick={() => void check(p)}>
+                {checking ? "Checking the chain…" : "Check again"}
               </button>
-              {r.pendingTries > 0 && (
-                <button
-                  type="button"
-                  className="btn btn-quiet"
-                  disabled={r.busy}
-                  onClick={() => {
-                    r.forget();
-                    after("failed");
-                  }}
-                >
+              {p.tries > 0 && (
+                <button type="button" className="btn btn-quiet" disabled={checking} onClick={() => clearPending(p.payer)}>
                   Show the options again
                 </button>
               )}
             </div>
           </div>
         </div>
-      )}
+      ))}
     </>
   );
 }
@@ -332,8 +360,6 @@ function WalletGate({ children }: { children: (address: string) => ReactNode }) 
 
 // ------------------------------------------------------------------ reads
 
-/** How many of a wallet's history pages the page reads to count its active mandates (20 a page). */
-const HISTORY_PAGES = 50;
 
 /**
  * Everything subscribing depends on, read fresh from the chain: the plan and
@@ -350,7 +376,7 @@ async function loadView(shown: Plan, payer: string): Promise<ChainView> {
     read.hasMandate(payer, plan.id),
     (async () => {
       const out: Mandate[] = [];
-      for (let page = 1; page <= HISTORY_PAGES; page++) {
+      for (let page = 1; page <= rules.historyPages; page++) {
         const list = await read.mandatesOf(payer, page);
         out.push(...list);
         if (list.length < rules.pageSize) return { list: out, complete: true };
@@ -415,7 +441,9 @@ export function SubscribePanel({ plan }: { plan: Plan }) {
 
 function SubscribeFor({ plan: shown, payer }: { plan: Plan; payer: string }) {
   const [tick, setTick] = useState(0);
-  const [view, reload] = useAsync(() => loadView(shown, payer), [shown.id, payer, tick]);
+  const pending = usePending(payer);
+  // a pending step that the chain now shows (or that was given up) changes what can be done: read again
+  const [view, reload] = useAsync(() => loadView(shown, payer), [shown.id, payer, tick, pending ? 1 : 0]);
   const r = useRunner();
   const [done, setDone] = useState(false);
   const refresh = () => {
@@ -427,18 +455,6 @@ function SubscribeFor({ plan: shown, payer }: { plan: Plan; payer: string }) {
   const v = view.status === "ready" ? view.value : null;
   const st: SubscribeState | null = v ? subscribeState(v) : null;
   const plan = v?.plan ?? shown;
-
-  /** The permission for the collector key is on chain with the plan's terms. */
-  const permissionOnChain = (key: string, p: Plan) => async () => {
-    const s = (await read.sessions(payer)).find((x) => x.address === key);
-    return !!s && permissionFits(s, p, await read.chainTime()) === null;
-  };
-  /** The mandate for this plan is recorded and active for the collector key. */
-  const mandateOnChain = (key: string, p: Plan) => async () => {
-    const m = await read.mandateOf(payer, key);
-    return !!m && m.planId === p.id && isActive(m, await read.chainTime());
-  };
-  const permissionGone = (key: string) => async () => !(await read.sessions(payer)).some((x) => x.address === key);
 
   async function subscribe(shownState: Extract<SubscribeState, { kind: "ready" }>) {
     const shownView = v!;
@@ -454,27 +470,30 @@ function SubscribeFor({ plan: shown, payer }: { plan: Plan; payer: string }) {
       const end = shownState.end; // the date shown is the date signed
       const session = () => buildCreateSession({ creator: payer, collectorKey: key.collectorKey, plan: p, expiresAt: end });
       const sub = () => buildSubscribe({ payer, planId: p.id, sessionAddr: key.collectorAddr, expiresAt: end });
-      if (state.resume) return [{ label: "Record the terms in Mandate", messages: () => [sub()], gas: gasFor("call", gp), onChain: mandateOnChain(key.collectorAddr, p) }];
+      const permissionCheck: PendingCheck = { kind: "permission", key: key.collectorAddr, period: p.period.toString(), cap: capFor(p).toString() };
+      const mandateCheck: PendingCheck = { kind: "mandate", key: key.collectorAddr, planId: p.id.toString() };
+      // right before the second approval: the plan, the collector key and the key's mandate are still as they were
+      const stillSame = async () => {
+        invalidate();
+        const again = await loadView(plan, payer);
+        if (again.plan.amount !== p.amount || again.plan.period !== p.period) return "The plan’s price or period changed.";
+        if (again.payee?.collectorKey !== key.collectorKey || again.payee?.collectorAddr !== key.collectorAddr) return "The creator’s collector key changed.";
+        if (again.byKey && isActive(again.byKey, again.now)) return "A mandate now uses this permission.";
+        return null;
+      };
+      if (state.resume) return [{ label: "Record the terms in Mandate", messages: () => [sub()], gas: gasFor("call", gp), check: mandateCheck }];
       if (oneApproval())
-        return [
-          {
-            label: "Give the permission and record the terms (one approval)",
-            messages: () => [session(), sub()],
-            gas: gasFor("sessionAndCall", gp),
-            onChain: mandateOnChain(key.collectorAddr, p),
-          },
-        ];
+        return [{ label: "Give the permission and record the terms (one approval)", messages: () => [session(), sub()], gas: gasFor("sessionAndCall", gp), check: mandateCheck }];
       return [
-        { label: "Give the permission (approval 1 of 2)", messages: () => [session()], gas: gasFor("session", gp), onChain: permissionOnChain(key.collectorAddr, p) },
-        { label: "Record the terms in Mandate (approval 2 of 2)", messages: () => [sub()], gas: gasFor("call", gp), onChain: mandateOnChain(key.collectorAddr, p) },
+        { label: "Give the permission (approval 1 of 2)", messages: () => [session()], gas: gasFor("session", gp), check: permissionCheck },
+        { label: "Record the terms in Mandate (approval 2 of 2)", messages: () => [sub()], gas: gasFor("call", gp), check: mandateCheck, precheck: stillSame },
       ];
     });
-    if (out === "done") subscribed();
+    if (out === "done") {
+      setDone(true);
+      r.setMessage("Subscribed. The creator’s collector takes the first payment when it is due.");
+    }
     refresh();
-  }
-  function subscribed() {
-    setDone(true);
-    r.setMessage("Subscribed. The creator’s collector takes the first payment when it is due.");
   }
 
   async function removePermission(s: SessionEntry) {
@@ -483,22 +502,16 @@ function SubscribeFor({ plan: shown, payer }: { plan: Plan; payer: string }) {
       if (why) return why;
       const pub = fromBase64(s.pubKey);
       const gp = await read.gasPrice();
-      return [{ label: "Remove the permission", messages: () => [buildRevokeSession({ creator: payer, pub33: pub })], gas: gasFor("session", gp), onChain: permissionGone(s.address) }];
+      return [{ label: "Remove the permission", messages: () => [buildRevokeSession({ creator: payer, pub33: pub })], gas: gasFor("session", gp), check: { kind: "permission-gone", key: s.address } }];
     });
     refresh();
   }
 
-  const busy = r.busy || r.pending;
+  const busy = r.busy || pending !== null;
   const stoppedOnChain = st?.kind === "already" && st.permission === false;
   return (
     <div className="subscribe">
-      <RunnerStatus
-        r={r}
-        after={(out) => {
-          if (out === "done") subscribed();
-          refresh();
-        }}
-      />
+      <RunnerStatus r={r} />
       {done && st?.kind === "already" && st.permission !== false && (
         <div className="notice notice-ok">
           <Icon name="check" />
@@ -512,7 +525,16 @@ function SubscribeFor({ plan: shown, payer }: { plan: Plan; payer: string }) {
         </div>
       )}
       {(!done || stoppedOnChain || st?.kind !== "already") && st && (
-        <SubscribeBody st={st} plan={plan} payer={payer} balance={v?.balance ?? 0n} busy={busy} busyLabel={r.busy ? "Working…" : "Waiting…"} onSubscribe={subscribe} onRemove={removePermission} />
+        <SubscribeBody
+          st={st}
+          plan={plan}
+          payer={payer}
+          balance={v?.balance ?? 0n}
+          busy={busy}
+          busyLabel={r.busy ? "Working…" : "Waiting for the step above…"}
+          onSubscribe={subscribe}
+          onRemove={removePermission}
+        />
       )}
     </div>
   );
@@ -652,6 +674,7 @@ function SubscribeBody({
 export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: Mandate; all: Mandate[]; payer: string; now: bigint; sessions: SessionEntry[]; onChanged: () => void }) {
   const w = useWallet();
   const r = useRunner();
+  const pending = usePending(payer);
   const [confirming, setConfirming] = useState(false);
   const st = stopState(m, all, sessions, now);
   if (st.kind === "nothing" && r.steps.length === 0 && !r.error) return null;
@@ -666,33 +689,31 @@ export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: M
         </a>
       </p>
     );
-  const sessionOf = (list: SessionEntry[]) => list.find((s) => s.address === m.session);
   async function stop() {
     const out = await r.run(payer, async () => {
       const fresh = await freshKey(payer, m.session);
       const c = stopCheck(m, fresh, tidy ? "tidy" : "stop");
       if (c.kind === "changed") return c.reason;
       const gp = await read.gasPrice();
-      const revoked = async () => !sessionOf(await read.sessions(payer));
-      const cancelled = async () => {
-        const now2 = await read.chainTime();
-        const x = await read.mandateOf(payer, m.session);
-        return !x || x.id !== m.id || !isActive(x, now2);
-      };
+      const key = m.session;
+      const id = m.id.toString();
       const revoke = c.revoke ? () => [buildRevokeSession({ creator: payer, pub33: fromBase64(c.revoke!.pubKey) }) as Msg] : null;
-      const cancel = c.cancel ? () => [buildCancel({ payer, sessionAddr: m.session }) as Msg] : null;
+      const cancel = c.cancel ? () => [buildCancel({ payer, sessionAddr: key }) as Msg] : null;
+      // right before the cancel: the key's active mandate is still the one shown
+      const stillThisOne = async () => {
+        invalidate();
+        const again = stopCheck(m, await freshKey(payer, key), "stop");
+        return again.kind === "changed" ? again.reason : null;
+      };
       if (revoke && cancel && oneApproval())
         return [
-          {
-            label: "Remove the permission and cancel (one approval)",
-            messages: () => [...revoke(), ...cancel()],
-            gas: gasFor("sessionAndCall", gp),
-            onChain: async () => (await revoked()) && (await cancelled()),
-          },
+          { label: "Remove the permission and cancel (one approval)", messages: () => [...revoke(), ...cancel()], gas: gasFor("sessionAndCall", gp), check: { kind: "gone-and-cancelled", key, mandateId: id } },
         ];
       return [
-        ...(revoke ? [{ label: "Remove the permission: no payment can be taken any more", messages: revoke, gas: gasFor("session", gp), onChain: revoked }] : []),
-        ...(cancel ? [{ label: "Cancel the mandate in Mandate", messages: cancel, gas: gasFor("call", gp), onChain: cancelled }] : []),
+        ...(revoke ? [{ label: "Remove the permission: no payment can be taken any more", messages: revoke, gas: gasFor("session", gp), check: { kind: "permission-gone", key } as PendingCheck }] : []),
+        ...(cancel
+          ? [{ label: "Cancel the mandate in Mandate", messages: cancel, gas: gasFor("call", gp), check: { kind: "cancelled", key, mandateId: id } as PendingCheck, precheck: stillThisOne }]
+          : []),
       ];
     });
     if (out === "done") r.setMessage(tidy ? "The leftover permission is removed." : "Stopped. No payment can be taken any more.");
@@ -700,25 +721,14 @@ export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: M
     onChanged();
   }
   const session = st.kind === "ready" ? st.session : null;
+  const busy = r.busy || pending !== null;
   return (
     <div className="stop">
-      <RunnerStatus
-        r={r}
-        after={(out) => {
-          if (out === "done") r.setMessage(tidy ? "The leftover permission is removed." : "Stopped. No payment can be taken any more.");
-          onChanged();
-        }}
-      />
-      {st.kind === "ready" && tidy && session && (
-        <p className="small">
-          Its permission is still on chain{session.expiresAt > 0n ? ` until ${date(session.expiresAt)}` : ""}. No payment can go through without an active
-          mandate, but the creator’s collector can still use it to call Mandate for this wallet and spend up to {gnot(session.spendLimit)} GNOT every{" "}
-          {period(session.spendPeriod)} of yours on the network fees of those calls. Remove it unless you plan to subscribe again soon.
-        </p>
-      )}
+      <RunnerStatus r={r} />
+      {st.kind === "ready" && tidy && session && <PermissionAllows s={session} />}
       {st.kind === "ready" &&
         (!confirming ? (
-          <button type="button" className="btn btn-quiet" onClick={() => setConfirming(true)} disabled={r.busy || r.pending}>
+          <button type="button" className="btn btn-quiet" onClick={() => setConfirming(true)} disabled={busy}>
             <Icon name="stop" />
             {label}
           </button>
@@ -726,11 +736,11 @@ export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: M
           <div className="confirm-inline" role="group" aria-label={`${label}?`}>
             <p>
               {st.cancel
-                ? `Stop paying ${gnot(m.amount)} GNOT every ${period(m.period)}? ${st.session ? "Your permission is removed first, so no payment can be taken from then on; then the mandate is cancelled." : "Your permission is already gone; this cancels the mandate in Mandate."} Time you already paid for stays yours.`
+                ? `Stop paying ${gnot(m.amount)} GNOT every ${period(m.period)}? ${st.session ? "Your permission is removed first, so no payment can be taken from then on; then the mandate is cancelled." : "Your permission is already gone; this cancels the mandate in Mandate."} Time you already paid for stays yours. (If this wallet already keeps paid time for 16 other plans, the one that ends soonest is given up.)`
                 : "Remove the permission this mandate left behind?"}
             </p>
             <div className="confirm-actions">
-              <button type="button" className="btn btn-danger" onClick={() => void stop()} disabled={r.busy || r.pending}>
+              <button type="button" className="btn btn-danger" onClick={() => void stop()} disabled={busy}>
                 {r.busy ? "Working…" : label}
               </button>
               <button type="button" className="btn btn-quiet" onClick={() => setConfirming(false)} disabled={r.busy}>
@@ -739,6 +749,58 @@ export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: M
             </div>
           </div>
         ))}
+    </div>
+  );
+}
+
+/** What a permission for Mandate without an active mandate still allows, in plain words. */
+function PermissionAllows({ s }: { s: SessionEntry }) {
+  return (
+    <p className="small">
+      This permission is still on chain{s.expiresAt > 0n ? ` until ${date(s.expiresAt)}` : ""}. No payment can go through without an active mandate, but
+      whoever holds its key (a creator’s collector) can still use it to call Mandate for this wallet and spend up to {gnot(s.spendLimit)} GNOT every{" "}
+      {period(s.spendPeriod)} of yours on the network fees of those calls. Remove it unless you plan to subscribe again soon.
+    </p>
+  );
+}
+
+/**
+ * A permission for Mandate that no mandate on this page uses (a collector key
+ * the creator has replaced, a subscription started and not finished, or a
+ * mandate older than the history shown): what it allows, and a way to remove it.
+ */
+export function LoosePermission({ s, payer, onChanged }: { s: SessionEntry; payer: string; onChanged: () => void }) {
+  const w = useWallet();
+  const r = useRunner();
+  const pending = usePending(payer);
+  async function remove() {
+    await r.run(payer, async () => {
+      const why = removeCheck(s.address, await freshKey(payer, s.address));
+      if (why) return why;
+      const gp = await read.gasPrice();
+      return [
+        {
+          label: "Remove the permission",
+          messages: () => [buildRevokeSession({ creator: payer, pub33: fromBase64(s.pubKey) })],
+          gas: gasFor("session", gp),
+          check: { kind: "permission-gone", key: s.address },
+        },
+      ];
+    });
+    onChanged();
+  }
+  return (
+    <div className="stop">
+      <PermissionAllows s={s} />
+      <RunnerStatus r={r} />
+      {w.address === payer ? (
+        <button type="button" className="btn btn-quiet" onClick={() => void remove()} disabled={r.busy || pending !== null || !s.pubKey}>
+          <Icon name="stop" />
+          {r.busy ? "Working…" : "Remove this permission"}
+        </button>
+      ) : (
+        <p className="small muted">To remove it, connect the wallet that gave it.</p>
+      )}
     </div>
   );
 }

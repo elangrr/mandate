@@ -3,6 +3,7 @@ import { config } from "../config";
 import { shortAddr } from "../lib/format";
 import { parseRoute, useRoute, useTheme, type Theme } from "./hooks";
 import { LiveProvider } from "./live";
+import { PendingNotices } from "./actions";
 import { AllPlans, Creator, Home, How, Mine, PlanPage } from "./pages";
 import { Empty, Icon } from "./parts";
 import { PriceFootnote } from "./price";
@@ -133,8 +134,8 @@ class Boundary extends Component<{ children: ReactNode; resetKey: string }, { fa
       <div className="notice notice-error" role="alert">
         <Icon name="alert" />
         <p>
-          Something on this page could not be shown: the chain returned a value this page does not understand. Nothing was sent.{" "}
-          <a href="#/">Go to the start page</a> or reload this page.
+          Something on this page could not be shown: the chain returned a value this page does not understand. If you were approving something in Adena,
+          look at <a href="#/mine">your mandates</a> before repeating it. Or <a href="#/">go to the start page</a>.
         </p>
       </div>
     );
@@ -183,6 +184,7 @@ function Shell() {
       </header>
       <main id="main" tabIndex={-1}>
         <Boundary resetKey={route}>
+          <PendingNotices />
           <PageFrame />
         </Boundary>
       </main>

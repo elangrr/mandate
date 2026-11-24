@@ -105,7 +105,8 @@ test("subscribe in two approvals; cancel the second; undo; subscribe again", asy
   await shots(page, "subscribe-ready");
   await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
   // the second approval was cancelled after the first went through: say so, not "nothing was sent"
-  await expect(page.getByRole("alert")).toContainText("You cancelled “Record the terms in Mandate (approval 2 of 2)” in Adena");
+  // the page first looks on chain for up to 10 s (Adena says "cancelled" also when its window was closed after sending)
+  await expect(page.getByRole("alert")).toContainText("You cancelled “Record the terms in Mandate (approval 2 of 2)” in Adena, or closed its window", { timeout: 20_000 });
   await expect(page.getByRole("alert")).toContainText("What went through before stays on chain: “Give the permission (approval 1 of 2)”");
   await expect(page.getByRole("button", { name: "Finish subscribing" })).toBeVisible();
   await shots(page, "subscribe-recovery");
@@ -204,8 +205,9 @@ test("a slow block: the page says it is sent but not on chain yet, and goes on o
   await page.goto("./#/plan/1");
   await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
   await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
-  const pending = page.getByRole("alert").filter({ hasText: "Sent, but not on chain yet" });
-  await expect(pending).toBeVisible({ timeout: 15_000 });
+  // the stand-in's queued reply carries no hash (real Adena's does), so the page says it does not know whether it was sent
+  const pending = page.locator(".pending");
+  await expect(pending).toContainText("Adena did not say whether this was sent", { timeout: 15_000 });
   await expect(pending).toContainText("Do not approve it again");
   await expect(page.locator(".confirm .btn-primary")).toBeDisabled();
   await shots(page, "subscribe-pending");
@@ -235,7 +237,7 @@ test("odd wallet replies: nothing reached the chain, the page says so and shows 
   await page.goto("./#/plan/1");
   await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
   await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
-  await expect(page.getByRole("alert").filter({ hasText: "Sent, but not on chain yet" })).toBeVisible({ timeout: 15_000 });
+  await expect(page.locator(".pending")).toContainText("Adena did not say whether this was sent", { timeout: 15_000 });
   await page.getByRole("button", { name: "Check again" }).click();
   await expect(page.getByText(/Still not there/)).toBeVisible({ timeout: 10_000 });
   await page.getByRole("button", { name: "Show the options again" }).click();
@@ -319,6 +321,113 @@ test("the permission disappears before the terms are recorded: the page says the
   await expect(page.getByText(/Stopped on chain\./)).toBeVisible();
   await shots(page, "subscribe-stopped-on-chain");
   await expect(page.getByText(/You support this plan\. The/)).toHaveCount(0);
+});
+
+test("Adena's window closed after the block: Adena says cancelled, the chain shows it, the page goes on", async ({ page }) => {
+  let n = 0;
+  const { options } = await installStandin(page, c, {
+    ...supporter,
+    // only the first approval (the permission) has its window closed
+    get closeWindow() {
+      return n === 1 ? ("after-block" as const) : undefined; // before() has counted this call already
+    },
+    before: () => {
+      n++;
+    },
+  } as any);
+  await stopAll(page);
+  n = 0;
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  await expect(page.getByText(/You support this plan/)).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  expect(options.length).toBeGreaterThan(0);
+  expect(options.every((o: any) => o?.isVisibleResult === false)).toBe(true);
+});
+
+test("Adena's window closed before the block: the page waits for the chain before saying anything", async ({ page }) => {
+  await installStandin(page, c, { ...supporter, closeWindow: "before-block", delayMs: 2_000 });
+  await page.goto(`./#/mine?a=${supporter.address}`);
+  await page.getByRole("button", { name: "Connect wallet" }).first().click();
+  // stop: the revoke goes out though Adena says cancelled; the page sees it on chain and goes on to the cancel (also closed early)
+  await page.getByRole("button", { name: "Stop this mandate" }).click();
+  await page.getByRole("group").getByRole("button", { name: "Stop this mandate" }).click();
+  await expect(page.locator(".mandate").first().locator(".pill")).toHaveText("Cancelled", { timeout: 40_000 });
+  await expect(page.getByText(/You cancelled/)).toHaveCount(0);
+});
+
+test("cancelled in Adena for real: the page looks on chain, then says so without claiming more than it knows", async ({ page }) => {
+  await installStandin(page, c, { ...supporter, refuse: () => true });
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  await expect(page.getByRole("alert")).toContainText("You cancelled “Give the permission (approval 1 of 2)” in Adena, or closed its window, and the chain does not show it", {
+    timeout: 20_000,
+  });
+});
+
+test("a step not on chain yet survives a reload and leaving the page, and clears once the chain shows it", async ({ page }) => {
+  test.setTimeout(90_000);
+  await installStandin(page, c, { ...supporter, queuedOnly: true, delayMs: 9_000 });
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  const banner = page.locator(".pending");
+  await expect(banner).toContainText("Do not approve it again", { timeout: 15_000 });
+  await page.reload();
+  await expect(banner).toContainText("Do not approve it again");
+  await page.goto("./#/how");
+  await expect(banner).toBeVisible();
+  await page.waitForTimeout(6_000);
+  await page.getByRole("button", { name: "Check again" }).click();
+  await expect(banner).toHaveCount(0, { timeout: 15_000 });
+  await page.goto("./#/plan/1");
+  await expect(page.getByRole("button", { name: "Connect wallet to subscribe" }).or(page.getByRole("button", { name: "Finish subscribing" }))).toBeVisible();
+});
+
+test("stop: the cancel is checked again right before it; a mandate that changed meanwhile is left alone", async ({ page }) => {
+  await installStandin(page, c, supporter);
+  await stopAll(page);
+  // subscribe plan 1 again (finishing what the previous test left)
+  await page.goto("./#/plan/1");
+  const go = page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days|Finish subscribing/ });
+  await go.click();
+  await expect(page.getByText(/You support this plan/)).toBeVisible({ timeout: 20_000 });
+  const p2 = await page.context().newPage();
+  const key = c.keys.collector.addr;
+  await installStandin(p2, c, {
+    ...supporter,
+    before: async (params) => {
+      if (!isRevoke(params)) return;
+      // another tab cancels this mandate and records a new one on the same key (plan 2)
+      const call = (func: string, args: string[]) => ({ type: "/vm.m_call", value: { caller: supporter.address, send: "", pkg_path: c.realm, func, args } });
+      const end = String(Math.floor(Date.now() / 1000) + 30 * 86400);
+      expect(await sendDirect(c, supporter, { messages: [call("Cancel", [supporter.address, key]), call("Subscribe", ["2", key, end])], memo: "", gasWanted: 60_000_000, gasFee: 100_000 })).toBe(true);
+    },
+  });
+  await p2.goto(`./#/mine?a=${supporter.address}`);
+  await p2.getByRole("button", { name: "Connect wallet" }).first().click();
+  await p2.getByRole("button", { name: "Stop this mandate" }).first().click();
+  await p2.getByRole("group").getByRole("button", { name: "Stop this mandate" }).click();
+  await expect(p2.getByRole("alert").first()).toContainText("Another of your mandates (plan #2) now uses this permission");
+  await expect(p2.getByRole("alert").first()).toContainText("“Cancel the mandate in Mandate” was not sent");
+  await p2.close();
+});
+
+test("permissions for Mandate without a mandate are listed with what they allow, and can be removed", async ({ page }) => {
+  await installStandin(page, c, supporter);
+  await stopAll(page);
+  const r = randomPermissions(1, supporter.address, "create");
+  expect(await sendDirect(c, supporter, r.params)).toBe(true);
+  await page.reload();
+  await page.getByRole("button", { name: "Connect wallet" }).first().click().catch(() => undefined);
+  const loose = page.locator(".loose");
+  await expect(loose).toContainText("Permissions without a mandate");
+  await expect(loose).toContainText("can still use it to call Mandate for this wallet");
+  await shots(page, "mine-loose-permission");
+  const before = (await sessionKeys(c, supporter.address)).length;
+  await loose.getByRole("button", { name: "Remove this permission" }).last().click();
+  await expect.poll(async () => (await sessionKeys(c, supporter.address)).length, { timeout: 20_000 }).toBe(before - 1);
 });
 
 test("a permission refused in the block: the wallet reached 16 permissions in between", async ({ page }) => {

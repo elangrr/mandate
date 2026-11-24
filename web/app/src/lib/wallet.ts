@@ -21,7 +21,7 @@ export interface Adena {
   GetAccount(): Promise<AdenaResponse<{ address: string; chainId: string; coins?: string; status?: string }>>;
   SwitchNetwork(chainId: string): Promise<AdenaResponse>;
   AddNetwork(n: { chainId: string; chainName: string; rpcUrl: string }): Promise<AdenaResponse>;
-  DoContract(p: { messages: unknown[]; memo?: string; gasFee?: number; gasWanted?: number; commit?: boolean }): Promise<AdenaResponse<any>>;
+  DoContract(p: { messages: unknown[]; memo?: string; gasFee?: number; gasWanted?: number; commit?: boolean }, options?: { isVisibleResult?: boolean }): Promise<AdenaResponse<any>>;
   On?(event: string, cb: (v: string) => void): unknown;
 }
 
@@ -69,7 +69,8 @@ export function failure(r: AdenaResponse): WalletError {
     case "CONNECTION_REJECTED":
     case "SWITCH_NETWORK_REJECTED":
     case "ADD_NETWORK_REJECTED":
-      return new WalletError("rejected", "You cancelled this in Adena. Nothing was sent.");
+      // also what Adena reports when its window is closed while it waits for the block: the page reads the chain before saying more
+      return new WalletError("rejected", "You cancelled this in Adena, or closed its window.");
     case "WALLET_LOCKED":
       return new WalletError("locked", "Adena is locked. Unlock it and try again.");
     case "NOT_CONNECTED":
@@ -194,7 +195,10 @@ export async function send(signer: string, params: { messages: unknown[]; memo: 
   if (acc.address !== signer) throw new WalletError("failed", "The account in Adena changed. Reconnect and try again.");
   let r: any;
   try {
-    r = await a.DoContract(params);
+    // isVisibleResult: false makes Adena's popup send the real reply itself and close once the block is in
+    // (approve-transaction-main/index.tsx); with its result screen open, closing the window would reach the
+    // page as TRANSACTION_REJECTED although the transaction went out. Checked in web/adena-check.
+    r = await a.DoContract(params, { isVisibleResult: false });
   } catch {
     return { kind: "unconfirmed", hash: null }; // the wallet threw: it may have sent it
   }
@@ -206,7 +210,7 @@ export async function send(signer: string, params: { messages: unknown[]; memo: 
       const log = typeof d.log === "string" ? d.log : "";
       const error = typeof d.error === "string" ? d.error : "";
       // with a log, the chain answered: refused by the mempool or inside the block
-      if (log !== "" || /^unknown error: \//.test(error)) throw refusal(log, error);
+      if (log !== "") throw refusal(log, error); // the chain's log: it answered, by the mempool or inside the block
     }
     // a time-out (the network did not answer in time) or a reply without the chain's answer
     return { kind: "unconfirmed", hash: hashOf(d) };

@@ -58,4 +58,6 @@ export const rules = {
   pageSize: 20,
   maxActive: 16,
   maxCredits: 16,
+  /** How many pages of a wallet's history (20 mandates a page) the app reads, everywhere: 1,000 mandates. */
+  historyPages: 50,
 };
