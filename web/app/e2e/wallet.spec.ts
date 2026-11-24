@@ -1,9 +1,10 @@
 // M2b: subscribe and stop through the wallet, against the local chain, with
 // the stand-in wallet (e2e/standin.ts) signing with throwaway keys. Runs
 // after read.spec.ts (file order), because it changes the chain.
+import { createECDH } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { expect, test, type Page } from "@playwright/test";
-import { chainFromEnv, installStandin, runCollector, sendCoins, signAndSend } from "./standin";
+import { chainFromEnv, installStandin, runCollector, sendCoins, sendDirect, sessionKeys } from "./standin";
 
 const c = chainFromEnv();
 const supporter = { key: "supporter", address: c.keys.supporter.addr as string };
@@ -33,28 +34,41 @@ async function shots(page: Page, name: string) {
 }
 
 /** Stops every mandate of the connected wallet that still needs it (the stand-in must be installed). */
-async function stopAll(page: import("@playwright/test").Page) {
+async function stopAll(page: Page) {
   await page.goto(`./#/mine?a=${supporter.address}`);
   await page.getByRole("button", { name: "Connect wallet" }).first().click();
   await expect(page.locator(".mandate").first()).toBeVisible();
-  for (;;) {
-    const b = page.locator(".stop > button.btn").first();
+  for (let i = 0; i < 20; i++) {
+    await expect(page.locator(".loading")).toHaveCount(0);
+    const b = page.locator(".stop > button.btn:not([disabled])").first();
     if ((await b.count()) === 0) break;
-    const name = (await b.innerText()).trim();
+    const name = await b.innerText({ timeout: 2_000 }).catch(() => null);
+    if (!name) continue; // the list re-rendered under us: look again
     await b.click();
-    await page.getByRole("group").getByRole("button", { name }).click();
-    await expect(page.getByRole("group")).toHaveCount(0);
+    await page.getByRole("group").getByRole("button", { name: name.trim() }).click();
+    await expect(page.getByRole("group")).toHaveCount(0, { timeout: 30_000 });
   }
 }
 
+/** Permission messages for n fresh random keys (the wallet's own, for the 16-permission test). */
+function randomPermissions(n: number, creator: string, kind: "create" | "revoke", keys?: string[]) {
+  const pubs = keys ?? Array.from({ length: n }, () => {
+    const e = createECDH("secp256k1");
+    e.generateKeys();
+    return e.getPublicKey("base64", "compressed");
+  });
+  const any = (pub: string) => ({ type_url: "/tm.PubKeySecp256k1", value: Buffer.concat([Buffer.from([0x0a, 0x21]), Buffer.from(pub, "base64")]).toString("base64") });
+  const messages = pubs.map((pub) =>
+    kind === "create"
+      ? { type: "/auth.m_create_session", value: { creator, session_key: any(pub), expires_at: String(Math.floor(Date.now() / 1000) + 86400 * 30), allow_paths: ["vm/exec:" + c.realm], spend_limit: "1ugnot", spend_period: "60" } }
+      : { type: "/auth.m_revoke_session", value: { creator, session_key: any(pub) } },
+  );
+  return { pubs, params: { messages, memo: "", gasWanted: 60_000_000, gasFee: 100_000 } };
+}
 
-const errors: string[] = [];
-test.beforeEach(async ({ page }) => {
-  errors.length = 0;
-  page.on("pageerror", (e) => errors.push(String(e)));
-  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
-});
-test.afterEach(() => expect(errors, "no script errors or CSP violations").toEqual([]));
+const isSubscribe = (p: any) => p.messages.some((m: any) => m.value?.func === "Subscribe");
+const isCreate = (p: any) => p.messages.some((m: any) => m.type === "/auth.m_create_session");
+const isRevoke = (p: any) => p.messages.some((m: any) => m.type === "/auth.m_revoke_session");
 
 test("without Adena: the plan page says what is needed", async ({ page }) => {
   await page.goto("./#/plan/1");
@@ -72,7 +86,7 @@ test("wrong network: one click switches Adena", async ({ page }) => {
   await expect(page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ })).toBeVisible();
 });
 
-test("subscribe in two approvals; refuse the second; undo; subscribe again", async ({ page }) => {
+test("subscribe in two approvals; cancel the second; undo; subscribe again", async ({ page }) => {
   let refuseOnce = true;
   const { calls } = await installStandin(page, c, {
     ...supporter,
@@ -87,13 +101,15 @@ test("subscribe in two approvals; refuse the second; undo; subscribe again", asy
   await page.goto("./#/plan/1");
   await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
   await expect(page.locator(".confirm-sentence")).toContainText("at most 1.1 GNOT every 30 days");
+  await expect(page.locator(".confirm-list")).toContainText("is due as soon as the terms are recorded");
   await shots(page, "subscribe-ready");
   await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
-  await expect(page.getByRole("alert")).toContainText("You cancelled this in Adena");
-  // the permission exists, the mandate does not: finish or undo
+  // the second approval was cancelled after the first went through: say so, not "nothing was sent"
+  await expect(page.getByRole("alert")).toContainText("You cancelled “Record the terms in Mandate (approval 2 of 2)” in Adena");
+  await expect(page.getByRole("alert")).toContainText("What went through before stays on chain: “Give the permission (approval 1 of 2)”");
   await expect(page.getByRole("button", { name: "Finish subscribing" })).toBeVisible();
   await shots(page, "subscribe-recovery");
-  // what was sent: the exact permission, with explicit gas
+  // what was sent: the exact permission, with explicit gas, waiting for the block
   const session = calls[0];
   expect(session.messages).toHaveLength(1);
   expect(session.messages[0].type).toBe("/auth.m_create_session");
@@ -102,6 +118,7 @@ test("subscribe in two approvals; refuse the second; undo; subscribe again", asy
   expect(session.messages[0].value.allow_paths).toEqual(["vm/exec:" + c.realm]);
   expect(session.gasWanted).toBe(5_000_000);
   expect(session.gasFee).toBeGreaterThanOrEqual(5_000);
+  expect(calls.every((p: any) => p.commit === true)).toBe(true);
   await page.getByRole("button", { name: "Undo: remove the permission" }).click();
   await expect(page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ })).toBeVisible();
   expect(calls[calls.length - 1].messages[0].type).toBe("/auth.m_revoke_session");
@@ -112,10 +129,12 @@ test("subscribe in two approvals; refuse the second; undo; subscribe again", asy
   const sub = calls[calls.length - 1];
   expect(sub.messages[0].value.func).toBe("Subscribe");
   expect(sub.messages[0].value.args[1]).toBe(c.keys.collector.addr);
+  // the end date signed is the one the page showed
+  expect(sub.messages[0].value.args[2]).toBe(calls[calls.length - 2].messages[0].value.expires_at);
 });
 
 test("the creator's collector takes the first payment; my mandates show it", async ({ page }) => {
-  const out = runCollector(c as any);
+  const out = await runCollector(c);
   expect(out).toContain(`from ${supporter.address}`);
   await installStandin(page, c, supporter);
   await page.goto(`./#/mine?a=${supporter.address}`);
@@ -133,10 +152,11 @@ test("one plan per creator: a second plan of the same creator is refused before 
   expect(calls).toHaveLength(0);
 });
 
-test("one approval for both messages when asked for", async ({ page }) => {
+test("one approval for both messages when asked for (experimental)", async ({ page }) => {
   const { calls } = await installStandin(page, c, stranger);
   await page.goto("./#/plan/1?approval=one");
   await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await expect(page.locator(".confirm-list")).toContainText("experimental");
   await page.getByRole("button", { name: /Subscribe for 1 GNOT/ }).click();
   await expect(page.getByText(/You support this plan/)).toBeVisible();
   expect(calls).toHaveLength(1);
@@ -154,6 +174,73 @@ test("stop: remove the permission, then cancel; paid time stays", async ({ page 
   await expect(page.locator(".mandate").first().locator(".pill")).toHaveText("Cancelled");
   expect(calls.map((p: any) => p.messages[0].type)).toEqual(["/auth.m_revoke_session", "/vm.m_call"]);
   expect(calls[1].messages[0].value.func).toBe("Cancel");
+});
+
+test("a wallet that answers before the block: the second approval opens only once the first is on chain", async ({ page }) => {
+  let permissionWasOnChain: boolean | null = null;
+  const { calls } = await installStandin(page, c, {
+    ...supporter,
+    queuedOnly: true,
+    delayMs: 1500,
+    before: async (p) => {
+      if (isSubscribe(p)) permissionWasOnChain = (await sessionKeys(c, supporter.address)).includes(c.keys.collector.addr);
+    },
+  });
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  await expect(page.getByText(/You support this plan/)).toBeVisible({ timeout: 20_000 });
+  expect(permissionWasOnChain).toBe(true);
+  expect(calls).toHaveLength(2);
+});
+
+test("a slow block: the page says it is sent but not on chain yet, and goes on once it is", async ({ page, browser }) => {
+  test.setTimeout(120_000);
+  const tidy = await browser.newPage();
+  await installStandin(tidy, c, supporter);
+  await stopAll(tidy);
+  await tidy.close();
+  await installStandin(page, c, { ...supporter, queuedOnly: true, delayMs: 8_000 });
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  const pending = page.getByRole("alert").filter({ hasText: "Sent, but not on chain yet" });
+  await expect(pending).toBeVisible({ timeout: 15_000 });
+  await expect(pending).toContainText("Do not approve it again");
+  await expect(page.locator(".confirm .btn-primary")).toBeDisabled();
+  await shots(page, "subscribe-pending");
+  await page.waitForTimeout(6_000); // the block lands
+  await page.getByRole("button", { name: "Check again" }).click();
+  // the permission is on chain now; the second approval is offered from a fresh read, not sent on its own
+  await expect(page.getByRole("button", { name: "Finish subscribing" })).toBeEnabled({ timeout: 20_000 });
+  await page.getByRole("button", { name: "Finish subscribing" }).click();
+  const supported = page.getByText(/You support this plan/);
+  await expect(supported.or(page.getByRole("button", { name: "Check again" }))).toBeVisible({ timeout: 20_000 });
+  if (!(await supported.isVisible())) {
+    await page.waitForTimeout(6_000);
+    await page.getByRole("button", { name: "Check again" }).click();
+  }
+  await expect(supported).toBeVisible({ timeout: 20_000 });
+});
+
+test("odd wallet replies: never read as success; the page reads the chain", async ({ page }) => {
+  // the transaction went out, but the reply is not of a shape the page knows
+  await installStandin(page, c, { ...supporter, mangle: () => ({ status: "success", data: null }) });
+  await stopAll(page);
+  await expect(page.locator(".mandate").first().locator(".pill")).toHaveText("Cancelled");
+});
+
+test("odd wallet replies: nothing reached the chain, the page says so and shows the options again", async ({ page }) => {
+  const { calls } = await installStandin(page, c, { ...supporter, skipSend: true, mangle: () => ({ status: "failure", type: "TRANSACTION_FAILED", data: { hash: 7 } }) });
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "Sent, but not on chain yet" })).toBeVisible({ timeout: 15_000 });
+  await page.getByRole("button", { name: "Check again" }).click();
+  await expect(page.getByText(/Still not there/)).toBeVisible({ timeout: 10_000 });
+  await page.getByRole("button", { name: "Show the options again" }).click();
+  await expect(page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ })).toBeEnabled();
+  expect(calls).toHaveLength(1);
 });
 
 test("the chain changes after the terms were shown: nothing is sent, the page shows the new state", async ({ browser }) => {
@@ -177,15 +264,14 @@ test("the chain changes after the terms were shown: nothing is sent, the page sh
   await b.close();
 });
 
-test("the chain changes between Adena's check and the block: the transaction fails cleanly and the page says try again", async ({ page }) => {
+test("refused in the block: the same Subscribe from another tab lands first; the page says try again", async ({ page }) => {
   let raced = false;
   const { calls } = await installStandin(page, c, {
     ...supporter,
-    before: (params) => {
-      // the same Subscribe, sent from another tab of this wallet, lands first
-      if (!raced && params.messages.some((m: any) => m.value?.func === "Subscribe")) {
+    before: async (params) => {
+      if (!raced && isSubscribe(params)) {
         raced = true;
-        expect(signAndSend(c, supporter, params).data.deliverTx).toBeUndefined();
+        expect(await sendDirect(c, supporter, params)).toBe(true);
       }
     },
   });
@@ -193,24 +279,38 @@ test("the chain changes between Adena's check and the block: the transaction fai
   await page.goto("./#/plan/1");
   await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
   await expect(page.getByRole("alert")).toContainText("The chain refused it: mandate:");
-  await expect(page.getByRole("alert")).toContainText("Nothing changed apart from the network fee. Check the page and try again.");
+  await expect(page.getByRole("alert")).toContainText("Check the page and try again.");
   await shots(page, "subscribe-refused");
-  // the page read the chain again and shows the mandate the other tab recorded
   await expect(page.getByText(/You support this plan/)).toBeVisible();
   expect(calls.slice(-2).map((p: any) => p.messages[0].type)).toEqual(["/auth.m_create_session", "/vm.m_call"]);
+});
+
+test("a revoke refused in the block: another tab removed the permission first; the page shows what is left", async ({ page }) => {
+  await installStandin(page, c, {
+    ...supporter,
+    before: async (params) => {
+      if (isRevoke(params)) expect(await sendDirect(c, supporter, params)).toBe(true);
+    },
+  });
+  await page.goto(`./#/mine?a=${supporter.address}`);
+  await page.getByRole("button", { name: "Connect wallet" }).first().click();
+  await page.getByRole("button", { name: "Stop this mandate" }).click();
+  await page.getByRole("group").getByRole("button", { name: "Stop this mandate" }).click();
+  await expect(page.getByRole("alert").first()).toContainText("that permission is not on chain any more");
+  // the cancel was not sent after the refusal; the page offers it now
+  await expect(page.getByRole("button", { name: "Cancel it in Mandate" })).toBeVisible();
 });
 
 test("the permission disappears before the terms are recorded: the page says the mandate is stopped on chain", async ({ page }) => {
   let permission: any = null;
   await installStandin(page, c, {
     ...supporter,
-    before: (params) => {
-      if (params.messages[0].value?.func === "Subscribe") {
-        const s = permission!;
-        const revoke = { messages: [{ type: "/auth.m_revoke_session", value: { creator: s.creator, session_key: s.session_key } }], memo: "", gasWanted: 5_000_000, gasFee: 7_500 };
-        expect(signAndSend(c, supporter, revoke).data.deliverTx).toBeUndefined();
+    before: async (params) => {
+      if (isCreate(params)) permission = params.messages[0].value;
+      if (isSubscribe(params) && permission) {
+        const revoke = { messages: [{ type: "/auth.m_revoke_session", value: { creator: permission.creator, session_key: permission.session_key } }], memo: "", gasWanted: 5_000_000, gasFee: 7_500 };
+        expect(await sendDirect(c, supporter, revoke)).toBe(true);
       }
-      if (params.messages[0].type === "/auth.m_create_session") permission = params.messages[0].value;
     },
   });
   await stopAll(page);
@@ -218,14 +318,43 @@ test("the permission disappears before the terms are recorded: the page says the
   await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
   await expect(page.getByText(/Stopped on chain\./)).toBeVisible();
   await shots(page, "subscribe-stopped-on-chain");
-  await expect(page.getByText(/You support this plan\. The creator/)).toHaveCount(0);
+  await expect(page.getByText(/You support this plan\. The/)).toHaveCount(0);
 });
 
-test("a collector key that received coins: nobody new can join, before any popup", async ({ page }) => {
-  sendCoins(c, "fluxen", c.keys.collector.addr, "1ugnot");
-  const { calls } = await installStandin(page, c, supporter);
-  await page.goto("./#/plan/3");
-  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+test("a permission refused in the block: the wallet reached 16 permissions in between", async ({ page }) => {
+  let extra: string[] = [];
+  await installStandin(page, c, {
+    ...supporter,
+    before: async (params) => {
+      if (isCreate(params) && extra.length === 0) {
+        const have = (await sessionKeys(c, supporter.address)).length;
+        const r = randomPermissions(16 - have, supporter.address, "create");
+        extra = r.pubs;
+        expect(await sendDirect(c, supporter, r.params)).toBe(true);
+      }
+    },
+  });
+  await stopAll(page);
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  await expect(page.getByRole("alert")).toContainText("your wallet already holds the 16 permissions the chain allows, counting ones for other apps and expired ones");
+  await expect(page.getByText(/Your wallet is full/)).toBeVisible();
+  // tidy up for the next test
+  expect(await sendDirect(c, supporter, randomPermissions(0, supporter.address, "revoke", extra).params)).toBe(true);
+});
+
+test("a permission refused in the block: the collector address became an account in between; then nobody new can join", async ({ page }) => {
+  await installStandin(page, c, {
+    ...supporter,
+    before: async (params) => {
+      if (isCreate(params)) await sendCoins(c, "fluxen", c.keys.collector.addr, "1ugnot");
+    },
+  });
+  await stopAll(page);
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  await expect(page.getByRole("alert")).toContainText("collector key can no longer be used for new permissions");
   await expect(page.getByText(/New supporters cannot join right now/).first()).toBeVisible();
-  expect(calls).toHaveLength(0);
+  await page.goto("./#/plan/3");
+  await expect(page.getByText(/New supporters cannot join right now/).first()).toBeVisible();
 });

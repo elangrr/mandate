@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Mandate, Payee, Plan } from "./amino";
-import { FIRST_DEPOSIT_UGNOT, LATER_DEPOSIT_UGNOT, permissionFits, stopState, subscribeState, type ChainView } from "./flows";
+import { FIRST_DEPOSIT_UGNOT, LATER_DEPOSIT_UGNOT, permissionFits, removeCheck, stopCheck, stopState, subscribeState, type ChainView } from "./flows";
 import type { SessionEntry } from "./rpc";
 import { allowPath, defaultEnd } from "./tx";
 
@@ -29,10 +29,14 @@ function session(o: Partial<SessionEntry> = {}): SessionEntry {
 }
 
 function view(o: Partial<ChainView> = {}): ChainView {
-  return { now: NOW, plan, payee, collectorIsAccount: false, mandates: [], sessions: [], paidThrough: 0n, balance: 10_000_000n, gasPrice: { gas: 1000n, amount: 1n }, ...o };
+  return {
+    now: NOW, plan, payee, keyProblem: null, collectorIsAccount: false, byKey: null, hasForPlan: false, planMandate: null, activeCount: 0, hasHistory: false,
+    sessions: [], paidThrough: 0n, balance: 10_000_000n, gasPrice: { gas: 1000n, amount: 1n }, ...o,
+  };
 }
 
 const others = (n: number) => Array.from({ length: n }, (_, i) => session({ address: `other-${i}` }));
+const cancelled = (o: Partial<Mandate> = {}) => mandate({ status: "cancelled", cancelledAt: NOW - 10n, ...o });
 
 describe("subscribeState", () => {
   it("is ready for a first mandate: a new permission for a year, the first deposit, both fees", () => {
@@ -40,57 +44,77 @@ describe("subscribeState", () => {
     expect(s.kind).toBe("ready");
     if (s.kind !== "ready") return;
     expect(s.resume).toBe(false);
+    expect(s.leftover).toBeNull();
     expect(s.end).toBe(defaultEnd(NOW));
     expect(s.cap).toBe(1_100_000n);
     expect(s.deposit).toBe(FIRST_DEPOSIT_UGNOT);
     expect(s.fees).toBe(7_500n + 25_000n);
     expect(s.paidThrough).toBe(0n);
+    expect(s.lowBalance).toBe(false);
   });
 
-  it("blocks without a collector key, and when the key is an account (funded or not)", () => {
+  it("blocks without a collector key, with an unusable key, and when the key is an account", () => {
     expect(subscribeState(view({ payee: null })).kind).toBe("blocked");
     expect(subscribeState(view({ payee: { ...payee, collectorKey: "" } })).kind).toBe("blocked");
+    expect(subscribeState(view({ keyProblem: "not-secp256k1" })).kind).toBe("blocked");
+    expect(subscribeState(view({ keyProblem: "mismatch" })).kind).toBe("blocked");
     const funded = subscribeState(view({ payee: { ...payee, collectorFunded: true } }));
     expect(funded.kind === "blocked" && funded.title).toBe("New supporters cannot join right now");
     expect(subscribeState(view({ collectorIsAccount: true })).kind).toBe("blocked");
   });
 
-  it("shows an active mandate for this plan instead of a second one", () => {
+  it("shows the active mandate for this plan (MandateOf for the key) instead of a second one", () => {
     const m = mandate({ planId: plan.id });
-    const s = subscribeState(view({ mandates: [m], sessions: [session()] }));
-    expect(s).toEqual({ kind: "already", mandate: m, permission: true });
+    expect(subscribeState(view({ byKey: m, hasForPlan: true, sessions: [session()] }))).toEqual({ kind: "already", mandate: m, permission: true });
   });
 
   it("says when the permission behind an active mandate is gone or expired", () => {
     const m = mandate({ planId: plan.id });
-    expect(subscribeState(view({ mandates: [m] }))).toEqual({ kind: "already", mandate: m, permission: false });
-    expect(subscribeState(view({ mandates: [m], sessions: [session({ expiresAt: NOW })] }))).toEqual({ kind: "already", mandate: m, permission: false });
+    expect(subscribeState(view({ byKey: m, hasForPlan: true }))).toEqual({ kind: "already", mandate: m, permission: false });
+    expect(subscribeState(view({ byKey: m, hasForPlan: true, sessions: [session({ expiresAt: NOW })] }))).toEqual({ kind: "already", mandate: m, permission: false });
   });
 
-  it("does not count a cancelled or ended mandate as active", () => {
-    const gone = [mandate({ planId: plan.id, status: "cancelled" }), mandate({ planId: plan.id, expiresAt: NOW })];
-    const s = subscribeState(view({ mandates: gone }));
-    expect(s.kind === "ready" && s.deposit).toBe(LATER_DEPOSIT_UGNOT);
+  it("an active mandate for this plan under an older key still counts (HasMandate), even when the history scan cannot find it", () => {
+    expect(subscribeState(view({ hasForPlan: true }))).toEqual({ kind: "already", mandate: null, permission: null });
+    const old = mandate({ planId: plan.id, session: "g1old" });
+    expect(subscribeState(view({ hasForPlan: true, planMandate: old }))).toEqual({ kind: "already", mandate: old, permission: false });
+  });
+
+  it("a cancelled or ended mandate for the key is not active; the deposit is the later one", () => {
+    for (const gone of [cancelled({ planId: plan.id }), mandate({ planId: plan.id, expiresAt: NOW })]) {
+      const s = subscribeState(view({ byKey: gone, hasHistory: true }));
+      expect(s.kind === "ready" && s.deposit).toBe(LATER_DEPOSIT_UGNOT);
+    }
   });
 
   it("one plan per creator: another active plan of the same creator uses the key", () => {
-    const s = subscribeState(view({ mandates: [mandate({ planId: 1n })], sessions: [session()] }));
+    const s = subscribeState(view({ byKey: mandate({ planId: 1n }), sessions: [session()] }));
     expect(s.kind === "blocked" && s.title).toBe("One plan per creator");
   });
 
-  it("resumes when the permission exists with the plan's terms and no mandate uses it", () => {
+  it("resumes a half-finished subscription: the permission exists, no mandate was ever recorded for it", () => {
     const end = NOW + 200n * DAY;
     const s = subscribeState(view({ sessions: [session({ expiresAt: end })] }));
     expect(s.kind).toBe("ready");
     if (s.kind !== "ready") return;
     expect(s.resume).toBe(true);
+    expect(s.leftover).toBeNull();
     expect(s.end).toBe(end); // the mandate ends with its permission
     expect(s.fees).toBe(25_000n); // no permission approval left
   });
 
-  it("a leftover permission that ends too late for a mandate gets the default end", () => {
-    const s = subscribeState(view({ sessions: [session({ expiresAt: NOW + 400n * DAY })] }));
-    expect(s.kind === "ready" && s.end).toBe(defaultEnd(NOW));
+  it("a permission left from an ended mandate is told as such, with its own end date", () => {
+    const old = cancelled({ planId: 1n, expiresAt: NOW + 30n * DAY });
+    const s = subscribeState(view({ byKey: old, sessions: [session({ expiresAt: NOW + 30n * DAY })], hasHistory: true }));
+    expect(s.kind === "ready" && s.leftover).toEqual(old);
+    expect(s.kind === "ready" && s.end).toBe(NOW + 30n * DAY);
+  });
+
+  it("a permission given after an earlier mandate ended is a half-finished subscription, not a leftover", () => {
+    const old = cancelled({ planId: 1n, expiresAt: NOW + 30n * DAY });
+    const s = subscribeState(view({ byKey: old, sessions: [session({ expiresAt: NOW + 365n * DAY })], hasHistory: true }));
+    expect(s.kind === "ready" && s.resume).toBe(true);
+    expect(s.kind === "ready" && s.leftover).toBeNull();
   });
 
   it("asks to remove a leftover permission whose terms do not fit", () => {
@@ -100,23 +124,35 @@ describe("subscribeState", () => {
       session({ allowPaths: [allowPath(), "vm/exec:gno.land/r/other"] }),
       session({ allowPaths: ["vm/exec:gno.land/r/other"] }),
       session({ expiresAt: NOW + 3600n }),
+      session({ expiresAt: NOW + 400n * DAY }),
     ]) {
       expect(subscribeState(view({ sessions: [bad] })).kind).toBe("fix-permission");
     }
   });
 
-  it("a full wallet: 16 permissions, or 16 active mandates", () => {
-    expect(subscribeState(view({ sessions: others(16) })).kind).toBe("blocked");
-    expect(subscribeState(view({ sessions: others(15) })).kind).toBe("ready");
-    const mandates = Array.from({ length: 16 }, (_, i) => mandate({ id: BigInt(i + 10), planId: BigInt(i + 10), session: `s${i}` }));
-    const s = subscribeState(view({ mandates }));
-    expect(s.kind === "blocked" && s.title).toBe("Your wallet is full");
+  it("a permission that ends before the time already paid for runs out cannot carry a mandate", () => {
+    const s = subscribeState(view({ sessions: [session({ expiresAt: NOW + 10n * DAY })], paidThrough: NOW + 20n * DAY }));
+    expect(s.kind).toBe("fix-permission");
   });
 
-  it("not enough GNOT for the deposit and fees", () => {
+  it("a full wallet: 16 permissions (any app, expired ones too), or 16 active mandates; an unknown count does not block", () => {
+    const full = subscribeState(view({ sessions: others(16) }));
+    expect(full.kind === "blocked" && full.reason).toMatch(/other apps and ones that have expired count too/);
+    expect(subscribeState(view({ sessions: others(15) })).kind).toBe("ready");
+    expect(subscribeState(view({ activeCount: 16 })).kind).toBe("blocked");
+    expect(subscribeState(view({ activeCount: null })).kind).toBe("ready");
+  });
+
+  it("not enough GNOT for the deposit and fees blocks; not enough for the first payment too only warns", () => {
     const need = FIRST_DEPOSIT_UGNOT + 7_500n + 25_000n;
     expect(subscribeState(view({ balance: need - 1n })).kind).toBe("blocked");
-    expect(subscribeState(view({ balance: need })).kind).toBe("ready");
+    const low = subscribeState(view({ balance: need }));
+    expect(low.kind === "ready" && low.lowBalance).toBe(true);
+    const enough = subscribeState(view({ balance: need + 1_000_000n + 100_000n }));
+    expect(enough.kind === "ready" && enough.lowBalance).toBe(false);
+    // already paid: no payment is due now, so the deposit and fees are enough
+    const paid = subscribeState(view({ balance: need, paidThrough: NOW + 10n * DAY }));
+    expect(paid.kind === "ready" && paid.lowBalance).toBe(false);
   });
 
   it("carries paid time only while it is still in the future", () => {
@@ -134,31 +170,44 @@ describe("permissionFits", () => {
   });
 });
 
-describe("stopState", () => {
+describe("stopState (what the page offers)", () => {
   it("an active mandate with its permission: revoke, then cancel", () => {
     const m = mandate();
     expect(stopState(m, [m], [session()], NOW)).toEqual({ kind: "ready", session: session(), cancel: true });
   });
+  it("permission already gone: cancel only; cancelled with a leftover permission: remove it only; nothing left", () => {
+    expect(stopState(mandate(), [mandate()], [], NOW)).toEqual({ kind: "ready", session: null, cancel: true });
+    const c = cancelled();
+    expect(stopState(c, [c], [session()], NOW)).toEqual({ kind: "ready", session: session(), cancel: false });
+    expect(stopState(mandate({ status: "expired" }), [], [], NOW).kind).toBe("nothing");
+  });
+});
 
-  it("permission already gone: cancel only", () => {
+describe("stopCheck (fresh reads right before signing)", () => {
+  const fresh = (byKey: Mandate | null, sessions: SessionEntry[]) => ({ now: NOW, byKey, sessions });
+  it("stops the mandate shown: revoke its permission and cancel it", () => {
     const m = mandate();
-    expect(stopState(m, [m], [], NOW)).toEqual({ kind: "ready", session: null, cancel: true });
+    expect(stopCheck(m, fresh(m, [session()]), "stop")).toEqual({ kind: "go", revoke: session(), cancel: true });
   });
-
-  it("already cancelled with a leftover permission: remove it only", () => {
-    const m = mandate({ status: "cancelled", cancelledAt: NOW - 10n });
-    expect(stopState(m, [m], [session()], NOW)).toEqual({ kind: "ready", session: session(), cancel: false });
+  it("never cancels or revokes for another mandate that now uses the key", () => {
+    const shown = mandate({ id: 1n });
+    const now = mandate({ id: 2n, planId: 3n });
+    const c = stopCheck(shown, fresh(now, [session()]), "stop");
+    expect(c.kind === "changed" && c.reason).toMatch(/plan #3/);
+    expect(stopCheck(cancelled({ id: 1n }), fresh(now, [session()]), "tidy").kind).toBe("changed");
   });
-
-  it("nothing left to do", () => {
-    const m = mandate({ status: "expired" });
-    expect(stopState(m, [m], [], NOW).kind).toBe("nothing");
+  it("a stop of a mandate cancelled meanwhile sends nothing and says so", () => {
+    const c = stopCheck(mandate(), fresh(cancelled(), [session()]), "stop");
+    expect(c.kind === "changed" && c.reason).toMatch(/leftover permission/);
   });
-
-  it("never removes a permission another active mandate still uses", () => {
-    const old = mandate({ id: 1n, status: "cancelled", cancelledAt: NOW - 10n });
-    const current = mandate({ id: 2n, planId: 2n });
-    expect(stopState(old, [current, old], [session()], NOW).kind).toBe("nothing");
-    expect(stopState(current, [current, old], [session()], NOW)).toEqual({ kind: "ready", session: session(), cancel: true });
+  it("tidy: removes only a permission no active mandate uses", () => {
+    const c = cancelled();
+    expect(stopCheck(c, fresh(c, [session()]), "tidy")).toEqual({ kind: "go", revoke: session(), cancel: false });
+    expect(stopCheck(c, fresh(c, []), "tidy").kind).toBe("changed");
+  });
+  it("removeCheck: not while a mandate uses the key, not when it is gone", () => {
+    expect(removeCheck(KEY, fresh(mandate(), [session()]))).toMatch(/now uses this permission/);
+    expect(removeCheck(KEY, fresh(null, []))).toMatch(/already gone/);
+    expect(removeCheck(KEY, fresh(cancelled(), [session()]))).toBeNull();
   });
 });

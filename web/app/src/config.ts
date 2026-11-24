@@ -23,6 +23,8 @@ export const config = {
   /** "coingecko" (default) or "off"; VITE_GNOT_USD fixes the price instead. */
   gnotUsdSource: env("VITE_GNOT_USD_SOURCE", "coingecko").toLowerCase(),
   gnotUsdManual: env("VITE_GNOT_USD", ""),
+  /** How long the page reads the chain for a sent transaction's result before it says "not on chain yet" (ms). */
+  confirmWaitMs: Math.max(1000, Number(env("VITE_CONFIRM_WAIT_MS", "60000")) || 60000),
 };
 
 export function pkgStatusPage(): string | null {

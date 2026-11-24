@@ -4,6 +4,12 @@ A static site (Vite, TypeScript, React) for Mandate on the Onyx test network. It
 
 Slice M2a, the site that only reads: home with the how-it-works picture, all plans, a plan page, "my mandates" (by address or connected Adena wallet), a creator page, how it works, and a calm "waiting for the network's approval" state while the realm is parked.
 
+Slice M2b, subscribe and stop with the Adena wallet:
+
+- Every request asks Adena to wait for the block (`commit: true`). A step counts as done only when the page reads its result back from the chain (the permission, or the mandate); the second approval opens only after the first is on chain. If the chain does not show a sent step within a minute, the page says "sent, but not on chain yet" and asks you not to repeat it; "Check again" goes on from there.
+- Right before any popup the page reads the chain again (plan, collector key, permissions, MandateOf for the key) and sends nothing if what it showed has changed.
+- `#/plan/<id>?approval=one` puts the permission and the terms (or the removal and the cancel) in one approval. **Experimental**: it passes Adena v1.22.5's own code (`../adena-check`) but has not been tried with the real wallet yet. Without it, two approvals.
+
 ## Build
 
 ```sh
@@ -11,17 +17,20 @@ npm ci
 npm run build        # dist/, ready for any sub-path (asset URLs are relative): GitHub Pages at /mandate/ needs no option
 ```
 
-Defaults: chain `onyx-1`, RPC `https://rpc.onyx.testnets.gno.land:443`, realm `gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate`. Override with `VITE_CHAIN_ID`, `VITE_RPC_URL`, `VITE_REALM_PATH`, `VITE_GNOWEB_URL`; `VITE_GNOT_USD_SOURCE=off` turns the dollar hint off, `VITE_GNOT_USD=<price>` fixes it. The built page carries a strict Content-Security-Policy (its own scripts and styles only; network access to the RPC and CoinGecko only).
+Defaults: chain `onyx-1`, RPC `https://rpc.onyx.testnets.gno.land:443`, realm `gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate`. Override with `VITE_CHAIN_ID`, `VITE_RPC_URL`, `VITE_REALM_PATH`, `VITE_GNOWEB_URL`; `VITE_GNOT_USD_SOURCE=off` turns the dollar hint off, `VITE_GNOT_USD=<price>` fixes it; `VITE_CONFIRM_WAIT_MS` is how long the page reads the chain for a sent step before it says "not on chain yet" (default 60000). The built page carries a strict Content-Security-Policy (its own scripts and styles only; network access to the RPC and CoinGecko only).
 
 ## Tests
 
 ```sh
-npm test             # unit tests: the decoders against real chain responses (src/__fixtures__/chain.json)
+npm test             # unit tests: the decoders against real chain responses (src/__fixtures__/chain.json), the transaction
+                     # builders, the subscribe and stop decisions, and what each kind of wallet reply means
 npm run typecheck
 npm run e2e          # a LOCAL gnodev chain (chain id dev) with throwaway keys, the app built for it and served under /mandate/,
                      # Playwright in headless Chromium; screenshots in e2e/out/shots/
 npm run fixtures     # re-capture src/__fixtures__/chain.json from a local chain
 ```
+
+The wallet tests use a stand-in for Adena (`e2e/standin.ts`) with Adena's reply shapes, both waiting for the block and answering as soon as the transaction is queued, and include refusals inside the block, a slow block and replies of unexpected shapes.
 
 The end-to-end run needs gno v1.8.0's `gnodev` and `gnokey` on PATH and Playwright's Chromium. It never touches a public network: chain id `dev`, 127.0.0.1 only, keys made and deleted by the run.
 

@@ -2,6 +2,10 @@
 // wallet popup opens. A half-finished subscription (a permission without a
 // mandate) or a half-finished stop shows up here as a state to finish or
 // undo, so every failure path ends in a state the page can explain.
+//
+// Every decision uses direct reads (MandateOf for the creator's collector key,
+// HasMandate for the plan, the wallet's permission list), never only the
+// first pages of a wallet's history.
 
 import { rules } from "../config";
 import type { Mandate, Payee, Plan } from "./amino";
@@ -14,12 +18,25 @@ export const FIRST_DEPOSIT_UGNOT = 540_000n;
 /** About what a later mandate stores (1,844 bytes). */
 export const LATER_DEPOSIT_UGNOT = 190_000n;
 
+const DAY = 86_400n;
+
 export interface ChainView {
   now: bigint;
   plan: Plan;
   payee: Payee | null;
+  /** the published collector key cannot be used: not a secp256k1 key, or its address is not the one published */
+  keyProblem: "not-secp256k1" | "mismatch" | null;
   collectorIsAccount: boolean;
-  mandates: Mandate[]; // the supporter's, newest first
+  /** MandateOf(payer, collector address): the latest mandate for this key, active or not */
+  byKey: Mandate | null;
+  /** HasMandate(payer, plan) */
+  hasForPlan: boolean;
+  /** the active mandate for this plan when it uses another key (an older collector key), if found */
+  planMandate: Mandate | null;
+  /** active mandates in the realm; null when the wallet's history was too long to count */
+  activeCount: number | null;
+  /** whether the wallet ever recorded a mandate (the storage deposit is larger the first time) */
+  hasHistory: boolean;
   sessions: SessionEntry[]; // the supporter's permissions on chain
   paidThrough: bigint; // PaidThrough(supporter, plan)
   balance: bigint; // ugnot
@@ -28,23 +45,31 @@ export interface ChainView {
 
 export type SubscribeState =
   | { kind: "blocked"; title: string; reason: string }
-  /** permission: false when the mandate's permission is gone or expired on chain, so nothing can be paid */
-  | { kind: "already"; mandate: Mandate; permission: boolean }
+  /** permission: false when the mandate's permission is gone or expired on chain, so nothing can be paid; null when unknown */
+  | { kind: "already"; mandate: Mandate | null; permission: boolean | null }
   | { kind: "fix-permission"; session: SessionEntry; reason: string }
   | {
       kind: "ready";
       /** true: the permission already exists with the right terms; only the mandate is left to record */
       resume: boolean;
       session: SessionEntry | null;
+      /** the earlier mandate (cancelled or ended) the existing permission was given for, if any */
+      leftover: Mandate | null;
       end: bigint;
       cap: bigint;
-      paidThrough: bigint; // > now: the first payment waits until then
+      paidThrough: bigint; // > now: the first payment waits until then; 0: due at once
       deposit: bigint; // approximate storage deposit
       fees: bigint; // approximate network fees for the approvals
+      /** the wallet covers the deposit and fees but not also the first payment and the fee allowance */
+      lowBalance: boolean;
     };
 
-function isActive(m: Mandate, now: bigint): boolean {
-  return m.status === "active" && m.expiresAt > now;
+export function isActive(m: Mandate, now: bigint): boolean {
+  return m.status === "active" && m.cancelledAt === 0n && m.expiresAt > now;
+}
+
+function alive(s: SessionEntry | undefined, now: bigint): boolean {
+  return !!s && (s.expiresAt === 0n || s.expiresAt > now);
 }
 
 /** Whether an existing permission already has exactly the terms the plan needs. */
@@ -52,7 +77,8 @@ export function permissionFits(s: SessionEntry, plan: Plan, now: bigint): string
   if (s.allowPaths.length !== 1 || s.allowPaths[0] !== allowPath()) return "it is not limited to Mandate alone";
   if (s.spendPeriod !== plan.period) return `its period (${s.spendPeriod.toString()} s) is not the plan's`;
   if (s.spendLimit !== capFor(plan)) return `its cap (${gnot(s.spendLimit)} GNOT) is not the plan's ${gnot(capFor(plan))} GNOT`;
-  if (s.expiresAt !== 0n && s.expiresAt <= now + 86400n) return "it ends within a day";
+  if (s.expiresAt !== 0n && s.expiresAt <= now + DAY) return "it ends within a day";
+  if (s.expiresAt > now + BigInt(rules.maxTermDays) * DAY) return "it ends later than a mandate may";
   return null;
 }
 
@@ -60,6 +86,15 @@ export function subscribeState(v: ChainView): SubscribeState {
   const { plan, payee, now } = v;
   if (!payee?.collectorKey || !payee.collectorAddr)
     return { kind: "blocked", title: "Nobody can subscribe yet", reason: "The creator has not published a collector key." };
+  if (v.keyProblem)
+    return {
+      kind: "blocked",
+      title: "Nobody can subscribe right now",
+      reason:
+        v.keyProblem === "not-secp256k1"
+          ? "The creator’s collector key is not a kind of key this page can give a permission to. The creator must publish a new collector key."
+          : "The creator’s collector key does not match the collector address published with it. The creator must publish the key again.",
+    };
   if (payee.collectorFunded || v.collectorIsAccount)
     return {
       kind: "blocked",
@@ -67,44 +102,74 @@ export function subscribeState(v: ChainView): SubscribeState {
       reason:
         "The creator’s collector key has received coins, which makes its address an account, and the chain refuses a permission for such a key. The creator must publish a new collector key.",
     };
-  const active = v.mandates.filter((m) => isActive(m, now));
-  const here = active.find((m) => m.planId === plan.id);
-  if (here) {
-    const p = v.sessions.find((s) => s.address === here.session);
-    return { kind: "already", mandate: here, permission: !!p && (p.expiresAt === 0n || p.expiresAt > now) };
-  }
 
   const key = payee.collectorAddr;
   const session = v.sessions.find((s) => s.address === key) ?? null;
-  if (session) {
-    const other = active.find((m) => m.session === key);
-    if (other)
-      return {
-        kind: "blocked",
-        title: "One plan per creator",
-        reason: `You already support plan #${other.planId} of this creator. Every plan of a creator is collected by the same key, and the chain allows one permission per key, so stop that mandate first to switch.`,
-      };
-    const misfit = permissionFits(session, plan, now);
-    if (misfit) return { kind: "fix-permission", session, reason: `You already gave this creator’s collector key a permission, but ${misfit}. Remove it first, then subscribe.` };
-  } else {
-    if (v.sessions.length >= rules.maxActive)
-      return { kind: "blocked", title: "Your wallet is full", reason: `Your wallet already holds the ${rules.maxActive} permissions the chain allows. Stop a mandate you no longer need first.` };
+  const byKeyActive = v.byKey && isActive(v.byKey, now) ? v.byKey : null;
+  if (byKeyActive && byKeyActive.planId === plan.id) return { kind: "already", mandate: byKeyActive, permission: alive(session ?? undefined, now) };
+  if (v.hasForPlan) {
+    const m = v.planMandate;
+    return { kind: "already", mandate: m, permission: m ? alive(v.sessions.find((s) => s.address === m.session), now) : null };
   }
-  if (active.length >= rules.maxActive)
+  if (byKeyActive)
+    return {
+      kind: "blocked",
+      title: "One plan per creator",
+      reason: `You already support plan #${byKeyActive.planId} of this creator. Every plan of a creator is collected by the same key, and the chain allows one permission per key, so stop that mandate first to switch.`,
+    };
+
+  if (session) {
+    const misfit = permissionFits(session, plan, now);
+    if (misfit)
+      return {
+        kind: "fix-permission",
+        session,
+        reason: `Your wallet already gave this creator’s collector key a permission${v.byKey ? ", left from an earlier mandate" : ""}, but ${misfit}. Remove it first, then subscribe.`,
+      };
+  } else if (v.sessions.length >= rules.maxActive) {
+    return {
+      kind: "blocked",
+      title: "Your wallet is full",
+      reason: `Your wallet already holds the ${rules.maxActive} permissions the chain allows. Permissions given to other apps and ones that have expired count too. Remove one you no longer need, in Adena or from your mandates here, then come back.`,
+    };
+  }
+  if (v.activeCount !== null && v.activeCount >= rules.maxActive)
     return { kind: "blocked", title: "Your wallet is full", reason: `You already hold ${rules.maxActive} active mandates, the most a wallet can. Stop one you no longer need first.` };
 
-  const end = session && session.expiresAt > now + 86400n && session.expiresAt <= now + BigInt(rules.maxTermDays) * 86400n ? session.expiresAt : defaultEnd(now);
-  const deposit = v.mandates.length === 0 ? FIRST_DEPOSIT_UGNOT : LATER_DEPOSIT_UGNOT;
+  const end = session && session.expiresAt !== 0n ? session.expiresAt : defaultEnd(now);
+  const deposit = v.hasHistory ? LATER_DEPOSIT_UGNOT : FIRST_DEPOSIT_UGNOT;
   const fees = BigInt(session ? 0 : Math.ceil(minFee(GAS.session, v.gasPrice) * 1.5)) + BigInt(minFee(25_000_000, v.gasPrice)); // a Subscribe signs about 10M to 25M gas
+  const paidThrough = v.paidThrough > now ? v.paidThrough : 0n;
   if (v.balance < deposit + fees)
     return {
       kind: "blocked",
       title: "Not enough GNOT",
-      reason: `Subscribing needs about ${gnot(deposit + fees)} GNOT for the storage deposit and network fees; this wallet has ${gnot(v.balance)} GNOT. The first payment of ${gnot(plan.amount)} GNOT is taken later.`,
+      reason: `Subscribing needs about ${gnot(deposit + fees)} GNOT for the storage deposit and network fees; this wallet has ${gnot(v.balance)} GNOT.`,
     };
-  return { kind: "ready", resume: session !== null, session, end, cap: capFor(plan), paidThrough: v.paidThrough > now ? v.paidThrough : 0n, deposit, fees };
+  if (session && paidThrough > 0n && end <= paidThrough)
+    return {
+      kind: "fix-permission",
+      session,
+      reason: "You already paid for this plan until after this permission ends, so a mandate on it could never take a payment. Remove the permission, then subscribe again.",
+    };
+  const firstPayment = paidThrough > 0n ? 0n : plan.amount + rules.feeAllowanceUgnot;
+  return {
+    kind: "ready",
+    resume: session !== null,
+    session,
+    // a permission given for an earlier mandate ends when that mandate ended (the page signs one end date for both);
+    // a permission from a subscription started and not finished does not
+    leftover: session && v.byKey && !isActive(v.byKey, now) && session.expiresAt === v.byKey.expiresAt ? v.byKey : null,
+    end,
+    cap: capFor(plan),
+    paidThrough,
+    deposit,
+    fees,
+    lowBalance: v.balance < deposit + fees + firstPayment,
+  };
 }
 
+/** What the page shows for a mandate's stop controls (from the page's own reads). */
 export type StopState =
   | { kind: "nothing"; reason: string }
   | {
@@ -123,4 +188,43 @@ export function stopState(m: Mandate, all: Mandate[], sessions: SessionEntry[], 
   const session = sharedWith ? null : (sessions.find((s) => s.address === m.session) ?? null);
   if (!cancel && !session) return { kind: "nothing", reason: "This mandate is already stopped and its permission is gone." };
   return { kind: "ready", session, cancel };
+}
+
+/** What the chain says right before a stop or a removal (read afresh). */
+export interface FreshKey {
+  now: bigint;
+  /** MandateOf(payer, key) */
+  byKey: Mandate | null;
+  sessions: SessionEntry[];
+}
+
+export type StopCheck = { kind: "go"; revoke: SessionEntry | null; cancel: boolean } | { kind: "changed"; reason: string };
+
+/**
+ * The last check before signing a stop: act only on what the page shows.
+ * Cancel only the mandate shown (same id); remove the permission only when
+ * no active mandate uses it, or when it is this mandate's own.
+ * `intent`: "stop" (the page shows the mandate as active) or "tidy" (remove a leftover permission).
+ */
+export function stopCheck(m: Mandate, fresh: FreshKey, intent: "stop" | "tidy"): StopCheck {
+  const session = fresh.sessions.find((s) => s.address === m.session) ?? null;
+  const active = fresh.byKey && isActive(fresh.byKey, fresh.now) ? fresh.byKey : null;
+  if (active && active.id !== m.id)
+    return { kind: "changed", reason: `Another of your mandates (plan #${active.planId}) now uses this permission, so it was left in place.` };
+  const cancel = active !== null; // it is this mandate
+  if (intent === "stop" && !cancel)
+    return {
+      kind: "changed",
+      reason: session ? "This mandate was already cancelled or has ended; only its leftover permission is left to remove." : "This mandate was already stopped.",
+    };
+  if (intent === "tidy" && cancel) return { kind: "changed", reason: "This mandate is active, so its permission was left in place." };
+  if (!session && !cancel) return { kind: "changed", reason: "The permission is already gone." };
+  return { kind: "go", revoke: session, cancel };
+}
+
+/** The last check before removing a permission from the plan page (undo, or a permission with the wrong terms). */
+export function removeCheck(key: string, fresh: FreshKey): string | null {
+  if (fresh.byKey && isActive(fresh.byKey, fresh.now)) return `A mandate (plan #${fresh.byKey.planId}) now uses this permission, so it was left in place.`;
+  if (!fresh.sessions.some((s) => s.address === key)) return "The permission is already gone.";
+  return null;
 }

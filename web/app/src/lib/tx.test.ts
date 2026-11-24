@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Plan } from "./amino";
-import { buildCancel, buildCreateSession, buildRevokeSession, buildSubscribe, checkGas, doContractParams, fromBase64, gasFor, minFee, pubFromGpub, TxError } from "./tx";
+import { addressOf, buildCancel, buildCreateSession, buildRevokeSession, buildSubscribe, checkGas, collectorKeyProblem, doContractParams, fromBase64, gasFor, minFee, pubFromGpub, TxError } from "./tx";
 
 // A fixed plan and keys (from a local test chain), so the requests are stable.
 const GPUB = "gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c";
@@ -69,5 +69,16 @@ describe("transaction builders", () => {
     const now = JSON.stringify(appRequests(), null, 1) + "\n";
     if (process.env.UPDATE_ADENA_REQUESTS) writeFileSync(file, now);
     expect(readFileSync(file, "utf8")).toBe(now);
+  });
+
+  it("every request asks Adena to wait for the block", () => {
+    for (const r of Object.values(appRequests())) expect(r.commit).toBe(true);
+  });
+
+  it("a collector key's address is the chain's (RIPEMD-160 of SHA-256), and a mismatch or another key type is caught", async () => {
+    expect(await addressOf(pubFromGpub(GPUB))).toBe(COLLECTOR);
+    expect(await collectorKeyProblem(GPUB, COLLECTOR)).toBeNull();
+    expect(await collectorKeyProblem(GPUB, SUPPORTER)).toBe("mismatch");
+    expect(await collectorKeyProblem("gpub1notakey", COLLECTOR)).toBe("not-secp256k1");
   });
 });

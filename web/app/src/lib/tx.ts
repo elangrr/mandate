@@ -8,6 +8,7 @@
 
 import { config, rules } from "../config";
 import type { Plan } from "./amino";
+import { ripemd160, sha256 } from "./hash";
 
 export class TxError extends Error {
   constructor(message: string) {
@@ -98,6 +99,41 @@ export function bech32Decode(s: string): { hrp: string; bytes: Uint8Array } {
     acc &= (1 << bits) - 1;
   }
   return { hrp, bytes: new Uint8Array(out) };
+}
+
+function bech32Encode(hrp: string, bytes: Uint8Array): string {
+  const data: number[] = [];
+  let acc = 0;
+  let bits = 0;
+  for (const b of bytes) {
+    acc = (acc << 8) | b;
+    bits += 8;
+    while (bits >= 5) {
+      bits -= 5;
+      data.push((acc >>> bits) & 31);
+    }
+    acc &= (1 << bits) - 1;
+  }
+  if (bits > 0) data.push((acc << (5 - bits)) & 31);
+  const pm = polymod(hrpExpand(hrp).concat(data, [0, 0, 0, 0, 0, 0])) ^ 1;
+  const checksum = [0, 1, 2, 3, 4, 5].map((i) => (pm >>> (5 * (5 - i))) & 31);
+  return hrp + "1" + data.concat(checksum).map((v) => CHARSET[v]).join("");
+}
+
+/** The g1… address of a secp256k1 key: bech32("g", RIPEMD-160(SHA-256(key))), as the chain computes it. */
+export async function addressOf(pub33: Uint8Array): Promise<string> {
+  return bech32Encode("g", ripemd160(await sha256(checkPub(pub33))));
+}
+
+/** Whether a published collector key can be used here: a secp256k1 gpub whose address is the one published with it. */
+export async function collectorKeyProblem(gpub: string, addr: string): Promise<"not-secp256k1" | "mismatch" | null> {
+  let pub: Uint8Array;
+  try {
+    pub = pubFromGpub(gpub);
+  } catch {
+    return "not-secp256k1";
+  }
+  return (await addressOf(pub)) === addr ? null : "mismatch";
 }
 
 function checkPub(b: Uint8Array): Uint8Array {
@@ -241,11 +277,20 @@ export function checkGas(g: Gas): Gas {
   return g;
 }
 
-/** Adena's DoContract parameters: the messages, an empty memo and the explicit gas. */
-export function doContractParams(messages: Msg[], gas: Gas): { messages: Msg[]; memo: string; gasWanted: number; gasFee: number } {
+export interface DoContractParams {
+  messages: Msg[];
+  memo: string;
+  gasWanted: number;
+  gasFee: number;
+  /** true: Adena waits for the block and reports its result (broadcast_tx_commit); otherwise it returns once the mempool accepted the transaction */
+  commit: true;
+}
+
+/** Adena's DoContract parameters: the messages, an empty memo, the explicit gas, and wait for the block. */
+export function doContractParams(messages: Msg[], gas: Gas): DoContractParams {
   if (messages.length === 0 || messages.length > 2) throw new TxError("one or two messages per approval");
   const g = checkGas(gas);
-  return { messages, memo: "", gasWanted: g.gasWanted, gasFee: g.gasFee };
+  return { messages, memo: "", gasWanted: g.gasWanted, gasFee: g.gasFee, commit: true };
 }
 
 /** One year from now (chain time), the end date of a new mandate and its permission. */

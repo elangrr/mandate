@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { Component, useEffect, useRef, type ErrorInfo, type ReactNode } from "react";
 import { config } from "../config";
 import { shortAddr } from "../lib/format";
 import { parseRoute, useRoute, useTheme, type Theme } from "./hooks";
@@ -115,11 +115,46 @@ function Mark() {
   );
 }
 
+/** A value the page cannot show must not blank the whole page: this part says so and the rest stays. */
+class Boundary extends Component<{ children: ReactNode; resetKey: string }, { failed: boolean; key: string }> {
+  state = { failed: false, key: this.props.resetKey };
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+  static getDerivedStateFromProps(p: { resetKey: string }, s: { failed: boolean; key: string }) {
+    return p.resetKey !== s.key ? { failed: false, key: p.resetKey } : null;
+  }
+  componentDidCatch(_e: Error, _info: ErrorInfo) {
+    /* shown below; nothing is sent anywhere */
+  }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <div className="notice notice-error" role="alert">
+        <Icon name="alert" />
+        <p>
+          Something on this page could not be shown: the chain returned a value this page does not understand. Nothing was sent.{" "}
+          <a href="#/">Go to the start page</a> or reload this page.
+        </p>
+      </div>
+    );
+  }
+}
+
 function Shell() {
   const w = useWallet();
+  const route = useRoute();
   return (
     <>
-      <a className="skip" href="#main">
+      {/* the page routes by the hash, so the skip link moves focus itself instead of changing the hash */}
+      <a
+        className="skip"
+        href="#main"
+        onClick={(e) => {
+          e.preventDefault();
+          document.getElementById("main")?.focus();
+        }}
+      >
         Skip to content
       </a>
       <header className="top">
@@ -147,7 +182,9 @@ function Shell() {
         )}
       </header>
       <main id="main" tabIndex={-1}>
-        <PageFrame />
+        <Boundary resetKey={route}>
+          <PageFrame />
+        </Boundary>
       </main>
       <footer className="foot">
         <div className="foot-inner">

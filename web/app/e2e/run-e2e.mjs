@@ -48,6 +48,7 @@ execFileSync("npx", ["vite", "build", "--outDir", "e2e/out/dist", "--emptyOutDir
     VITE_REALM_PATH: realm,
     VITE_GNOWEB_URL: chain.webUrl,
     VITE_GNOT_USD: "0.05", // a fixed dollar figure: tests make no outside requests
+    VITE_CONFIRM_WAIT_MS: "5000", // how long the page waits for a sent transaction to show on chain; short so the slow-block test is quick
   },
 });
 

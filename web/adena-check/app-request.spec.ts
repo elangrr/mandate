@@ -54,6 +54,9 @@ async function throughAdena(params: any) {
   const injection = { type: 'DO_CONTRACT', status: 'request', key: 'k', data: { ...params, isVisibleResult: true } };
   const requestData = decodeParameter(encodeParameter(injection));
   expect(validateInjectionTransactionType(requestData)).toBeTruthy();
+  // the popup broadcasts with broadcast_tx_commit only when this is exactly true
+  // (pages/popup/wallet/approve-transaction-main/index.tsx: requestData?.data?.commit === true)
+  expect(requestData.data.commit).toBe(true);
   const doc = await service.createDocument(
     account, 'onyx-1', requestData.data.messages, 'g',
     requestData.data.gasWanted, requestData.data.gasFee, requestData.data.memo,

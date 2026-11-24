@@ -20,7 +20,8 @@
   ],
   "memo": "",
   "gasWanted": 5000000,
-  "gasFee": 7500
+  "gasFee": 7500,
+  "commit": true
  },
  "subscribeStep2": {
   "messages": [
@@ -41,7 +42,8 @@
   ],
   "memo": "",
   "gasWanted": 60000000,
-  "gasFee": 90000
+  "gasFee": 90000,
+  "commit": true
  },
  "subscribeOneApproval": {
   "messages": [
@@ -78,7 +80,8 @@
   ],
   "memo": "",
   "gasWanted": 65000000,
-  "gasFee": 97500
+  "gasFee": 97500,
+  "commit": true
  },
  "stopStep1": {
   "messages": [
@@ -95,7 +98,8 @@
   ],
   "memo": "",
   "gasWanted": 5000000,
-  "gasFee": 7500
+  "gasFee": 7500,
+  "commit": true
  },
  "stopStep2": {
   "messages": [
@@ -115,7 +119,8 @@
   ],
   "memo": "",
   "gasWanted": 60000000,
-  "gasFee": 90000
+  "gasFee": 90000,
+  "commit": true
  },
  "stopOneApproval": {
   "messages": [
@@ -145,6 +150,7 @@
   ],
   "memo": "",
   "gasWanted": 65000000,
-  "gasFee": 97500
+  "gasFee": 97500,
+  "commit": true
  }
 }

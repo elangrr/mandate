@@ -125,7 +125,8 @@ export interface Session {
   allowPaths: string[];
 }
 
-function ugnotOf(coins: unknown): bigint {
+/** The ugnot in a coins string such as "5ugnot,3foo": the exact denomination only. */
+export function ugnotOf(coins: unknown): bigint {
   if (typeof coins !== "string") return 0n;
   let total = 0n;
   for (const part of coins.split(",")) {
@@ -133,6 +134,18 @@ function ugnotOf(coins: unknown): bigint {
     if (m) total += BigInt(m[1]);
   }
   return total;
+}
+
+/** A bank/balances answer: a JSON string of coins ("123ugnot,4foo") or the bare coins string. */
+export function parseBalance(r: AbciResult): bigint {
+  if (r.error) throw new ReadError("chain", r.error);
+  let coins: unknown = r.data.trim();
+  try {
+    coins = JSON.parse(r.data);
+  } catch {
+    /* the bare coins string */
+  }
+  return ugnotOf(coins);
 }
 
 /** Parses a session query; null when the chain says there is no such session. */
@@ -149,13 +162,19 @@ export function parseSession(r: AbciResult): Session | null {
   }
   if (d === null) return null;
   const s = d.BaseSessionAccount ?? d;
-  const n = (v: unknown) => (typeof v === "string" && /^\d+$/.test(v) ? BigInt(v) : 0n);
+  // a value that does not parse is an error, never 0: an expiry of 0 would read as "never expires"
+  const n = (v: unknown, what: string) => {
+    if (typeof v === "string" && /^\d{1,19}$/.test(v)) return BigInt(v);
+    if (typeof v === "number" && Number.isSafeInteger(v) && v >= 0) return BigInt(v);
+    if (v === undefined || v === null) return 0n; // amino JSON omits zero values
+    throw new ReadError("chain", `unexpected session ${what}`);
+  };
   return {
-    expiresAt: n(s.expires_at),
+    expiresAt: n(s.expires_at, "expiry"),
     spendLimit: ugnotOf(s.spend_limit),
-    spendPeriod: n(s.spend_period),
+    spendPeriod: n(s.spend_period, "period"),
     spendUsed: ugnotOf(s.spend_used),
-    spendReset: n(s.spend_reset),
+    spendReset: n(s.spend_reset, "reset"),
     allowPaths: Array.isArray(d.allow_paths) ? d.allow_paths.filter((p: unknown) => typeof p === "string") : [],
   };
 }
@@ -261,10 +280,7 @@ export const read = {
   /** The wallet's spendable ugnot (bank/balances). */
   balance: (a: string): Promise<bigint> =>
     cached(`bal${a}`, async () => {
-      const r = await abciQuery(`bank/balances/${a}`, "");
-      if (r.error) throw new ReadError("chain", r.error);
-      const m = /"?(\d+)ugnot"?/.exec(r.data);
-      return m ? BigInt(m[1]) : 0n;
+      return parseBalance(await abciQuery(`bank/balances/${a}`, ""));
     }),
   accountExists: (a: string): Promise<boolean> => cached(`acct${a}`, async () => parseAccountExists(await abciQuery(`auth/accounts/${a}`, ""))),
   /** The time of the chain's latest block (unix seconds): "now" for due dates. */
