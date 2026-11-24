@@ -6,7 +6,7 @@ Mandate is subscriptions and direct debit on native GNOT, built on Gno.land sess
 
 It ships with one thing to subscribe to: **supporter pages**. A creator publishes a plan such as "1 GNOT every week"; the plan's page lists its supporters, counted from their first payment on.
 
-Status: deployed to the Onyx test network (`onyx-1`) on 2026-11-24 at [`gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate`](https://onyx.testnets.gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate), in block 1366932. Onyx parks every new package until an approver enables it, so the pages open once it is live. Test GNOT only.
+Status: deployed to the Onyx test network (`onyx-1`) on 2026-11-24 at [`gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate`](https://onyx.testnets.gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate), in block 1366932. The network's package approver enabled it, and since 2026-11-24 it is live: anyone can read it and use it. Test GNOT only.
 
 Two branches: `master` keeps the placeholder namespace `mandate_dev`, which the tests and the local chain flow use; `onyx` is the same code with the namespace set by `scripts/set-namespace.sh`, byte for byte what is on chain (`docs/deploy-checksums.txt` and `scripts/verify-deploy.sh` there).
 
@@ -41,7 +41,7 @@ Three parts:
 
 - **It is direct debit, not escrow.** Nothing is locked up front. A supporter can revoke, cancel or empty their account at any time; a creator is only paid when a pull succeeds. Payments are taken at the start of each period, so a creator is exposed for one period at most.
 - **The cap includes fees.** The session's spend limit is the price plus a fee allowance of 0.1 GNOT per period (fees and the first payment's storage deposit). A dishonest creator could burn that allowance as network fees (which go to the network, not to them). They can never take more than the limit, or pull more often.
-- **At most 16 mandates per wallet**, because the chain allows 16 sessions per account.
+- **At most 16 active mandates per wallet**, because the chain allows 16 sessions per account; the realm enforces it too.
 - **Periods from one minute to 30 days.** The chain refuses a session whose spend period is longer than 30 days, so there are no yearly plans; a monthly plan with a one-year mandate is the longest commitment.
 - **One plan of each creator at a time.** All of a creator's plans are collected by one key, and the chain allows one session per key per wallet.
 - **Not charged twice for a period.** If a supporter cancels (or the creator does), renews, or comes back with another key while a period is still paid, the new mandate's first payment waits until that period ends. The exception: a wallet keeps paid time for at most 16 plans it has left; beyond that, a creator's cancel keeps nothing for its own plan, and the supporter's own cancel lets the soonest-ending period go.
@@ -49,8 +49,7 @@ Three parts:
 - **Revoke any time.** Revoking the session on chain stops every payment at once. The realm cannot see a revoke, so it still shows the mandate as active until it is cancelled or expires. **To check whether a supporter has paid, use `PaidThrough(payer, plan)`** (or `IsPaidUp`): it moves only when a payment succeeds, so after a revoke it simply runs out within one period. `HasMandate` only says a mandate is recorded, which costs nothing but a deposit and says nothing about payment.
 - **Nothing is ever deployed under the realm's path.** A session for `vm/exec:<realm>` also allows every realm under that path (the chain matches by prefix). The realm's deployer must never deploy anything at `gno.land/r/<namespace>/mandate/...`; this repository never will.
 - **The creator needs an always-on collector** holding the collector key.
-- **Subscribing costs a storage deposit** of about 0.53 GNOT the first time a wallet subscribes (the wallet's own record in the realm plus the mandate), about 0.2 GNOT for each later one, paid by the supporter, plus normal fees. Each wallet's records are its own: nothing another wallet does can make your payments or cancels dearer, except a slightly deeper tree (measured in docs/design.md).
-- **At most 16 active mandates per wallet**, enforced by the realm too (the chain allows 16 sessions per account).
+- **Subscribing costs a storage deposit** of about 0.54 GNOT the first time a wallet subscribes (the wallet's own record in the realm plus the mandate), about 0.2 GNOT for each later one, paid by the supporter, plus normal fees. Each wallet's records are its own: nothing another wallet does can make your payments or cancels dearer, except a slightly deeper tree (measured in docs/design.md).
 - **Anyone can record a mandate without paying.** Supporter pages therefore list and count supporters only from their first payment on; mandates that never paid are shown as a number, never as supporters.
 
 ## Using it

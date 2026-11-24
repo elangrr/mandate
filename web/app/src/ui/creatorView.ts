@@ -6,6 +6,7 @@
 import { rules } from "../config";
 import type { Payee } from "../lib/amino";
 import { amountProblem, parseGnot, parsePeriod, periodProblem, titleProblem, type OfferInput, type PeriodUnit } from "../lib/creator";
+import type { PendingCheck } from "../lib/pending";
 import { minFee } from "../lib/tx";
 
 export interface PlanForm {
@@ -72,4 +73,17 @@ export function keyState(info: Pick<Payee, "collectorKey" | "collectorFunded"> |
       note: "This key’s address has received coins, so the chain refuses new permissions for it: nobody new can subscribe until the creator publishes a new collector key. Existing mandates keep being collected with this one until they end.",
     };
   return { kind: "ready", tone: "ok", label: "Ready", note: "Supporters give this key their permission. It must never receive coins." };
+}
+
+/**
+ * What a Publish panel's button says while it cannot be used: its own step on
+ * its way, the other panel's, or a step from elsewhere (subscribing,
+ * stopping) that the warning at the top of the page is about.
+ * `pending`: the kind of the wallet's step that is not on chain yet; `active`: the panel whose approval is running.
+ */
+export function waitLabel(panel: "key" | "plan", pending: PendingCheck["kind"] | null, active: "key" | "plan" | null): string {
+  const owner = pending ? (pending === "collector-key" ? "key" : pending === "plan" ? "plan" : null) : active;
+  if (owner === panel) return "Waiting for this step to reach the chain…";
+  if (owner === null) return "Waiting for the step at the top of the page…";
+  return "Waiting for the other step…";
 }

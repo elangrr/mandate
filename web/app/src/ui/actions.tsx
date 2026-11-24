@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { config, explorerTx, gnowebPage, rules } from "../config";
 import type { Mandate, Plan } from "../lib/amino";
 import { date, dateTime, gnot, period } from "../lib/format";
-import { isActive, removeCheck, stopCheck, stopState, subscribeState, type ChainView, type FreshKey, type SubscribeState } from "../lib/flows";
+import { isActive, permissionAllows, removeCheck, stopCheck, stopState, subscribeState, termsCheck, type ChainView, type FreshKey, type SubscribeState } from "../lib/flows";
 import { invalidate, read, type SessionEntry } from "../lib/rpc";
 import {
   buildCancel,
@@ -17,7 +17,7 @@ import {
   type Gas,
   type Msg,
 } from "../lib/tx";
-import { allPending, clearPending, getPending, onChain, setPending, usePending, usePendingAll, type Pending, type PendingCheck } from "../lib/pending";
+import { allPending, clearPending, getPending, onChain, repeatAdvice, setPending, usePending, usePendingAll, type Pending, type PendingCheck } from "../lib/pending";
 import { send, WalletError } from "../lib/wallet";
 import { useAsync } from "./hooks";
 import { Icon, Loading, ReadFailed } from "./parts";
@@ -122,7 +122,8 @@ async function waitFor(check: () => Promise<boolean>, ms: number): Promise<boole
 /** How long the page reads the chain after Adena reports "cancelled", in case its window was closed after the transaction went out. */
 const AFTER_CANCEL_MS = 10_000;
 
-type RunResult = "done" | "failed" | "changed" | "pending";
+/** "left": the page was left before the next approval, so it was not opened */
+type RunResult = "done" | "failed" | "changed" | "pending" | "left";
 
 const quote = (labels: string[]) => labels.map((l) => `“${l}”`).join(", ");
 
@@ -133,21 +134,41 @@ const quote = (labels: string[]) => labels.map((l) => `“${l}”`).join(", ");
  * lets an exception escape.
  */
 export function useRunner() {
-  const [steps, setSteps] = useState<Step[]>([]);
-  const [busy, setBusy] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [steps, setStepsNow] = useState<Step[]>([]);
+  const [busy, setBusyNow] = useState(false);
+  const [message, setMessageNow] = useState("");
+  const [error, setErrorNow] = useState("");
   const busyRef = useRef(false);
+  // Once the panel is gone (the page was left, another account connected), no new popup opens for it.
+  // A step already sent is still watched, and recorded as pending if the chain does not show it in time.
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  const setSteps = (v: Step[]) => mounted.current && setStepsNow(v);
+  const setBusy = (v: boolean) => mounted.current && setBusyNow(v);
+  const setMessage = (v: string) => mounted.current && setMessageNow(v);
+  const setError = (v: string) => mounted.current && setErrorNow(v);
 
   async function runSteps(signer: string, plan: StepPlan[], s: Step[]): Promise<RunResult> {
     const done = () => s.filter((x) => x.state === "done").map((x) => x.label);
     for (let k = 0; k < plan.length; k++) {
       const step = plan[k];
       const seen = () => onChain(signer, step.check);
+      if (!mounted.current) return "left";
       if (k > 0 && step.precheck) {
-        const why = await step.precheck().catch(() => "Unable to read the chain just now.");
+        let unread = false;
+        const why = await step.precheck().catch(() => {
+          unread = true;
+          return "Unable to read the chain just now.";
+        });
+        if (!mounted.current) return "left";
         if (why) {
-          setError(`${why} So “${step.label}” was not sent. What went through before stays on chain: ${quote(done())}. The page now shows what is left.`);
+          // what went before may have been undone meanwhile (a permission removed elsewhere): say only what is known now
+          setError(`${why} So “${step.label}” was not sent. ${unread ? "Try again in a moment." : "The page now shows the current state."}`);
           return "changed";
         }
       }
@@ -173,7 +194,7 @@ export function useRunner() {
           setSteps([...s]);
           const before = done();
           setError(
-            `You cancelled “${step.label}” in Adena, or closed its window, and the chain does not show it. If you closed the window after approving, it may still arrive: look at the page again in a minute before repeating it (a repeat costs a network fee at most).` +
+            `You cancelled “${step.label}” in Adena, or closed its window, and the chain does not show it. ${repeatAdvice(step.check, "cancelled")}` +
               (before.length ? ` What went through before stays on chain: ${quote(before)}.` : ""),
           );
           return "failed";
@@ -224,6 +245,7 @@ export function useRunner() {
         setError("Unable to read the chain just now. Nothing was sent; try again.");
         return "failed";
       }
+      if (!mounted.current) return "left";
       if (typeof plan === "string") {
         setSteps([]);
         setError(`${plan} Nothing was sent. The page now shows the current state.`);
@@ -242,7 +264,7 @@ export function useRunner() {
     }
   }
 
-  return { steps, busy, message, error, setMessage, run };
+  return { steps, busy, message, error, setMessage: setMessageNow, run };
 }
 
 export type Runner = ReturnType<typeof useRunner>;
@@ -311,9 +333,7 @@ export function PendingNotices() {
               Do not approve it again: wait a minute, then check.
             </p>
             {p.tries > 0 && (
-              <p className="small">
-                Still not there. If it does not appear within a few minutes, it was most likely not included; repeating it then costs at most a network fee.
-              </p>
+              <p className="small">Still not there. {repeatAdvice(p.check, "missing")}</p>
             )}
             <div className="confirm-actions">
               <button type="button" className="btn btn-quiet" disabled={checking} onClick={() => void check(p)}>
@@ -407,6 +427,7 @@ async function loadView(shown: Plan, payer: string): Promise<ChainView> {
   ]);
   const active = history.list.filter((m) => isActive(m, now));
   return {
+    payer,
     now,
     plan,
     payee,
@@ -451,14 +472,15 @@ function oneApproval(): boolean {
 // ------------------------------------------------------------------ subscribe
 
 export function SubscribePanel({ plan }: { plan: Plan }) {
-  return <WalletGate>{(address) => <SubscribeFor plan={plan} payer={address} />}</WalletGate>;
+  // keyed on the account: nothing read or done for one account is ever shown for another
+  return <WalletGate>{(address) => <SubscribeFor key={address} plan={plan} payer={address} />}</WalletGate>;
 }
 
 function SubscribeFor({ plan: shown, payer }: { plan: Plan; payer: string }) {
   const [tick, setTick] = useState(0);
   const pending = usePending(payer);
   // a pending step that the chain now shows (or that was given up) changes what can be done: read again
-  const [view, reload] = useAsync(() => loadView(shown, payer), [shown.id, payer, tick, pending ? 1 : 0]);
+  const [view, reload] = useAsync(() => loadView(shown, payer), [shown.id, payer], [tick, pending ? 1 : 0]);
   const r = useRunner();
   const [done, setDone] = useState(false);
   const refresh = () => {
@@ -485,16 +507,12 @@ function SubscribeFor({ plan: shown, payer }: { plan: Plan; payer: string }) {
       const end = shownState.end; // the date shown is the date signed
       const session = () => buildCreateSession({ creator: payer, collectorKey: key.collectorKey, plan: p, expiresAt: end });
       const sub = () => buildSubscribe({ payer, planId: p.id, sessionAddr: key.collectorAddr, expiresAt: end });
-      const permissionCheck: PendingCheck = { kind: "permission", key: key.collectorAddr, period: p.period.toString(), cap: capFor(p).toString() };
+      const permissionCheck: PendingCheck = { kind: "permission", key: key.collectorAddr, period: p.period.toString(), cap: capFor(p).toString(), end: end.toString() };
       const mandateCheck: PendingCheck = { kind: "mandate", key: key.collectorAddr, planId: p.id.toString() };
-      // right before the second approval: the plan, the collector key and the key's mandate are still as they were
+      // right before the second approval: the plan, the collector key, the permission just given and the wallet's mandates are still as they were
       const stillSame = async () => {
         invalidate();
-        const again = await loadView(plan, payer);
-        if (again.plan.amount !== p.amount || again.plan.period !== p.period) return "The plan’s price or period changed.";
-        if (again.payee?.collectorKey !== key.collectorKey || again.payee?.collectorAddr !== key.collectorAddr) return "The creator’s collector key changed.";
-        if (again.byKey && isActive(again.byKey, again.now)) return "A mandate now uses this permission.";
-        return null;
+        return termsCheck(await loadView(plan, payer), { amount: p.amount, period: p.period, collectorKey: key.collectorKey, collectorAddr: key.collectorAddr, end });
       };
       if (state.resume) return [{ label: "Record the terms in Mandate", messages: () => [sub()], gas: gasFor("call", gp), check: mandateCheck }];
       if (oneApproval())
@@ -721,11 +739,15 @@ export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: M
       const id = m.id.toString();
       const revoke = c.revoke ? () => [buildRevokeSession({ creator: payer, pub33: fromBase64(c.revoke!.pubKey) }) as Msg] : null;
       const cancel = c.cancel ? () => [buildCancel({ payer, sessionAddr: key }) as Msg] : null;
-      // right before the cancel: the key's active mandate is still the one shown
+      // right before the cancel (the permission is removed by then): the key's active mandate is still the one shown
       const stillThisOne = async () => {
         invalidate();
-        const again = stopCheck(m, await freshKey(payer, key), "stop");
-        return again.kind === "changed" ? again.reason : null;
+        const fresh = await freshKey(payer, key);
+        const again = stopCheck(m, fresh, "stop");
+        if (again.kind !== "changed") return null;
+        // stopCheck's "so it was left in place" is untrue here: the step before removed the permission
+        const other = fresh.byKey && isActive(fresh.byKey, fresh.now) && fresh.byKey.id !== m.id ? fresh.byKey : null;
+        return other ? `Another of your mandates (plan #${other.planId}) now uses this collector key.` : again.reason;
       };
       if (revoke && cancel && oneApproval())
         return [
@@ -747,7 +769,7 @@ export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: M
   return (
     <div className="stop">
       <RunnerStatus r={r} />
-      {st.kind === "ready" && tidy && session && <PermissionAllows s={session} />}
+      {st.kind === "ready" && tidy && session && <PermissionAllows s={session} now={now} />}
       {st.kind === "ready" &&
         (!confirming ? (
           <button type="button" className="btn btn-quiet" onClick={() => setConfirming(true)} disabled={busy}>
@@ -776,14 +798,8 @@ export function StopControls({ m, all, payer, now, sessions, onChanged }: { m: M
 }
 
 /** What a permission for Mandate without an active mandate still allows, in plain words. */
-function PermissionAllows({ s }: { s: SessionEntry }) {
-  return (
-    <p className="small">
-      This permission is still on chain{s.expiresAt > 0n ? ` until ${date(s.expiresAt)}` : ""}. No payment can go through without an active mandate, but
-      whoever holds its key (a creator’s collector) can still use it to call Mandate for this wallet and spend up to {gnot(s.spendLimit)} GNOT every{" "}
-      {period(s.spendPeriod)} of yours on the network fees of those calls. Remove it unless you plan to subscribe again soon.
-    </p>
-  );
+function PermissionAllows({ s, now }: { s: SessionEntry; now: bigint }) {
+  return <p className="small">{permissionAllows(s, now)}</p>;
 }
 
 /**
@@ -791,7 +807,7 @@ function PermissionAllows({ s }: { s: SessionEntry }) {
  * the creator has replaced, a subscription started and not finished, or a
  * mandate older than the history shown): what it allows, and a way to remove it.
  */
-export function LoosePermission({ s, payer, onChanged }: { s: SessionEntry; payer: string; onChanged: () => void }) {
+export function LoosePermission({ s, payer, now, onChanged }: { s: SessionEntry; payer: string; now: bigint; onChanged: () => void }) {
   const w = useWallet();
   const r = useRunner();
   const pending = usePending(payer);
@@ -813,7 +829,7 @@ export function LoosePermission({ s, payer, onChanged }: { s: SessionEntry; paye
   }
   return (
     <div className="stop">
-      <PermissionAllows s={s} />
+      <PermissionAllows s={s} now={now} />
       <RunnerStatus r={r} />
       {w.address === payer ? (
         <button type="button" className="btn btn-quiet" onClick={() => void remove()} disabled={r.busy || pending !== null || !s.pubKey}>

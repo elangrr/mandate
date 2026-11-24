@@ -55,6 +55,40 @@ test("publish page without Adena: says what is needed", async ({ page }) => {
   await shots(page, "publish-no-wallet");
 });
 
+test("publish page while the realm waits for approval: the calm waiting state, nothing to sign", async ({ page }) => {
+  const { calls } = await installStandin(page, c, stranger);
+  await page.route(process.env.MD_RPC!, async (route) => {
+    const body = route.request().postDataJSON();
+    if (body?.method === "abci_query" && body.params?.path === "vm/qpkgmeta_json") {
+      const data = Buffer.from(JSON.stringify({ path: "x", status: "inert", reason: "waiting for a package approver to enable it", pending: true })).toString("base64");
+      return route.fulfill({ json: { jsonrpc: "2.0", id: body.id, result: { response: { ResponseBase: { Data: data, Error: null, Log: "" } } } } });
+    }
+    return route.continue();
+  });
+  await page.goto("./#/publish");
+  await expect(page.getByRole("heading", { name: "Deployed, waiting for the network’s approval" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect wallet to publish" })).toHaveCount(0);
+  // connected from the header: still the waiting state, never a read error
+  await page.getByRole("button", { name: "Connect wallet" }).click();
+  await expect(page.getByRole("heading", { name: "Deployed, waiting for the network’s approval" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Publish a plan" })).toHaveCount(0);
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await shots(page, "publish-waiting");
+  expect(calls).toHaveLength(0);
+});
+
+test("a step from elsewhere not on chain yet (subscribing) is not shown as either panel's own step", async ({ page }) => {
+  await installStandin(page, c, stranger);
+  await page.addInitScript((payer) => {
+    const p = { payer, label: "Record the terms in Mandate (approval 2 of 2)", hash: "x", tries: 0, check: { kind: "mandate", key: payer, planId: "999" } };
+    sessionStorage.setItem("mandate.pending.v1", JSON.stringify({ [payer]: p }));
+  }, stranger.address);
+  await openPublish(page);
+  await expect(page.locator(".pending")).toContainText("Record the terms in Mandate (approval 2 of 2)");
+  await expect(page.getByRole("button", { name: "Waiting for the step at the top of the page…" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Waiting for this step to reach the chain…" })).toHaveCount(0);
+});
+
 test("a collector key is checked before any popup: not a key, the creator's own key, an account", async ({ page }) => {
   const { calls } = await installStandin(page, c, stranger);
   await openPublish(page);
@@ -163,6 +197,9 @@ test("popup cancelled: the page looks on chain, then says nothing was published"
   await page.getByLabel("Price per period, in GNOT").fill("1");
   await page.getByRole("button", { name: "Publish plan" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "You cancelled “Publish the plan” in Adena, or closed its window" })).toBeVisible({ timeout: 20_000 });
+  // a plan is not refused when repeated: the page does not say a repeat costs a fee at most
+  await expect(page.getByRole("alert")).toContainText("publishing again makes a second plan, which can never be removed, and pays the storage deposit again");
+  await expect(page.getByRole("alert")).not.toContainText("network fee at most");
   expect(await totals(c)).toBe(before);
 });
 

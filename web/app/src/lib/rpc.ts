@@ -130,14 +130,25 @@ export async function packageStatus(): Promise<PackageStatus> {
   return parsePackageStatus(await abciQuery("vm/qpkgmeta_json", config.realmPath));
 }
 
+/**
+ * The error for a failed realm query. "Not live" only when the chain says the
+ * realm's own package is not there: gno v1.8.0 answers a query for a missing
+ * (or parked) package with InvalidPkgPathError, logged as
+ * "package not found: <path>" (`gno.land/pkg/sdk/vm/keeper.go:2005`). Every
+ * other error, whatever its words, is shown as the chain gave it.
+ */
+export function evalError(r: AbciResult): ReadError {
+  const err = r.error ?? "";
+  const missing = `package not found: ${config.realmPath}`;
+  if (/(^|[/.])InvalidPkgPathError$/.test(err) && r.log.split("\n").some((line) => line.trimEnd().endsWith(missing))) {
+    return new ReadError("not-live", "Mandate is not live on the network yet.");
+  }
+  return new ReadError("chain", err);
+}
+
 async function evalJson(expr: string): Promise<string> {
   const r = await abciQuery("vm/qeval_json", `${config.realmPath}.${expr}`);
-  if (r.error) {
-    if (/InvalidPkgPath|package not found|not found|inert/i.test(r.error + r.log)) {
-      throw new ReadError("not-live", "Mandate is not live on the network yet.");
-    }
-    throw new ReadError("chain", r.error);
-  }
+  if (r.error) throw evalError(r);
   return r.data;
 }
 

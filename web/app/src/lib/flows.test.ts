@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Mandate, Payee, Plan } from "./amino";
-import { FIRST_DEPOSIT_UGNOT, LATER_DEPOSIT_UGNOT, permissionFits, removeCheck, stopCheck, stopState, subscribeState, type ChainView } from "./flows";
+import { FIRST_DEPOSIT_UGNOT, LATER_DEPOSIT_UGNOT, permissionAllows, permissionFits, removeCheck, stopCheck, stopState, subscribeState, termsCheck, type ChainView } from "./flows";
 import type { SessionEntry } from "./rpc";
 import { allowPath, defaultEnd } from "./tx";
 
@@ -30,7 +30,7 @@ function session(o: Partial<SessionEntry> = {}): SessionEntry {
 
 function view(o: Partial<ChainView> = {}): ChainView {
   return {
-    now: NOW, plan, payee, keyProblem: null, collectorIsAccount: false, byKey: null, hasForPlan: false, planMandate: null, activeCount: 0, hasHistory: false,
+    payer: ME, now: NOW, plan, payee, keyProblem: null, collectorIsAccount: false, byKey: null, hasForPlan: false, planMandate: null, activeCount: 0, hasHistory: false,
     sessions: [], paidThrough: 0n, balance: 10_000_000n, gasPrice: { gas: 1000n, amount: 1n }, ...o,
   };
 }
@@ -51,6 +51,16 @@ describe("subscribeState", () => {
     expect(s.fees).toBe(7_500n + 25_000n);
     expect(s.paidThrough).toBe(0n);
     expect(s.lowBalance).toBe(false);
+  });
+
+  it("a creator cannot subscribe to their own plan: blocked before anything else, so no permission is ever given for it", () => {
+    for (const o of [{}, { sessions: [session({ expiresAt: NOW + 200n * DAY })] }, { payee: null }, { collectorIsAccount: true }, { sessions: others(16) }] as Partial<ChainView>[]) {
+      const s = subscribeState(view({ payer: plan.payee, ...o }));
+      expect(s.kind).toBe("blocked");
+      expect(s.kind === "blocked" && s.title).toBe("This is your own plan");
+      expect(s.kind === "blocked" && s.reason).toMatch(/nothing to sign here/);
+    }
+    expect(subscribeState(view({ payer: ME })).kind).toBe("ready");
   });
 
   it("blocks without a collector key, with an unusable key, and when the key is an account", () => {
@@ -124,6 +134,7 @@ describe("subscribeState", () => {
       session({ allowPaths: [allowPath(), "vm/exec:gno.land/r/other"] }),
       session({ allowPaths: ["vm/exec:gno.land/r/other"] }),
       session({ expiresAt: NOW + 3600n }),
+      session({ expiresAt: NOW - 1n }),
       session({ expiresAt: NOW + 400n * DAY }),
     ]) {
       expect(subscribeState(view({ sessions: [bad] })).kind).toBe("fix-permission");
@@ -167,6 +178,58 @@ describe("permissionFits", () => {
   it("accepts the exact terms, including a permission without an end", () => {
     expect(permissionFits(session(), plan, NOW)).toBeNull();
     expect(permissionFits(session({ expiresAt: 0n }), plan, NOW)).toBeNull();
+  });
+  it("an expired permission is said to have expired, not to end soon", () => {
+    expect(permissionFits(session({ expiresAt: NOW }), plan, NOW)).toBe("it has expired");
+    expect(permissionFits(session({ expiresAt: NOW - DAY }), plan, NOW)).toBe("it has expired");
+    expect(permissionFits(session({ expiresAt: NOW + 1n }), plan, NOW)).toBe("it ends within a day");
+  });
+});
+
+describe("permissionAllows (a permission without an active mandate)", () => {
+  it("a live one: whoever holds the key can still spend up to the cap on fees", () => {
+    const t = permissionAllows(session(), NOW);
+    expect(t).toMatch(/^This permission is still on chain until /);
+    expect(t).toMatch(/spend up to 1\.1 GNOT every 30 days of yours on the network fees/);
+    expect(permissionAllows(session({ expiresAt: 0n }), NOW)).toMatch(/^This permission is still on chain\. No payment/);
+  });
+  it("an expired one: cannot be used, only takes one of the wallet's 16 places until removed", () => {
+    for (const end of [NOW, NOW - 30n * DAY]) {
+      const t = permissionAllows(session({ expiresAt: end }), NOW);
+      expect(t).toMatch(/^This permission expired on .+: nobody can use it any more\./);
+      expect(t).toMatch(/takes one of the 16 permissions this wallet can hold until it is removed/);
+      expect(t).not.toMatch(/spend/);
+    }
+  });
+});
+
+describe("termsCheck (right before approval 2 of 2)", () => {
+  const end = NOW + 365n * DAY;
+  const signed = { amount: plan.amount, period: plan.period, collectorKey: payee.collectorKey, collectorAddr: KEY, end };
+  const given = session({ expiresAt: end });
+  it("goes on when the permission just given is there with the end date signed", () => {
+    expect(termsCheck(view({ sessions: [given] }), signed)).toBeNull();
+  });
+  it("stops when the plan or the collector key changed", () => {
+    expect(termsCheck(view({ sessions: [given], plan: { ...plan, amount: 2_000_000n } }), signed)).toMatch(/price or period/);
+    expect(termsCheck(view({ sessions: [given], payee: { ...payee, collectorAddr: OTHER_KEY } }), signed)).toMatch(/collector key changed/);
+  });
+  it("stops when a mandate now uses the key, or one for this plan is recorded", () => {
+    expect(termsCheck(view({ sessions: [given], byKey: mandate({ planId: plan.id }) }), signed)).toMatch(/A mandate now uses this permission/);
+    expect(termsCheck(view({ sessions: [given], hasForPlan: true }), signed)).toMatch(/A mandate for this plan is now recorded/);
+    // an old, cancelled mandate on the key does not count
+    expect(termsCheck(view({ sessions: [given], byKey: cancelled() }), signed)).toBeNull();
+  });
+  it("stops when the permission is gone, expired, or has another end date or other terms (another tab)", () => {
+    expect(termsCheck(view({ sessions: [] }), signed)).toBe("Your permission for the creator’s collector key is gone.");
+    // expired is not gone: it is still listed on chain until removed
+    expect(termsCheck(view({ sessions: [given], now: end }), signed)).toBe("Your permission for the creator’s collector key has expired.");
+    expect(termsCheck(view({ sessions: [session({ expiresAt: end - DAY })] }), signed)).toMatch(/no longer has the terms you signed/);
+    expect(termsCheck(view({ sessions: [session({ expiresAt: end, spendLimit: 5_000_000n })] }), signed)).toMatch(/no longer has the terms you signed/);
+  });
+  it("stops when the wallet now holds 16 active mandates; an unknown count does not stop it", () => {
+    expect(termsCheck(view({ sessions: [given], activeCount: 16 }), signed)).toMatch(/16 active mandates/);
+    expect(termsCheck(view({ sessions: [given], activeCount: null }), signed)).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { capOf, feeEstimate, keyState, readPlanForm } from "./creatorView";
+import { capOf, feeEstimate, keyState, readPlanForm, waitLabel } from "./creatorView";
 
 describe("readPlanForm", () => {
   it("a valid form gives the exact offer", () => {
@@ -33,5 +33,24 @@ describe("cap, fee and key state", () => {
     expect(keyState({ collectorKey: "gpub1x", collectorFunded: false }, false)).toMatchObject({ kind: "ready", label: "Ready" });
     expect(keyState({ collectorKey: "gpub1x", collectorFunded: true }, false)).toMatchObject({ kind: "blocked", label: "Blocked" });
     expect(keyState({ collectorKey: "gpub1x", collectorFunded: false }, true).kind).toBe("blocked");
+  });
+});
+
+describe("waitLabel (a Publish panel's button while it cannot be used)", () => {
+  it("a pending step belongs to the panel of its kind, never by its label", () => {
+    expect(waitLabel("key", "collector-key", null)).toBe("Waiting for this step to reach the chain…");
+    expect(waitLabel("plan", "collector-key", null)).toBe("Waiting for the other step…");
+    expect(waitLabel("plan", "plan", null)).toBe("Waiting for this step to reach the chain…");
+    expect(waitLabel("key", "plan", null)).toBe("Waiting for the other step…");
+  });
+  it("a pending subscribe or stop step is neither panel's: both point to the warning at the top", () => {
+    for (const k of ["permission", "mandate", "permission-gone", "cancelled", "gone-and-cancelled"] as const) {
+      expect(waitLabel("key", k, null)).toBe("Waiting for the step at the top of the page…");
+      expect(waitLabel("plan", k, "plan")).toBe("Waiting for the step at the top of the page…");
+    }
+  });
+  it("without a pending step: the panel whose approval is running", () => {
+    expect(waitLabel("key", null, "key")).toBe("Waiting for this step to reach the chain…");
+    expect(waitLabel("plan", null, "key")).toBe("Waiting for the other step…");
   });
 });

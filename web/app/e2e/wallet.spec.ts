@@ -9,6 +9,7 @@ import { chainFromEnv, installStandin, runCollector, sendCoins, sendDirect, sess
 const c = chainFromEnv();
 const supporter = { key: "supporter", address: c.keys.supporter.addr as string };
 const stranger = { key: "stranger", address: c.keys.stranger.addr as string };
+const fluxen = { key: "fluxen", address: c.keys.fluxen.addr as string };
 
 test.describe.configure({ mode: "serial" });
 
@@ -78,6 +79,53 @@ test("without Adena: the plan page says what is needed", async ({ page }) => {
   await expect(page.getByText(/Subscribing here needs the/)).toBeVisible();
   await expect(page.getByRole("link", { name: "Adena wallet" })).toHaveAttribute("href", "https://adena.app");
   await shots(page, "wallet-missing");
+});
+
+test("a creator opening their own plan is told so, and nothing can be signed", async ({ page }) => {
+  const { calls } = await installStandin(page, c, fluxen);
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await expect(page.getByText(/This is your own plan\./)).toBeVisible();
+  await expect(page.getByText(/Mandate does not let a creator subscribe to their own plan, so there is nothing to sign here/)).toBeVisible();
+  await expect(page.locator(".allow .btn-primary")).toHaveCount(0);
+  await expect(page.getByText("Ready to sign")).toHaveCount(0);
+  expect(calls).toHaveLength(0);
+  expect(await sessionKeys(c, fluxen.address)).not.toContain(c.keys.collector.addr);
+});
+
+test("leaving the page during approval 1: approval 2 never opens; the step already sent is still watched", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  const { calls } = await installStandin(page, c, {
+    ...supporter,
+    before: async (p) => {
+      if (isCreate(p)) await gate;
+    },
+  });
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  await expect(page.locator(".step-wallet")).toBeVisible();
+  // the person goes to another page while Adena still shows approval 1, then approves it
+  await page.evaluate(() => {
+    window.location.hash = "#/how";
+  });
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("How Mandate works");
+  release();
+  await expect.poll(() => sessionKeys(c, supporter.address), { timeout: 20_000 }).toContain(c.keys.collector.addr);
+  await page.waitForTimeout(5_000); // as long as the page would take to read it back and open approval 2
+  expect(calls).toHaveLength(1);
+  expect(calls[0].messages[0].type).toBe("/auth.m_create_session");
+  await expect(page.locator(".pending")).toHaveCount(0); // it reached the chain: nothing left to warn about
+  // back on the plan page: the half-finished subscription is offered to finish or undo; undo it for the next tests
+  await page.evaluate(() => {
+    window.location.hash = "#/plan/1";
+  });
+  await page.getByRole("button", { name: "Undo: remove the permission" }).click();
+  await expect(page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ })).toBeVisible({ timeout: 20_000 });
+  expect(await sessionKeys(c, supporter.address)).not.toContain(c.keys.collector.addr);
 });
 
 test("locked wallet: the header shows a clear alert", async ({ page }) => {
@@ -446,8 +494,12 @@ test("stop: the cancel is checked again right before it; a mandate that changed 
   await p2.getByRole("button", { name: "Connect wallet" }).first().click();
   await p2.getByRole("button", { name: "Stop this mandate" }).first().click();
   await p2.getByRole("group").getByRole("button", { name: "Stop this mandate" }).click();
-  await expect(p2.getByRole("alert").first()).toContainText("Another of your mandates (plan #2) now uses this permission");
-  await expect(p2.getByRole("alert").first()).toContainText("“Cancel the mandate in Mandate” was not sent");
+  // the permission was removed by then: never "left in place", never "stays on chain"
+  await expect(p2.getByRole("alert").first()).toContainText(
+    "Another of your mandates (plan #2) now uses this collector key. So “Cancel the mandate in Mandate” was not sent. The page now shows the current state.",
+  );
+  await expect(p2.getByRole("alert").first()).not.toContainText("left in place");
+  await expect(p2.getByRole("alert").first()).not.toContainText("stays on chain");
   await p2.close();
 });
 

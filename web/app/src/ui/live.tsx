@@ -4,6 +4,7 @@
 import { createContext, useContext, type ReactNode } from "react";
 import { read, type PackageStatus } from "../lib/rpc";
 import { useAsync, type Async } from "./hooks";
+import { Loading, NotLive, ReadFailed } from "./parts";
 
 type Live = Async<PackageStatus> & { reload: () => void };
 
@@ -18,4 +19,13 @@ export function useLive(): Live {
   const v = useContext(Ctx);
   if (!v) throw new Error("useLive outside LiveProvider");
   return v;
+}
+
+/** Runs `children` only once the realm is live; otherwise the calm waiting state. */
+export function WhenLive({ children }: { children: ReactNode }) {
+  const live = useLive();
+  if (live.status === "loading") return <Loading what="Mandate’s status" />;
+  if (live.status === "error") return <ReadFailed error={live.error} retry={live.reload} />;
+  if (live.value.status !== "live") return <NotLive status={live.value} />;
+  return <>{children}</>;
 }

@@ -45,6 +45,22 @@ test("plan page: price, counts, what you allow, supporters", async ({ page }) =>
   await expect(page.getByRole("link", { name: /open plan #1 on gnoweb/ })).toHaveAttribute("href", /:plan\/1$/);
 });
 
+test("all plans: a page past the last one says so and links back", async ({ page }) => {
+  await page.goto("./#/plans?page=2");
+  await expect(page.getByText("No plans on this page.")).toBeVisible();
+  await page.getByRole("link", { name: "Previous page" }).click();
+  await expect(page.locator(".plans-summary")).toContainText("Shown on page 1");
+  await expect(page.locator(".plan-list .plan-card")).toHaveCount(4);
+  await expect(page.getByText("No plans on this page.")).toHaveCount(0);
+});
+
+test("a plan that does not exist says so and links to all plans", async ({ page }) => {
+  await page.goto("./#/plan/99");
+  await expect(page.getByText("There is no plan #99.")).toBeVisible();
+  await page.locator(".empty").getByRole("link", { name: "All plans" }).click();
+  await expect(page.getByRole("heading", { level: 1 })).toHaveText("All plans");
+});
+
 test("a stranger's plan title is shown as text, never as HTML or a link", async ({ page }) => {
   await page.goto("./#/plan/4");
   const h1 = page.getByRole("heading", { level: 1 });

@@ -12,7 +12,8 @@ import { allowPath } from "./tx";
 
 /** How to see on chain that the step happened; plain data, so it can be stored. */
 export type PendingCheck =
-  | { kind: "permission"; key: string; period: string; cap: string }
+  /** `end`: the end date signed (unix seconds); absent in records stored by earlier builds, which then match on the rest */
+  | { kind: "permission"; key: string; period: string; cap: string; end?: string }
   | { kind: "mandate"; key: string; planId: string }
   | { kind: "permission-gone"; key: string }
   | { kind: "cancelled"; key: string; mandateId: string }
@@ -117,6 +118,24 @@ export function usePending(payer: string): Pending | null {
   return s[payer] ?? null;
 }
 
+/**
+ * What to do before repeating a step that the chain does not show, and what a
+ * repeat costs if the first one still arrives. Every step but a plan is
+ * refused by the chain or the realm when it is already done, or (publishing
+ * the same collector key again) a no-op with no extra storage deposit, so a
+ * repeat costs a network fee at most; a plan is not: each one is a new plan.
+ * `when`: "cancelled" (Adena said cancelled) or "missing" (sent, still not on chain).
+ */
+export function repeatAdvice(c: PendingCheck, when: "cancelled" | "missing"): string {
+  if (c.kind === "plan")
+    return when === "cancelled"
+      ? "If you closed the window after approving, it may still arrive: look at your creator page in a minute before publishing it again. If the first one arrives, publishing again makes a second plan, which can never be removed, and pays the storage deposit again."
+      : "If it does not appear within a few minutes, it was most likely not included. But if it still arrives, publishing again makes a second plan, which can never be removed, and pays the storage deposit again: look at your creator page first.";
+  return when === "cancelled"
+    ? "If you closed the window after approving, it may still arrive: look at the page again in a minute before repeating it (a repeat costs a network fee at most)."
+    : "If it does not appear within a few minutes, it was most likely not included; repeating it then costs at most a network fee.";
+}
+
 function alive(s: SessionEntry, now: bigint) {
   return s.expiresAt === 0n || s.expiresAt > now;
 }
@@ -137,7 +156,8 @@ export async function onChain(payer: string, c: PendingCheck): Promise<boolean> 
         s.allowPaths.length === 1 &&
         s.allowPaths[0] === allowPath() &&
         s.spendPeriod.toString() === c.period &&
-        s.spendLimit.toString() === c.cap
+        s.spendLimit.toString() === c.cap &&
+        (c.end === undefined || s.expiresAt.toString() === c.end)
       );
     }
     case "mandate": {

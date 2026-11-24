@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent } from "react";
 import { config, gnowebPage, rules } from "../config";
 import type { Mandate, Plan } from "../lib/amino";
 import { date, dateTime, gnot, isTestPeriod, period, plural, price, relative, shortAddr, thousands } from "../lib/format";
@@ -9,7 +9,7 @@ import { usePending } from "../lib/pending";
 import { allowPath } from "../lib/tx";
 import { FlowPicture } from "./FlowPicture";
 import { go, useAsync } from "./hooks";
-import { useLive } from "./live";
+import { WhenLive } from "./live";
 import {
   Addr,
   CapMeter,
@@ -20,7 +20,6 @@ import {
   Icon,
   Loading,
   MandatePeriods,
-  NotLive,
   ReadFailed,
   RhythmStrip,
   SlotGauge,
@@ -32,15 +31,6 @@ import { useWallet } from "./WalletContext";
 const PLAN_WALK_PAGES = 10; // the home page looks at the newest 200 plans
 const EXAMPLE_AMOUNT_UGNOT = 1_000_000n;
 const EXAMPLE_CAP_UGNOT = EXAMPLE_AMOUNT_UGNOT + rules.feeAllowanceUgnot;
-
-/** Runs `children` only once the realm is live; otherwise the calm waiting state. */
-function WhenLive({ children }: { children: ReactNode }) {
-  const live = useLive();
-  if (live.status === "loading") return <Loading what="Mandate’s status" />;
-  if (live.status === "error") return <ReadFailed error={live.error} retry={live.reload} />;
-  if (live.value.status !== "live") return <NotLive status={live.value} />;
-  return <>{children}</>;
-}
 
 function PlanCard({ p }: { p: Plan }) {
   const cap = p.amount + rules.feeAllowanceUgnot;
@@ -252,7 +242,13 @@ function PlansPage({ page }: { page: number }) {
   const [s, reload] = useAsync(() => read.plans(page), [page]);
   if (s.status === "loading") return <Loading what="the plans" />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
-  if (s.value.length === 0) return <Empty>No plans on this page.</Empty>;
+  if (s.value.length === 0)
+    return (
+      <>
+        <Empty>No plans on this page.</Empty>
+        <Pager base="#/plans" page={page} more={false} />
+      </>
+    );
   const withPayments = s.value.filter((p) => p.paidThisPeriod + p.paidLastPeriod > 0).length;
   const testPlans = s.value.filter((p) => isTestPeriod(p.period)).length;
   return (
@@ -304,7 +300,12 @@ function Pager({ base, page, more }: { base: string; page: number; more: boolean
 // ------------------------------------------------------------------ plan page
 
 export function PlanPage({ id }: { id: string }) {
-  if (!/^\d{1,19}$/.test(id) || id === "0") return <Empty>There is no plan with that number.</Empty>;
+  if (!/^\d{1,19}$/.test(id) || id === "0")
+    return (
+      <Empty>
+        There is no plan with that number. <a href="#/plans">All plans</a>
+      </Empty>
+    );
   return (
     <WhenLive>
       <PlanBody id={BigInt(id)} />
@@ -323,7 +324,12 @@ function PlanBody({ id }: { id: bigint }) {
   const [s, reload] = useAsync(() => loadPlan(id), [id]);
   if (s.status === "loading") return <Loading what={`plan #${id}`} />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
-  if (!s.value) return <Empty>There is no plan #{id.toString()}.</Empty>;
+  if (!s.value)
+    return (
+      <Empty>
+        There is no plan #{id.toString()}. <a href="#/plans">All plans</a>
+      </Empty>
+    );
   const { plan: p, counts, now } = s.value;
   const cap = p.amount + rules.feeAllowanceUgnot;
   const until = now + 365n * 86400n;
@@ -549,7 +555,8 @@ export function Mine({ address }: { address: string }) {
       <AddressForm key={a} value={a} label="Wallet address" submit="Show mandates" onAddress={(x) => go(`/mine?a=${x}`)} />
       {a && isAddress(a) && (
         <WhenLive>
-          <MandateList payer={a} />
+          {/* keyed on the address: another address's cards and their controls are never shown for this one */}
+          <MandateList key={a} payer={a} />
         </WhenLive>
       )}
     </>
@@ -595,7 +602,7 @@ export function mandateState(m: Mandate, session: Session | null, now: bigint): 
 
 function MandateList({ payer }: { payer: string }) {
   const pending = usePending(payer);
-  const [s, reload] = useAsync(() => loadMandates(payer), [payer, pending ? 1 : 0]);
+  const [s, reload] = useAsync(() => loadMandates(payer), [payer], [pending ? 1 : 0]);
   if (s.status === "loading") return <Loading what="the mandates" />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
   const { rows, now, sessions, historyComplete } = s.value;
@@ -622,7 +629,7 @@ function MandateList({ payer }: { payer: string }) {
               <span className="pill pill-warn">No mandate</span>
             </div>
             <p className="mandate-price">At most {price(x.spendLimit, x.spendPeriod)}</p>
-            <LoosePermission s={x} payer={payer} onChanged={reload} />
+            <LoosePermission s={x} payer={payer} now={now} onChanged={reload} />
           </li>
         ))}
       </ul>

@@ -53,7 +53,7 @@ export default defineConfig(({ mode }) => ({
   test: {
     environment: "jsdom",
     include: ["src/**/*.test.ts", "src/**/*.test.tsx"],
-    // Let src/styles.test.ts read styles.css as text (?raw) for the sizing lint.
+    // Process CSS imports in tests as the build does.
     css: true,
   },
 }));

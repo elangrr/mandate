@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-/** Current hash route, e.g. "/quest/3" for "#/quest/3". */
+/** Current hash route, e.g. "/plan/3" for "#/plan/3". */
 function getRoute(): string {
   const h = window.location.hash.replace(/^#/, "");
   return h === "" ? "/" : h;
@@ -23,22 +23,29 @@ export function go(route: string): void {
 
 export type Async<T> = { status: "loading" } | { status: "error"; error: Error } | { status: "ready"; value: T };
 
-/** Runs load() when deps change; reload() runs it again (e.g. after a transaction). */
-export function useAsync<T>(load: () => Promise<T>, deps: unknown[]): [Async<T>, () => void] {
-  const [state, setState] = useState<Async<T>>({ status: "loading" });
+const sameDeps = (a: unknown[], b: unknown[]) => a.length === b.length && a.every((x, i) => Object.is(x, b[i]));
+
+/**
+ * Runs load() when deps or refresh change; reload() runs it again (e.g. after a transaction).
+ * New deps (another address, another page) show "loading" at once, never the value read for the old ones.
+ * A reload or a change in `refresh` reads again in place: the value shown stays until the new one arrives.
+ */
+export function useAsync<T>(load: () => Promise<T>, deps: unknown[], refresh: unknown[] = []): [Async<T>, () => void] {
+  const [state, setState] = useState<{ deps: unknown[]; value: Async<T> }>({ deps, value: { status: "loading" } });
   const [tick, setTick] = useState(0);
   const seq = useRef(0);
   useEffect(() => {
     const my = ++seq.current;
-    setState((s) => (s.status === "ready" ? s : { status: "loading" }));
+    setState((s) => (sameDeps(s.deps, deps) && s.value.status === "ready" ? s : { deps, value: { status: "loading" } }));
     load().then(
-      (value) => my === seq.current && setState({ status: "ready", value }),
-      (error: Error) => my === seq.current && setState({ status: "error", error }),
+      (value) => my === seq.current && setState({ deps, value: { status: "ready", value } }),
+      (error: Error) => my === seq.current && setState({ deps, value: { status: "error", error } }),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [...deps, tick]);
+  }, [...deps, ...refresh, tick]);
   const reload = useCallback(() => setTick((t) => t + 1), []);
-  return [state, reload];
+  // in the render right after the deps change (before the effect runs), the old value is not shown either
+  return [sameDeps(state.deps, deps) ? state.value : { status: "loading" }, reload];
 }
 
 export type Theme = "light" | "dark" | "system";

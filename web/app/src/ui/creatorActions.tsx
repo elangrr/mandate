@@ -26,8 +26,9 @@ import { usePending } from "../lib/pending";
 import { invalidate, read } from "../lib/rpc";
 import { gasFor } from "../lib/tx";
 import { RunnerStatus, useRunner, WalletGate } from "./actions";
-import { capOf, feeEstimate, keyState, readPlanForm, type PlanForm } from "./creatorView";
+import { capOf, feeEstimate, keyState, readPlanForm, waitLabel, type PlanForm } from "./creatorView";
 import { useAsync } from "./hooks";
+import { WhenLive } from "./live";
 import { CapMeter, Icon, Loading, ReadFailed } from "./parts";
 import { useWallet } from "./WalletContext";
 
@@ -67,7 +68,10 @@ export function Publish() {
           signed with your own wallet in Adena.
         </p>
       </div>
-      <WalletGate doing="publishing">{(address) => <CreatorConsole creator={address} />}</WalletGate>
+      <WhenLive>
+        {/* keyed on the account: nothing read or done for one account is ever shown for another */}
+        <WalletGate doing="publishing">{(address) => <CreatorConsole key={address} creator={address} />}</WalletGate>
+      </WhenLive>
       <p className="small muted other-ways">
         Running the collector, which takes each payment when it is due: <a href={guide}>the collector guide</a>.
       </p>
@@ -80,7 +84,7 @@ function CreatorConsole({ creator }: { creator: string }) {
   const [tick, setTick] = useState(0);
   // one approval at a time across both panels: they share the wallet's one pending record
   const [active, setActive] = useState<null | "key" | "plan">(null);
-  const [s, reload] = useAsync(() => loadCreatorView(creator), [creator, tick, pending ? 1 : 0]);
+  const [s, reload] = useAsync(() => loadCreatorView(creator), [creator], [tick, pending ? 1 : 0]);
   const refresh = () => {
     invalidate();
     setTick((t) => t + 1);
@@ -88,18 +92,13 @@ function CreatorConsole({ creator }: { creator: string }) {
   if (s.status === "loading") return <Loading what="your creator record" />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
   const v = s.value;
-  /** what a panel's button says while it cannot be used: its own step on its way, or the other panel's */
-  const waitLabel = (panel: "key" | "plan") => {
-    const own = pending ? (/collector key/.test(pending.label) ? "key" : "plan") === panel : active === panel;
-    return own ? "Waiting for this step to reach the chain…" : "Waiting for the other step…";
-  };
   return (
     <div className="publish-grid">
       <KeyPanel
         creator={creator}
         view={v}
         busyElsewhere={pending !== null || active === "plan"}
-        waitLabel={waitLabel("key")}
+        waitLabel={waitLabel("key", pending?.check.kind ?? null, active)}
         onBusy={(b) => setActive(b ? "key" : null)}
         onChanged={refresh}
       />
@@ -107,7 +106,7 @@ function CreatorConsole({ creator }: { creator: string }) {
         creator={creator}
         view={v}
         busyElsewhere={pending !== null || active === "key"}
-        waitLabel={waitLabel("plan")}
+        waitLabel={waitLabel("plan", pending?.check.kind ?? null, active)}
         onBusy={(b) => setActive(b ? "plan" : null)}
         onChanged={refresh}
       />

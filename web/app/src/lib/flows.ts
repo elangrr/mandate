@@ -9,7 +9,7 @@
 
 import { rules } from "../config";
 import type { Mandate, Payee, Plan } from "./amino";
-import { gnot } from "./format";
+import { date, gnot, period } from "./format";
 import type { SessionEntry } from "./rpc";
 import { allowPath, capFor, defaultEnd, GAS, minFee } from "./tx";
 
@@ -21,6 +21,8 @@ export const LATER_DEPOSIT_UGNOT = 190_000n;
 const DAY = 86_400n;
 
 export interface ChainView {
+  /** the connected wallet: the supporter-to-be */
+  payer: string;
   now: bigint;
   plan: Plan;
   payee: Payee | null;
@@ -77,6 +79,7 @@ export function permissionFits(s: SessionEntry, plan: Plan, now: bigint): string
   if (s.allowPaths.length !== 1 || s.allowPaths[0] !== allowPath()) return "it is not limited to Mandate alone";
   if (s.spendPeriod !== plan.period) return `its period (${s.spendPeriod.toString()} s) is not the plan's`;
   if (s.spendLimit !== capFor(plan)) return `its cap (${gnot(s.spendLimit)} GNOT) is not the plan's ${gnot(capFor(plan))} GNOT`;
+  if (s.expiresAt !== 0n && s.expiresAt <= now) return "it has expired";
   if (s.expiresAt !== 0n && s.expiresAt <= now + DAY) return "it ends within a day";
   if (s.expiresAt > now + BigInt(rules.maxTermDays) * DAY) return "it ends later than a mandate may";
   return null;
@@ -84,6 +87,13 @@ export function permissionFits(s: SessionEntry, plan: Plan, now: bigint): string
 
 export function subscribeState(v: ChainView): SubscribeState {
   const { plan, payee, now } = v;
+  // the realm refuses it ("you cannot subscribe to your own plan"): never let the first approval go out
+  if (v.payer === plan.payee)
+    return {
+      kind: "blocked",
+      title: "This is your own plan",
+      reason: "Mandate does not let a creator subscribe to their own plan, so there is nothing to sign here. Supporters subscribe from their own wallets.",
+    };
   if (!payee?.collectorKey || !payee.collectorAddr)
     return { kind: "blocked", title: "Nobody can subscribe yet", reason: "The creator has not published a collector key." };
   if (v.keyProblem)
@@ -167,6 +177,41 @@ export function subscribeState(v: ChainView): SubscribeState {
     fees,
     lowBalance: v.balance < deposit + fees + firstPayment,
   };
+}
+
+/** What the permission was signed with in approval 1 of 2, to compare with the chain before approval 2. */
+export interface SignedPermission {
+  amount: bigint;
+  period: bigint;
+  collectorKey: string;
+  collectorAddr: string;
+  end: bigint;
+}
+
+/**
+ * The last check before recording the terms (approval 2 of 2), from a fresh
+ * read: the plan, the collector key, the permission just given (still there,
+ * with the end date signed) and the wallet's mandates are as they were. A
+ * sentence when something changed (then nothing is sent).
+ */
+export function termsCheck(v: ChainView, signed: SignedPermission): string | null {
+  if (v.plan.amount !== signed.amount || v.plan.period !== signed.period) return "The plan’s price or period changed.";
+  if (v.payee?.collectorKey !== signed.collectorKey || v.payee?.collectorAddr !== signed.collectorAddr) return "The creator’s collector key changed.";
+  if (v.byKey && isActive(v.byKey, v.now)) return "A mandate now uses this permission.";
+  if (v.hasForPlan) return "A mandate for this plan is now recorded.";
+  const s = v.sessions.find((x) => x.address === signed.collectorAddr);
+  if (!s) return "Your permission for the creator’s collector key is gone.";
+  if (!alive(s, v.now)) return "Your permission for the creator’s collector key has expired.";
+  if (s.expiresAt !== signed.end || permissionFits(s, v.plan, v.now)) return "Your permission for the creator’s collector key no longer has the terms you signed.";
+  if (v.activeCount !== null && v.activeCount >= rules.maxActive) return `You now hold ${rules.maxActive} active mandates, the most a wallet can.`;
+  return null;
+}
+
+/** What a permission for Mandate without an active mandate still allows, in plain words (`now`: the chain's time). */
+export function permissionAllows(s: SessionEntry, now: bigint): string {
+  if (s.expiresAt !== 0n && s.expiresAt <= now)
+    return `This permission expired on ${date(s.expiresAt)}: nobody can use it any more. It is still listed on chain, though, and takes one of the ${rules.maxActive} permissions this wallet can hold until it is removed.`;
+  return `This permission is still on chain${s.expiresAt > 0n ? ` until ${date(s.expiresAt)}` : ""}. No payment can go through without an active mandate, but whoever holds its key (a creator’s collector) can still use it to call Mandate for this wallet and spend up to ${gnot(s.spendLimit)} GNOT every ${period(s.spendPeriod)} of yours on the network fees of those calls. Remove it unless you plan to subscribe again soon.`;
 }
 
 /** What the page shows for a mandate's stop controls (from the page's own reads). */
