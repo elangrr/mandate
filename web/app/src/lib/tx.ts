@@ -39,7 +39,7 @@ export interface MsgRevokeSession {
 
 export interface MsgCall {
   type: "/vm.m_call";
-  value: { caller: string; send: string; pkg_path: string; func: "Subscribe" | "Cancel"; args: string[] };
+  value: { caller: string; send: string; pkg_path: string; func: "Subscribe" | "Cancel" | "Offer" | "SetCollectorKey"; args: string[] };
 }
 
 export type Msg = MsgCreateSession | MsgRevokeSession | MsgCall;

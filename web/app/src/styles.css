@@ -2989,3 +2989,175 @@ a.mandate-title:hover {
 .loose {
   margin-block-start: var(--s6);
 }
+
+/* ------------------------------------------------------------------ creator: publish, collector guide (M2c) */
+
+.creator-cta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3) var(--s5);
+  margin-block: var(--s4) var(--s5);
+}
+.publish-grid {
+  display: grid;
+  gap: var(--s5);
+}
+.publish-card {
+  display: grid;
+  gap: var(--s4);
+}
+.publish-card > .collector-head h2 {
+  margin: 0;
+}
+.publish-rules {
+  margin: 0;
+  padding-inline-start: var(--s5);
+  display: grid;
+  gap: var(--s2);
+  color: var(--ink-2);
+  font-size: var(--t-sm);
+  max-width: var(--text);
+}
+.publish-rules strong {
+  color: var(--ink);
+}
+.publish-form {
+  display: grid;
+  gap: var(--s4);
+}
+.publish-form label,
+.publish-form legend {
+  font-weight: 600;
+  padding: 0;
+}
+.field {
+  display: grid;
+  gap: var(--s1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.field-row {
+  display: grid;
+  gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+}
+.field-hint {
+  margin: 0;
+  color: var(--ink-2);
+  font-size: var(--t-sm);
+}
+.field-hint .mono,
+.field-hint code {
+  overflow-wrap: anywhere;
+}
+.key-input {
+  min-height: 5.5rem;
+  padding-block: var(--s2);
+  resize: vertical;
+  overflow-wrap: anywhere;
+  font-size: 0.95rem;
+}
+.period-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 6rem), 1fr));
+  gap: var(--s2);
+}
+.publish-form,
+.publish-form > * {
+  min-width: 0;
+}
+select.input {
+  appearance: auto;
+}
+.plan-preview {
+  display: grid;
+  gap: var(--s3);
+  padding: var(--s4);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--r-panel);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.plan-preview-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--t-h3);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+.plan-preview-price {
+  margin: 0;
+  font-weight: 600;
+}
+.publish-confirm {
+  margin-block-start: 0;
+}
+.guide-steps {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 var(--s5);
+  display: grid;
+  gap: var(--s4);
+  counter-reset: guide;
+}
+.guide-steps > li {
+  counter-increment: guide;
+  min-width: 0;
+}
+.guide-steps > li > h2 {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  margin-block: 0 var(--s3);
+  font-size: var(--t-h3);
+}
+.guide-steps > li > h2::before {
+  content: counter(guide, decimal-leading-zero);
+  font-family: var(--font-mono);
+  font-size: var(--t-sm);
+  color: var(--accent);
+}
+.code-block {
+  margin: 0 0 var(--s3);
+  padding: var(--s3) var(--s4);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  box-shadow: var(--inset-shadow);
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.guide-msgs {
+  margin: 0;
+  display: grid;
+  gap: var(--s1);
+}
+.guide-msgs dt {
+  font-size: var(--t-sm);
+  margin-block-start: var(--s3);
+  overflow-wrap: anywhere;
+}
+.guide-msgs dd {
+  margin: 0;
+  color: var(--ink-2);
+}
+.guide-fix {
+  margin: 0;
+  padding-inline-start: var(--s5);
+  display: grid;
+  gap: var(--s1);
+}
+/* chain text (addresses, keys) inside notices and steps wraps on a phone */
+.notice,
+.notice p,
+.field-error,
+.step-label,
+.confirm-sentence {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

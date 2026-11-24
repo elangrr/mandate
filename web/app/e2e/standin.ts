@@ -232,3 +232,21 @@ export async function sendCoins(c: StandinChain, fromKey: string, to: string, am
   );
   if (!r.ok) throw new Error("send failed: " + r.out);
 }
+
+/** A new throwaway key in the test keybase (local chain only): its name, address and public key. Never funded here. */
+export async function newKey(c: StandinChain, name: string): Promise<{ name: string; addr: string; gpub: string }> {
+  const add = await gnokey(c, ["add", "-home", c.kb, "-insecure-password-stdin", "-nobackup", "-quiet", name], `${PW}\n${PW}\n`);
+  if (!add.ok) throw new Error("could not add a test key: " + add.out);
+  const list = await gnokey(c, ["list", "-home", c.kb]);
+  for (const line of list.out.split("\n")) {
+    const m = /^\d+\. (\S+) \(local\) - addr: (g1[a-z0-9]+) pub: (gpub1[a-z0-9]+),/.exec(line);
+    if (m && m[1] === name) return { name, addr: m[2], gpub: m[3] };
+  }
+  throw new Error("new test key not listed");
+}
+
+/** Mandate's totals (plans, mandates, payments, paid) as the realm reports them. */
+export async function totals(c: StandinChain & { realm: string }): Promise<string> {
+  const q = await gnokey(c, ["query", "vm/qeval", "-data", `${c.realm}.Totals()`, "-remote", c.rpc, "-home", c.kb]);
+  return q.out.split("data:")[1]?.trim() ?? "";
+}

@@ -152,5 +152,47 @@
   "gasWanted": 65000000,
   "gasFee": 97500,
   "commit": true
+ },
+ "publishPlan": {
+  "messages": [
+   {
+    "type": "/vm.m_call",
+    "value": {
+     "caller": "g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj",
+     "send": "",
+     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate",
+     "func": "Offer",
+     "args": [
+      "Support Fluxen's work",
+      "1000000",
+      "2592000"
+     ]
+    }
+   }
+  ],
+  "memo": "",
+  "gasWanted": 60000000,
+  "gasFee": 90000,
+  "commit": true
+ },
+ "publishCollectorKey": {
+  "messages": [
+   {
+    "type": "/vm.m_call",
+    "value": {
+     "caller": "g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj",
+     "send": "",
+     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate",
+     "func": "SetCollectorKey",
+     "args": [
+      "gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c"
+     ]
+    }
+   }
+  ],
+  "memo": "",
+  "gasWanted": 60000000,
+  "gasFee": 90000,
+  "commit": true
  }
 }

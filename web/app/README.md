@@ -10,6 +10,12 @@ Slice M2b, subscribe and stop with the Adena wallet:
 - Right before any popup the page reads the chain again (plan, collector key, permissions, MandateOf for the key) and sends nothing if what it showed has changed.
 - `#/plan/<id>?approval=one` puts the permission and the terms (or the removal and the cancel) in one approval. **Experimental**: it passes Adena v1.22.5's own code (`../adena-check`) but has not been tried with the real wallet yet. Without it, two approvals.
 
+Slice M2c, the creator's side:
+
+- `#/publish` (behind the wallet): publish or replace the collector key, after the page checks it is a secp256k1 public key, shows its address, and refuses the creator's own key or a key whose address is already an account; and publish a plan, with the realm's limits checked on the page (title one line of 1 to 80 characters without control or invisible formatting characters, price 0.1 to 1,000,000 GNOT, period 1 minute to 30 days), a preview with the cap, the storage deposit and the fee. Plans never change once published. The page never asks for, makes or handles a private key, password or seed phrase.
+- `#/collector?a=<address>`: the collector guide, with the exact `scripts/collect.sh` command for that creator and realm, a sample cron line, what the script's messages mean and what to do when the key is blocked.
+- Both requests use the same steps as subscribing: explicit gas, wait for the block, a fresh read before the popup, each step confirmed on chain, the pending step kept across a reload.
+
 ## Build
 
 ```sh

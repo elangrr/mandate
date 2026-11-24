@@ -173,6 +173,7 @@ const shots: [string, string][] = [
   ["creator", `./#/creator/${fluxen}`],
   ["how", "./#/how"],
   ["not-found", "./#/does-not-exist"],
+  ["collector", `./#/collector?a=${fluxen}`],
 ];
 for (const [w, h, size] of [
   [1280, 800, "desktop"],

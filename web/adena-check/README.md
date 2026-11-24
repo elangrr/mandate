@@ -37,7 +37,9 @@ cp <this repo>/web/adena-check/app-request.spec.ts packages/adena-extension/src/
 REQUESTS=<this repo>/web/adena-check/app-requests.json corepack yarn jest --ci src/mandate-check/app-request.spec.ts
 ```
 
-Last run (v1.22.5): 7 of 7 passed.
+It also covers a creator's two requests (M2c): publishing a plan, `Offer(title, amount, period)`, and publishing or replacing the collector key, `SetCollectorKey(gpub)`. Both are realm calls, so Adena simulates them from the page's non-zero gas, and their messages decode back to the same function and arguments.
+
+Last run (v1.22.5): 10 of 10 passed.
 
 ## How the web app calls DoContract
 
@@ -48,4 +50,4 @@ cp <this repo>/web/adena-check/popup-options.spec.ts packages/adena-extension/sr
 REQUESTS=<this repo>/web/adena-check/app-requests.json corepack yarn jest --ci src/mandate-check/popup-options.spec.ts
 ```
 
-Last run (v1.22.5): 7 of 7 passed (and `app-request.spec.ts` 7 of 7).
+Last run (v1.22.5): 9 of 9 passed (and `app-request.spec.ts` 10 of 10).

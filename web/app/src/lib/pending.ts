@@ -16,7 +16,11 @@ export type PendingCheck =
   | { kind: "mandate"; key: string; planId: string }
   | { kind: "permission-gone"; key: string }
   | { kind: "cancelled"; key: string; mandateId: string }
-  | { kind: "gone-and-cancelled"; key: string; mandateId: string };
+  | { kind: "gone-and-cancelled"; key: string; mandateId: string }
+  /** a plan by this creator with exactly these terms, published at or after `after` (chain time before sending) */
+  | { kind: "plan"; key: string; title: string; amount: string; period: string; after: string }
+  /** the creator's published collector key is this one; `key` is the creator's address */
+  | { kind: "collector-key"; key: string; gpub: string };
 
 export interface Pending {
   payer: string;
@@ -146,6 +150,17 @@ export async function onChain(payer: string, c: PendingCheck): Promise<boolean> 
       const m = await read.mandateOf(payer, c.key);
       return !m || m.id.toString() !== c.mandateId || !active(m, now);
     }
+    case "plan": {
+      // the newest plans come last; a creator rarely has more than a page, but walk them all (bounded)
+      for (let page = 1; page <= 50; page++) {
+        const list = await read.plansOf(c.key, page);
+        if (list.some((p) => p.title === c.title && p.amount.toString() === c.amount && p.period.toString() === c.period && p.createdAt >= BigInt(c.after))) return true;
+        if (list.length < 20) return false;
+      }
+      return false;
+    }
+    case "collector-key":
+      return (await read.payee(c.key))?.collectorKey === c.gpub;
     case "gone-and-cancelled":
       return (await onChain(payer, { kind: "permission-gone", key: c.key })) && (await onChain(payer, { kind: "cancelled", key: c.key, mandateId: c.mandateId }));
   }

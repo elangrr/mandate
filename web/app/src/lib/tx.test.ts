@@ -1,12 +1,14 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { Plan } from "./amino";
+import { buildOffer, buildSetCollectorKey } from "./creator";
 import { addressOf, buildCancel, buildCreateSession, buildRevokeSession, buildSubscribe, checkGas, collectorKeyProblem, doContractParams, fromBase64, gasFor, minFee, pubFromGpub, TxError } from "./tx";
 
 // A fixed plan and keys (from a local test chain), so the requests are stable.
 const GPUB = "gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c";
 const COLLECTOR = "g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh";
 const SUPPORTER = "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5";
+const CREATOR = "g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj";
 const plan: Plan = {
   id: 1n, payee: "g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj", title: "Support Fluxen's work", amount: 1_000_000n, period: 2_592_000n,
   createdAt: 0n, mandates: 0, cancelled: 0, paidThisPeriod: 0, paidLastPeriod: 0, periodStart: 0n, pulls: 0n, paid: 0n, lastPullAt: 0n,
@@ -28,6 +30,9 @@ export function appRequests() {
     stopStep1: p(doContractParams([revoke], gasFor("session", ONYX))),
     stopStep2: p(doContractParams([cancel], gasFor("call", ONYX))),
     stopOneApproval: p(doContractParams([revoke, cancel], gasFor("sessionAndCall", ONYX))),
+    // M2c: a creator's two requests
+    publishPlan: p(doContractParams([buildOffer({ payee: CREATOR, title: "Support Fluxen's work", amount: 1_000_000n, period: 2_592_000n })], gasFor("call", ONYX))),
+    publishCollectorKey: p(doContractParams([buildSetCollectorKey({ payee: CREATOR, gpub: GPUB })], gasFor("call", ONYX))),
   };
 }
 

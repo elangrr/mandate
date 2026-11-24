@@ -4,6 +4,7 @@ import { shortAddr } from "../lib/format";
 import { parseRoute, useRoute, useTheme, type Theme } from "./hooks";
 import { LiveProvider } from "./live";
 import { PendingNotices } from "./actions";
+import { CollectorGuide, Publish } from "./creatorActions";
 import { AllPlans, Creator, Home, How, Mine, PlanPage } from "./pages";
 import { Icon } from "./parts";
 import { PriceFootnote } from "./price";
@@ -48,6 +49,8 @@ function Routes() {
   if (path === "/how") return <How />;
   if (path === "/mine") return <Mine address={query.get("a") ?? ""} />;
   if (path === "/creator") return <Creator address="" />;
+  if (path === "/publish") return <Publish />;
+  if (path === "/collector") return <CollectorGuide address={query.get("a") ?? ""} />;
   if ((m = /^\/plan\/([^/]+)$/.exec(path))) return <PlanPage id={m[1]} />;
   if ((m = /^\/creator\/([^/]+)$/.exec(path))) return <Creator address={m[1]} />;
   return <NotFound />;
@@ -57,7 +60,7 @@ function titleFor(path: string): string {
   const site = "Mandate";
   let m: RegExpExecArray | null;
   if (path === "/" || path === "") return `${site} · subscriptions on GNOT with a cap you set`;
-  const fixed: Record<string, string> = { "/plans": "All plans", "/how": "How it works", "/mine": "My mandates", "/creator": "Creator" };
+  const fixed: Record<string, string> = { "/plans": "All plans", "/how": "How it works", "/mine": "My mandates", "/creator": "Creator", "/publish": "Publish", "/collector": "Collector guide" };
   if (fixed[path]) return `${fixed[path]} · ${site}`;
   if ((m = /^\/plan\/(\d+)$/.exec(path))) return `Plan #${m[1]} · ${site}`;
   if ((m = /^\/creator\/(g1[0-9a-z]{38})$/.exec(path))) return `Creator ${shortAddr(m[1])} · ${site}`;

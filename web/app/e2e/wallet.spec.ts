@@ -44,7 +44,7 @@ async function stopAll(page: Page) {
     if ((await b.count()) === 0) break;
     const name = await b.innerText({ timeout: 2_000 }).catch(() => null);
     if (!name) continue; // the list re-rendered under us: look again
-    await b.click();
+    if (!(await b.click({ timeout: 5_000 }).then(() => true, () => false))) continue; // detached while clicking: look again
     await page.getByRole("group").getByRole("button", { name: name.trim() }).click();
     await expect(page.getByRole("group")).toHaveCount(0, { timeout: 30_000 });
   }

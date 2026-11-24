@@ -39,10 +39,10 @@ const SUPPORTER = 'g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5';
 const service = new TransactionService({} as WalletService, {
   getAccountInfo: jest.fn(async () => ({ accountNumber: '7', sequence: '0' })),
 } as unknown as GnoProvider);
-const account = { id: 'a', type: 'PRIVATE_KEY', getAddress: jest.fn(async () => SUPPORTER) } as unknown as Account;
+const accountOf = (address: string) => ({ id: 'a', type: 'PRIVATE_KEY', getAddress: jest.fn(async () => address) }) as unknown as Account;
 
 /** What Adena does with a DoContract request up to the document it signs or simulates. */
-async function throughAdena(params: any) {
+async function throughAdena(params: any, signer: string = SUPPORTER) {
   expect(validateDoContractRequest(params)).toBe(true);
   for (const m of params.messages) {
     const ok =
@@ -58,7 +58,7 @@ async function throughAdena(params: any) {
   // (pages/popup/wallet/approve-transaction-main/index.tsx: requestData?.data?.commit === true)
   expect(requestData.data.commit).toBe(true);
   const doc = await service.createDocument(
-    account, 'onyx-1', requestData.data.messages, 'g',
+    accountOf(signer), 'onyx-1', requestData.data.messages, 'g',
     requestData.data.gasWanted, requestData.data.gasFee, requestData.data.memo,
   );
   const tx = Tx.decode(Tx.encode(documentToTx(doc)).finish());
@@ -78,7 +78,7 @@ describe('the Mandate web app requests, through Adena v1.22.5 code', () => {
     });
   }
 
-  for (const name of ['subscribeStep2', 'stopStep2', 'subscribeOneApproval', 'stopOneApproval']) {
+  for (const name of ['subscribeStep2', 'stopStep2', 'subscribeOneApproval', 'stopOneApproval', 'publishPlan', 'publishCollectorKey']) {
     it(`${name}: has a realm call, so Adena simulates it; the page's gas only seeds the document`, async () => {
       const p = R[name];
       const { doc, tx } = await throughAdena(p);
@@ -87,6 +87,21 @@ describe('the Mandate web app requests, through Adena v1.22.5 code', () => {
       expect(tx.messages.length).toBe(p.messages.length);
     });
   }
+
+  it('a creator\'s requests survive encoding intact: Offer(title, amount, period) and SetCollectorKey(gpub)', async () => {
+    const CREATOR = 'g1us8428u2a5satrlxzagqqa5m6vmuze025anjlj';
+    const { tx: o } = await throughAdena(R.publishPlan, CREATOR);
+    const offer = MsgCall.decode(o.messages[0].value);
+    expect(offer.caller).toBe(CREATOR);
+    expect(offer.func).toBe('Offer');
+    expect(offer.pkg_path).toBe('gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate');
+    expect(offer.args).toEqual(["Support Fluxen's work", '1000000', '2592000']);
+    expect(offer.send).toBe('');
+    const { tx: k } = await throughAdena(R.publishCollectorKey, CREATOR);
+    const key = MsgCall.decode(k.messages[0].value);
+    expect(key.func).toBe('SetCollectorKey');
+    expect(key.args).toEqual(['gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqfp0696ldln2nm7kd33zfpgypg6u0e7upl03hyeexa6mccn4ce8mkswg65c']);
+  });
 
   it('the messages survive encoding intact', async () => {
     const { tx } = await throughAdena(R.subscribeOneApproval);

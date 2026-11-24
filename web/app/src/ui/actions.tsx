@@ -41,7 +41,7 @@ interface Step {
 }
 
 /** One approval: what to sign, how to see on chain that it happened, and what to check again right before it. */
-interface StepPlan {
+export interface StepPlan {
   label: string;
   messages: () => Msg[];
   gas: Gas;
@@ -132,7 +132,7 @@ const quote = (labels: string[]) => labels.map((l) => `“${l}”`).join(", ");
  * message for the polite live region and an error (role=alert), and never
  * lets an exception escape.
  */
-function useRunner() {
+export function useRunner() {
   const [steps, setSteps] = useState<Step[]>([]);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -245,10 +245,10 @@ function useRunner() {
   return { steps, busy, message, error, setMessage, run };
 }
 
-type Runner = ReturnType<typeof useRunner>;
+export type Runner = ReturnType<typeof useRunner>;
 
 /** The live region, the steps and the error of one runner. */
-function RunnerStatus({ r }: { r: Runner }) {
+export function RunnerStatus({ r }: { r: Runner }) {
   return (
     <>
       <div role="status" aria-live="polite" className="visually-hidden">
@@ -334,8 +334,8 @@ export function PendingNotices() {
 
 // ------------------------------------------------------------------ wallet gate
 
-/** Connect, install or switch network: what has to happen before any approval. */
-function WalletGate({ children }: { children: (address: string) => ReactNode }) {
+/** Connect, install or switch network: what has to happen before any approval. `doing`: "subscribing", "publishing". */
+export function WalletGate({ children, doing = "subscribing" }: { children: (address: string) => ReactNode; doing?: "subscribing" | "publishing" }) {
   const w = useWallet();
   if (!w.installed)
     return (
@@ -343,7 +343,7 @@ function WalletGate({ children }: { children: (address: string) => ReactNode }) 
         <Icon name="alert" />
         <div>
           <p>
-            Subscribing here needs the{" "}
+            {doing === "publishing" ? "Publishing" : "Subscribing"} here needs the{" "}
             <a href="https://adena.app" target="_blank" rel="noreferrer noopener" className="ext">
               Adena wallet <Icon name="external" />
             </a>{" "}
@@ -355,7 +355,7 @@ function WalletGate({ children }: { children: (address: string) => ReactNode }) 
   if (!w.address)
     return (
       <button type="button" className="btn btn-primary" onClick={() => void w.connect()} disabled={w.busy}>
-        Connect wallet to subscribe
+        {doing === "publishing" ? "Connect wallet to publish" : "Connect wallet to subscribe"}
       </button>
     );
   if (!w.onRightNetwork)

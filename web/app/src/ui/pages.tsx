@@ -26,6 +26,7 @@ import {
   SlotGauge,
 } from "./parts";
 import { isCarriedPeriodCurrent, possiblePayments, type MandateTimelineStatus } from "./mandateView";
+import { keyState } from "./creatorView";
 import { useWallet } from "./WalletContext";
 
 const PLAN_WALK_PAGES = 10; // the home page looks at the newest 200 plans
@@ -733,6 +734,14 @@ export function Creator({ address }: { address: string }) {
       <div className="page-head">
         <h1>Creator</h1>
         {!a && <p className="lede">A creator’s plans, payments received and collector key. Paste a creator’s address, or use your own wallet.</p>}
+        {!a && (
+          <p className="creator-cta">
+            <a className="btn btn-quiet" href="#/publish">
+              Publish a plan or a collector key
+            </a>{" "}
+            <a href="#/collector">The collector guide</a>
+          </p>
+        )}
       </div>
       <AddressForm key={a || wallet.address || ""} value={a} label="Creator address" submit="Show creator" onAddress={(x) => go(`/creator/${x}`)} />
       {a && isAddress(a) && (
@@ -760,17 +769,26 @@ async function loadCreator(payee: string) {
 
 function CreatorBody({ payee }: { payee: string }) {
   const [s, reload] = useAsync(() => loadCreator(payee), [payee]);
+  const wallet = useWallet();
+  const own = wallet.address === payee;
   if (s.status === "loading") return <Loading what="the creator" />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
   if (!s.value)
     return (
       <Empty>
         No plans from <span className="mono">{shortAddr(payee)}</span> yet.
+        {own && (
+          <>
+            {" "}
+            <a href="#/publish">Publish your first plan</a>
+          </>
+        )}
       </Empty>
     );
   const { info, plans, counts, keyBlocked, now } = s.value;
-  const keyTone = !info.collectorKey ? "off" : keyBlocked ? "warn" : "ok";
-  const keyLabel = !info.collectorKey ? "Not published" : keyBlocked ? "Blocked" : "Ready";
+  const ks = keyState(info, keyBlocked);
+  const keyTone = ks.tone;
+  const keyLabel = ks.label;
   return (
     <>
       <div className="creator-id card">
@@ -783,6 +801,14 @@ function CreatorBody({ payee }: { payee: string }) {
           <ExplorerAccount a={payee} />
         </div>
       </div>
+      {own && (
+        <p className="creator-cta">
+          <a className="btn btn-primary" href="#/publish">
+            Publish a plan or a key
+          </a>{" "}
+          <a href={`#/collector?a=${payee}`}>Run your collector</a>
+        </p>
+      )}
 
       <dl className="stats">
         <div>
@@ -811,7 +837,7 @@ function CreatorBody({ payee }: { payee: string }) {
           <span className={`pill pill-${keyTone}`}>{keyLabel}</span>
         </div>
         {!info.collectorKey ? (
-          <p className="muted">Not published yet: nobody can subscribe until it is.</p>
+          <p className="muted">{ks.note}</p>
         ) : (
           <>
             <div className="collector-well">
@@ -821,13 +847,10 @@ function CreatorBody({ payee }: { payee: string }) {
             {keyBlocked ? (
               <div className="notice notice-warn">
                 <Icon name="alert" />
-                <p>
-                  This key’s address has received coins, so the chain refuses new permissions for it: nobody new can subscribe. The creator must
-                  publish a new collector key; existing mandates keep being collected with this one until they expire.
-                </p>
+                <p>{ks.note}</p>
               </div>
             ) : (
-              <p className="small muted collector-note">Supporters give this key their permission. It must never receive coins.</p>
+              <p className="small muted collector-note">{ks.note}</p>
             )}
           </>
         )}
