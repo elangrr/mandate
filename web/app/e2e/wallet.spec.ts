@@ -74,6 +74,39 @@ test("without Adena: the plan page says what is needed", async ({ page }) => {
   await page.goto("./#/plan/1");
   await expect(page.getByText(/Subscribing here needs the/)).toBeVisible();
   await expect(page.getByRole("link", { name: "Adena wallet" })).toHaveAttribute("href", "https://adena.app");
+  await shots(page, "wallet-missing");
+});
+
+test("locked wallet: the header shows a clear alert", async ({ page }) => {
+  await page.addInitScript(() => {
+    const locked = async () => ({ code: 4000, status: "failure", type: "WALLET_LOCKED", message: "Wallet is locked", data: {} });
+    (window as any).adena = { AddEstablish: locked, GetAccount: locked, DoContract: locked, SwitchNetwork: locked, AddNetwork: locked };
+  });
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await expect(page.getByRole("alert")).toContainText("Adena is locked");
+  await shots(page, "wallet-locked");
+});
+
+test("subscribe in progress: approval 1 of 2 is clearly marked while waiting in Adena", async ({ page }) => {
+  let release!: () => void;
+  const gate = new Promise<void>((r) => {
+    release = r;
+  });
+  await installStandin(page, c, {
+    ...supporter,
+    skipSend: true,
+    before: async () => {
+      await gate;
+    },
+  });
+  await page.goto("./#/plan/1");
+  await page.getByRole("button", { name: "Connect wallet to subscribe" }).click();
+  await expect(page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ })).toBeVisible();
+  await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
+  await expect(page.locator(".step-wallet")).toBeVisible();
+  await shots(page, "subscribe-in-progress");
+  release();
 });
 
 test("wrong network: one click switches Adena", async ({ page }) => {
@@ -378,6 +411,7 @@ test("a step not on chain yet survives a reload and leaving the page, and clears
   await expect(banner).toContainText("Do not approve it again");
   await page.goto("./#/how");
   await expect(banner).toBeVisible();
+  await shots(page, "pending-banner");
   await page.waitForTimeout(6_000);
   await page.getByRole("button", { name: "Check again" }).click();
   await expect(banner).toHaveCount(0, { timeout: 15_000 });
@@ -448,6 +482,7 @@ test("a permission refused in the block: the wallet reached 16 permissions in be
   await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
   await expect(page.getByRole("alert")).toContainText("your wallet already holds the 16 permissions the chain allows, counting ones for other apps and expired ones");
   await expect(page.getByText(/Your wallet is full/)).toBeVisible();
+  await shots(page, "subscribe-blocked-full");
   // tidy up for the next test
   expect(await sendDirect(c, supporter, randomPermissions(0, supporter.address, "revoke", extra).params)).toBe(true);
 });
@@ -464,6 +499,10 @@ test("a permission refused in the block: the collector address became an account
   await page.getByRole("button", { name: /Subscribe for 1 GNOT every 30 days/ }).click();
   await expect(page.getByRole("alert")).toContainText("collector key can no longer be used for new permissions");
   await expect(page.getByText(/New supporters cannot join right now/).first()).toBeVisible();
+  await shots(page, "subscribe-blocked-collector");
   await page.goto("./#/plan/3");
   await expect(page.getByText(/New supporters cannot join right now/).first()).toBeVisible();
+  await page.goto(`./#/creator/${c.keys.fluxen.addr}`);
+  await expect(page.getByText(/This key’s address has received coins/)).toBeVisible();
+  await shots(page, "creator-blocked-key");
 });

@@ -1,7 +1,8 @@
 /* Mandate: Direction B — "Night Console".
-   One stylesheet: self-hosted fonts, design tokens (DESIGN.md), base, shell,
-   controls, telemetry surfaces, Home console, Flow schematic, Plan & Cap meter,
-   My mandates standing-order passes, Waiting standby, and purposeful motion. */
+   One stylesheet: self-hosted fonts, AA-verified tokens (DESIGN.md), base,
+   shell, controls, telemetry surfaces, Home console, Flow illustration,
+   Cap meter & real period timelines, Plan, All plans, My mandates, Creator,
+   How it works, Waiting standby, 404 & Error recovery, Wallet flows, motion. */
 
 @font-face {
   font-family: "Space Grotesk";
@@ -245,7 +246,6 @@ a {
 }
 
 :focus-visible {
-  /* outline (not box-shadow) so Windows forced-colors keeps it */
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -303,6 +303,9 @@ a {
 .status-dot-signal {
   background: var(--signal-bright);
 }
+.status-dot-danger {
+  background: var(--danger);
+}
 
 /* ------------------------------------------------------------------ shell */
 
@@ -313,7 +316,7 @@ a {
   z-index: 30;
   background: var(--surface);
   color: var(--ink);
-  border: 1px solid var(--accent);
+  border: 2px solid var(--accent);
   padding: var(--s3) var(--s4);
   border-radius: var(--r-control);
   font-weight: 600;
@@ -326,7 +329,7 @@ a {
   position: sticky;
   inset-block-start: 0;
   z-index: 20;
-  background: color-mix(in oklab, var(--bg) 86%, transparent);
+  background: color-mix(in oklab, var(--bg) 88%, transparent);
   backdrop-filter: saturate(1.3) blur(14px);
   border-block-end: 1px solid var(--line);
 }
@@ -355,6 +358,9 @@ main {
 .top-alert-wrap {
   padding-block-end: var(--s3);
 }
+.top-alert {
+  max-width: none;
+}
 .brand {
   display: inline-flex;
   align-items: center;
@@ -374,7 +380,7 @@ main {
 }
 .brand-mark-bg {
   fill: var(--surface-2);
-  stroke: var(--line-strong);
+  stroke: var(--field-line);
   stroke-width: 1.25;
 }
 .brand-mark-cap {
@@ -445,7 +451,7 @@ main {
   padding: 0.35rem 0.65rem;
   border-radius: 999px;
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   white-space: nowrap;
 }
 
@@ -460,8 +466,8 @@ main:focus-visible {
 .page-head {
   margin-block-end: var(--s5);
 }
-.page-head h1 {
-  margin-block-start: var(--s2);
+.page-head .lede {
+  margin-block-end: 0;
 }
 
 .foot {
@@ -472,6 +478,7 @@ main:focus-visible {
 }
 .foot-inner {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s2);
   padding-block: var(--s5);
 }
@@ -539,7 +546,7 @@ main:focus-visible {
   transform: translateY(1px) scale(0.985);
 }
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.55;
   cursor: not-allowed;
 }
 .btn-primary {
@@ -550,11 +557,11 @@ main:focus-visible {
 .btn-quiet {
   background: var(--surface);
   color: var(--ink);
-  border-color: var(--line-strong);
+  border-color: var(--field-line);
   box-shadow: inset 0 1px 0 var(--surface-edge);
 }
 .btn-signal {
-  border-color: color-mix(in oklab, var(--signal) 55%, transparent);
+  border-color: var(--signal);
   background: var(--signal-tint);
   color: var(--signal);
 }
@@ -574,7 +581,7 @@ main:focus-visible {
   }
   .btn-quiet:not(:disabled):hover {
     background: var(--surface-2);
-    border-color: var(--field-line);
+    border-color: var(--ink-2);
     color: var(--ink);
   }
   .btn-danger:not(:disabled):hover {
@@ -672,12 +679,15 @@ main:focus-visible {
   padding: var(--s4);
   border-radius: var(--r-control);
   background: var(--surface-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-inline-start: 3px solid var(--field-line);
   max-width: var(--text);
 }
 .notice p {
   margin: 0;
+}
+.notice p + p {
+  margin-block-start: var(--s2);
 }
 .notice > :not(.icon) {
   flex: 1;
@@ -686,9 +696,19 @@ main:focus-visible {
 .notice .icon {
   margin-block-start: 0.15rem;
 }
+.notice .btn {
+  margin-block-start: var(--s3);
+}
+.notice .confirm-actions {
+  margin-block-start: var(--s3);
+  padding-block-start: 0;
+}
+.notice .confirm-actions .btn {
+  margin-block-start: 0;
+}
 .notice-warn {
   background: var(--warn-tint);
-  border-color: color-mix(in oklab, var(--warn) 38%, transparent);
+  border-color: color-mix(in oklab, var(--warn) 42%, transparent);
   border-inline-start-color: var(--warn);
   color: var(--ink);
 }
@@ -697,22 +717,25 @@ main:focus-visible {
 }
 .notice-error {
   background: var(--danger-tint);
-  border-color: color-mix(in oklab, var(--danger) 38%, transparent);
+  border-color: color-mix(in oklab, var(--danger) 42%, transparent);
   border-inline-start-color: var(--danger);
 }
 .notice-error .icon {
   color: var(--danger);
 }
-.notice-error .btn {
-  margin-block-start: var(--s3);
-}
 .notice-ok {
   background: var(--ok-tint);
-  border-color: color-mix(in oklab, var(--ok) 38%, transparent);
+  border-color: color-mix(in oklab, var(--ok) 42%, transparent);
   border-inline-start-color: var(--ok);
 }
 .notice-ok .icon {
   color: var(--ok);
+}
+.notice.top-alert {
+  max-width: none;
+}
+.wallet-gate-notice {
+  max-width: none;
 }
 
 .loading {
@@ -728,7 +751,7 @@ main:focus-visible {
   width: 1rem;
   height: 1rem;
   border-radius: 50%;
-  border: 2px solid var(--line-strong);
+  border: 2px solid var(--field-line);
   border-top-color: var(--accent);
   animation: spin 750ms linear infinite;
   flex: none;
@@ -740,7 +763,7 @@ main:focus-visible {
 }
 .empty {
   padding: var(--s6) var(--s5);
-  border: 1px dashed var(--line-strong);
+  border: 1px dashed var(--field-line);
   border-radius: var(--r-panel);
   background: color-mix(in oklab, var(--surface) 55%, transparent);
   color: var(--ink-2);
@@ -763,7 +786,7 @@ main:focus-visible {
 .badge {
   background: var(--signal-tint);
   color: var(--signal);
-  border: 1px solid color-mix(in oklab, var(--signal) 32%, transparent);
+  border: 1px solid color-mix(in oklab, var(--signal) 38%, transparent);
   margin-inline-start: var(--s2);
 }
 .pill::before {
@@ -777,17 +800,17 @@ main:focus-visible {
 .pill-ok {
   background: var(--ok-tint);
   color: var(--ok);
-  border: 1px solid color-mix(in oklab, var(--ok) 35%, transparent);
+  border: 1px solid color-mix(in oklab, var(--ok) 40%, transparent);
 }
 .pill-warn {
   background: var(--warn-tint);
   color: var(--warn);
-  border: 1px solid color-mix(in oklab, var(--warn) 40%, transparent);
+  border: 1px solid color-mix(in oklab, var(--warn) 45%, transparent);
 }
 .pill-off {
   background: var(--surface-2);
   color: var(--ink-2);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--field-line);
 }
 
 .ext .icon {
@@ -797,7 +820,7 @@ main:focus-visible {
   margin-inline-start: 0.2em;
 }
 
-/* ------------------------------------------------------------------ cap meter & rhythm strip */
+/* ------------------------------------------------------------------ cap meter & period timelines */
 
 .cap-meter {
   background: var(--surface-2);
@@ -826,36 +849,45 @@ main:focus-visible {
 .cap-meter-track {
   position: relative;
   display: flex;
-  height: 0.95rem;
+  align-items: stretch;
+  height: 1.05rem;
   border-radius: 0.35rem;
   background: var(--surface);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--field-line);
   overflow: hidden;
   padding: 2px;
   gap: 2px;
 }
 .cap-meter-price {
-  width: var(--price-pct, 90%);
-  background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 78%, transparent), var(--accent));
+  width: var(--price-pct, 74%);
+  background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 80%, transparent), var(--accent));
   border-radius: 0.2rem 0 0 0.2rem;
   transform-origin: left center;
 }
 .cap-meter-fee {
-  width: var(--fee-pct, 10%);
+  width: var(--fee-pct, 8%);
   background: repeating-linear-gradient(
     -45deg,
-    color-mix(in oklab, var(--signal-bright) 75%, transparent) 0 4px,
-    color-mix(in oklab, var(--signal-bright) 28%, transparent) 4px 8px
+    color-mix(in oklab, var(--signal-bright) 82%, transparent) 0 4px,
+    color-mix(in oklab, var(--signal-bright) 30%, transparent) 4px 8px
   );
-  border-radius: 0 0.2rem 0.2rem 0;
 }
 .cap-meter-pin {
-  position: absolute;
-  inset-block: 0;
-  inset-inline-end: 0;
+  flex: none;
   width: 3px;
   background: var(--signal-bright);
-  box-shadow: 0 0 8px color-mix(in oklab, var(--signal-bright) 60%, transparent);
+  border-radius: 2px;
+  box-shadow: 0 0 8px color-mix(in oklab, var(--signal-bright) 65%, transparent);
+}
+.cap-meter-beyond {
+  width: var(--beyond-pct, 18%);
+  flex: 1 1 var(--beyond-pct, 18%);
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklab, var(--danger) 38%, transparent) 0 4px,
+    color-mix(in oklab, var(--danger) 12%, transparent) 4px 8px
+  );
+  border-radius: 0 0.2rem 0.2rem 0;
 }
 .cap-meter-legend {
   display: flex;
@@ -886,6 +918,14 @@ main:focus-visible {
   background: var(--signal-bright);
   width: 0.25rem;
 }
+.cap-swatch-beyond {
+  background: repeating-linear-gradient(-45deg, var(--danger) 0 2px, transparent 2px 4px);
+  border: 1px solid var(--danger);
+}
+.cap-swatch-prev {
+  background: repeating-linear-gradient(-45deg, var(--ink-2) 0 2px, transparent 2px 4px);
+  border: 1px solid var(--ink-2);
+}
 
 .rhythm {
   background: var(--surface-2);
@@ -910,14 +950,14 @@ main:focus-visible {
 .rhythm-cap-tag {
   color: var(--signal);
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
 }
 .rhythm-cadence {
   color: var(--ink-2);
 }
 .rhythm-stage {
   position: relative;
-  height: 4.5rem;
+  min-height: 4.75rem;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   align-items: end;
@@ -944,22 +984,26 @@ main:focus-visible {
 .rhythm-bars {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
-  gap: clamp(0.25rem, 1.2vw, 0.5rem);
-  height: 100%;
+  grid-template-columns: repeat(var(--cols, 6), minmax(0, 1fr));
+  gap: clamp(0.2rem, 1vw, 0.55rem);
+  height: 3.9rem;
   align-items: end;
   padding-block-start: 0.35rem;
 }
-.rhythm-wide .rhythm-bars {
-  grid-template-columns: repeat(12, minmax(0, 1fr));
-  gap: clamp(0.3rem, 1vw, 0.65rem);
-}
 @media (max-width: 42rem) {
-  .rhythm-wide .rhythm-bars {
+  .rhythm-preview.rhythm-wide .rhythm-bars {
     grid-template-columns: repeat(6, minmax(0, 1fr));
   }
-  .rhythm-wide .rhythm-col:nth-child(n + 7) {
+  .rhythm-preview.rhythm-wide .rhythm-col:nth-child(n + 7) {
     display: none;
+  }
+  .rhythm-bars-real {
+    grid-template-columns: repeat(min(var(--cols, 6), 6), minmax(0, 1fr));
+    height: auto;
+    row-gap: var(--s3);
+  }
+  .rhythm-bars-real .rhythm-col {
+    height: 3.5rem;
   }
 }
 .rhythm-col {
@@ -973,12 +1017,14 @@ main:focus-visible {
 }
 .rhythm-bar {
   position: relative;
+  display: grid;
+  place-items: center;
   width: 100%;
   max-width: 3.4rem;
   height: var(--h, 75%);
   border-radius: 0.25rem 0.25rem 0.1rem 0.1rem;
   background: linear-gradient(180deg, var(--accent), color-mix(in oklab, var(--accent) 32%, transparent));
-  border: 1px solid color-mix(in oklab, var(--accent) 65%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 70%, transparent);
   transform-origin: bottom center;
 }
 .rhythm-bar-cap {
@@ -989,46 +1035,121 @@ main:focus-visible {
   border-radius: 2px;
   background: oklch(1 0 0 / 0.55);
 }
-.rhythm-warn .rhythm-bar {
-  background: repeating-linear-gradient(
-    -45deg,
-    color-mix(in oklab, var(--warn) 42%, transparent) 0 4px,
-    color-mix(in oklab, var(--warn) 14%, transparent) 4px 8px
-  );
-  border-color: color-mix(in oklab, var(--warn) 65%, transparent);
-  border-style: dashed;
-}
-.rhythm-off .rhythm-bar {
-  background: color-mix(in oklab, var(--line-strong) 45%, transparent);
-  border-color: var(--line-strong);
-  opacity: 0.65;
-}
-.rhythm-tick {
-  font-size: 0.6875rem;
-  color: var(--ink-2);
+.rhythm-bar-mark {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
   line-height: 1;
 }
 
+/* Real mandate period slot states: distinct fill + border + mark (never colour alone) */
+.rhythm-slot-paid .rhythm-bar {
+  background: linear-gradient(180deg, var(--ok), color-mix(in oklab, var(--ok) 65%, var(--accent)));
+  border-color: var(--ok);
+  color: var(--accent-ink);
+}
+.rhythm-slot-current .rhythm-bar {
+  background: color-mix(in oklab, var(--accent-tint) 85%, var(--surface));
+  border: 2px solid var(--accent);
+}
+.rhythm-slot-upcoming .rhythm-bar {
+  background: var(--surface);
+  border: 1.5px solid var(--field-line);
+}
+.rhythm-slot-stopped .rhythm-bar {
+  background: var(--warn-tint);
+  border: 1.5px dashed var(--warn);
+  color: var(--warn);
+}
+.rhythm-slot-now .rhythm-bar {
+  box-shadow: 0 0 0 2px var(--surface-2), 0 0 0 3.5px var(--accent);
+}
+.rhythm-tick {
+  font-size: clamp(0.62rem, 2.2vw, 0.72rem);
+  color: var(--ink-2);
+  line-height: 1;
+}
+.rhythm-slot-now .rhythm-tick {
+  color: var(--accent);
+  font-weight: 700;
+}
+.rhythm-foot,
+.rhythm-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2) var(--s4);
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+  padding-block-start: var(--s2);
+  border-block-start: 1px solid var(--line);
+}
+.rhythm-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.rhythm-legend-more {
+  margin-inline-start: auto;
+}
+.rhythm-key {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 2px;
+  flex: none;
+}
+.rhythm-key-paid {
+  background: var(--ok);
+}
+.rhythm-key-now {
+  background: var(--accent-tint);
+  border: 2px solid var(--accent);
+}
+.rhythm-key-upcoming {
+  background: var(--surface);
+  border: 1.5px solid var(--field-line);
+}
+.rhythm-key-stopped {
+  background: var(--warn-tint);
+  border: 1.5px dashed var(--warn);
+}
+
+.slot-gauge-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  max-width: 100%;
+}
 .slot-gauge {
   display: grid;
   grid-template-columns: repeat(16, minmax(0, 1fr));
   gap: 3px;
-  width: min(100%, 14rem);
+  width: min(100%, 13rem);
   flex: none;
 }
 .slot-cell {
   height: 0.65rem;
   border-radius: 2px;
   background: var(--surface-2);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--field-line);
 }
 .slot-cell-on {
   background: var(--accent);
   border-color: var(--accent);
 }
+.slot-cell-unknown {
+  background: transparent;
+  border: 1px dashed var(--field-line);
+}
 .slot-gauge-warn .slot-cell-on {
   background: var(--warn);
   border-color: var(--warn);
+}
+.slot-gauge-label {
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+  font-weight: 600;
 }
 
 /* ------------------------------------------------------------------ home */
@@ -1054,7 +1175,7 @@ main:focus-visible {
   padding: 0.3rem 0.75rem;
   border-radius: 999px;
   background: var(--surface);
-  border: 1px solid var(--line-strong);
+  border: 1px solid var(--field-line);
   color: var(--ink-2);
   font-size: var(--t-xs);
   font-weight: 600;
@@ -1114,14 +1235,15 @@ main:focus-visible {
   align-items: center;
   gap: var(--s2);
 }
-.console-stamp {
+.console-stamp-example {
   font-size: var(--t-xs);
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  color: var(--ok);
-  background: var(--ok-tint);
-  border: 1px solid color-mix(in oklab, var(--ok) 35%, transparent);
-  padding: 0.15rem 0.55rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+  background: var(--surface-2);
+  border: 1px solid var(--field-line);
+  padding: 0.15rem 0.6rem;
   border-radius: 999px;
 }
 .console-amount {
@@ -1132,7 +1254,7 @@ main:focus-visible {
 }
 .console-figure {
   font-family: var(--font-display);
-  font-size: clamp(2.5rem, 1.8rem + 2.4vw, 3.6rem);
+  font-size: min(clamp(2.5rem, 1.8rem + 2.4vw, 3.6rem), 13vw);
   font-weight: 700;
   line-height: 0.95;
   letter-spacing: -0.04em;
@@ -1184,7 +1306,7 @@ main:focus-visible {
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: var(--r-panel);
-  padding: var(--s5);
+  padding: clamp(0.85rem, 4vw, 1.5rem);
   color: var(--ink-2);
   font-size: var(--t-sm);
   box-shadow: inset 0 1px 0 var(--surface-edge), var(--shadow-sm);
@@ -1223,7 +1345,7 @@ main:focus-visible {
 }
 .num-cell {
   background: var(--surface);
-  padding: var(--s5);
+  padding: clamp(0.85rem, 4vw, 1.5rem);
   min-width: 0;
 }
 .num {
@@ -1269,6 +1391,10 @@ main:focus-visible {
   text-decoration: none;
 }
 
+.plans-summary {
+  margin-block: 0 var(--s5);
+}
+
 .plan-list {
   list-style: none;
   padding: 0;
@@ -1281,9 +1407,9 @@ main:focus-visible {
   gap: var(--s2) var(--s5);
   grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
-  padding: var(--s4) var(--s5);
+  padding: clamp(0.85rem, 3.5vw, 1.25rem) clamp(0.85rem, 4vw, 1.5rem);
   background: var(--surface);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line-strong);
   border-radius: var(--r-panel);
   color: var(--ink);
   text-decoration: none;
@@ -1351,13 +1477,10 @@ main:focus-visible {
 
 .pager {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
+  gap: var(--s3);
   margin-block-start: var(--s5);
-}
-.pager a {
-  display: inline-flex;
-  align-items: center;
-  min-height: 2.75rem;
 }
 
 /* ------------------------------------------------------------------ plan page */
@@ -1445,7 +1568,7 @@ main:focus-visible {
 }
 .stats div {
   background: var(--surface);
-  padding: var(--s4) var(--s5);
+  padding: clamp(0.75rem, 3.5vw, 1rem) clamp(0.85rem, 4vw, 1.5rem);
   min-width: 0;
 }
 .stats dt {
@@ -1469,6 +1592,9 @@ main:focus-visible {
   grid-template-columns: minmax(0, 1fr);
   gap: var(--s4);
 }
+.allow > .btn {
+  justify-self: start;
+}
 .allow-rail {
   display: flex;
   flex-wrap: wrap;
@@ -1481,10 +1607,10 @@ main:focus-visible {
 .allow-cap-chip {
   font-size: var(--t-xs);
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.04em;
   color: var(--signal);
   background: var(--signal-tint);
-  border: 1px solid color-mix(in oklab, var(--signal) 35%, transparent);
+  border: 1px solid color-mix(in oklab, var(--signal) 40%, transparent);
   padding: 0.2rem 0.65rem;
   border-radius: 999px;
 }
@@ -1544,7 +1670,7 @@ main:focus-visible {
   flex-wrap: wrap;
   align-items: center;
   gap: var(--s1) var(--s4);
-  padding: var(--s3) var(--s5);
+  padding: var(--s3) clamp(0.85rem, 4vw, 1.5rem);
   border-block-end: 1px solid var(--line);
   font-variant-numeric: tabular-nums;
   font-size: var(--t-sm);
@@ -1599,7 +1725,7 @@ main:focus-visible {
 }
 .mandate {
   position: relative;
-  border-inline-start: 4px solid var(--line-strong);
+  border-inline-start: 4px solid var(--field-line);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   gap: var(--s3);
@@ -1611,7 +1737,7 @@ main:focus-visible {
   border-inline-start-color: var(--warn);
 }
 .mandate[data-tone="off"] {
-  border-inline-start-color: var(--line-strong);
+  border-inline-start-color: var(--field-line);
 }
 .mandate-head {
   display: flex;
@@ -1641,7 +1767,7 @@ a.mandate-title:hover {
 .mandate-price {
   margin: 0;
   font-family: var(--font-display);
-  font-size: clamp(1.35rem, 1.15rem + 0.8vw, 1.75rem);
+  font-size: min(clamp(1.35rem, 1.15rem + 0.8vw, 1.75rem), 9vw);
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
@@ -1651,7 +1777,7 @@ a.mandate-title:hover {
   font-weight: 600;
   color: var(--signal);
   background: var(--signal-tint);
-  border: 1px solid color-mix(in oklab, var(--signal) 35%, transparent);
+  border: 1px solid color-mix(in oklab, var(--signal) 40%, transparent);
   padding: 0.15rem 0.55rem;
   border-radius: 999px;
 }
@@ -1690,6 +1816,165 @@ a.mandate-title:hover {
   font-size: var(--t-sm);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* Creator identity, payments-per-period chart, collector key */
+.creator-id {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s3) var(--s5);
+  margin-block-end: var(--s4);
+}
+.creator-id-main {
+  min-width: 0;
+  flex: 1 1 min(100%, 22rem);
+}
+.creator-addr {
+  margin: 0.25rem 0 0;
+  max-width: none;
+  color: var(--ink);
+  font-weight: 500;
+}
+.creator-id-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s3);
+}
+
+.creator-chart {
+  margin-block: var(--s5);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s4);
+}
+.creator-chart-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: var(--s3);
+  padding-block-end: var(--s3);
+  border-block-end: 1px solid var(--line);
+}
+.creator-chart-head h2 {
+  margin: 0 0 0.25rem;
+  font-size: var(--t-h3);
+}
+.creator-chart-head p {
+  margin: 0;
+}
+.creator-chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+}
+.creator-chart-empty {
+  margin: 0;
+}
+.creator-chart-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--s4);
+}
+.creator-chart-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s2);
+}
+.creator-chart-label {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s1) var(--s4);
+}
+.creator-chart-title {
+  color: var(--ink);
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+@media (hover: hover) {
+  .creator-chart-title:hover {
+    color: var(--accent);
+  }
+}
+.creator-chart-nums {
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+}
+.creator-chart-tracks {
+  display: grid;
+  gap: 0.3rem;
+}
+.creator-track {
+  height: 0.6rem;
+  border-radius: 0.25rem;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.creator-track-last {
+  height: 0.42rem;
+}
+.creator-bar {
+  display: block;
+  height: 100%;
+  border-radius: 0.2rem;
+}
+.creator-bar-this {
+  background: linear-gradient(90deg, color-mix(in oklab, var(--accent) 75%, transparent), var(--accent));
+}
+.creator-bar-last {
+  background: repeating-linear-gradient(
+    -45deg,
+    color-mix(in oklab, var(--ink-2) 70%, transparent) 0 4px,
+    color-mix(in oklab, var(--ink-2) 25%, transparent) 4px 8px
+  );
+}
+
+.collector-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s3);
+  border-inline-start: 4px solid var(--field-line);
+}
+.collector-card[data-tone="ok"] {
+  border-inline-start-color: var(--ok);
+}
+.collector-card[data-tone="warn"] {
+  border-inline-start-color: var(--warn);
+}
+.collector-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--s2);
+}
+.collector-head h2 {
+  margin: 0;
+  font-size: var(--t-h3);
+}
+.collector-well {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  padding: var(--s3) var(--s4);
+  display: grid;
+  gap: 0.2rem;
+}
+.collector-well p,
+.collector-note {
+  margin: 0;
+  max-width: none;
 }
 
 .table-wrap {
@@ -1737,7 +2022,7 @@ a.mandate-title:hover {
     display: block;
   }
   .table tr {
-    padding: var(--s3) var(--s4);
+    padding: var(--s4);
     border-block-end: 1px solid var(--line);
   }
   .table tr:last-child {
@@ -1745,26 +2030,33 @@ a.mandate-title:hover {
   }
   .table td {
     border: 0;
-    padding: var(--s1) 0;
+    padding: 0.3rem 0;
     display: grid;
-    grid-template-columns: minmax(0, 8.5rem) minmax(0, 1fr);
-    gap: var(--s3);
+    grid-template-columns: minmax(0, 9.5rem) minmax(0, 1fr);
+    gap: var(--s2) var(--s3);
+    overflow-wrap: anywhere;
   }
   .table td::before {
     content: attr(data-label);
+    font-family: var(--font-mono);
     color: var(--ink-2);
-    font-size: var(--t-sm);
+    font-size: var(--t-xs);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
   .table td:first-child {
     display: block;
-    font-weight: 600;
+    font-weight: 650;
+    padding-block-end: var(--s2);
+    margin-block-end: var(--s1);
+    border-block-end: 1px solid var(--line);
   }
   .table td:first-child::before {
     content: none;
   }
 }
 
-/* ------------------------------------------------------------------ waiting for approval */
+/* ------------------------------------------------------------------ waiting, 404 & error cards */
 
 .notlive {
   margin-block-start: var(--s5);
@@ -1776,7 +2068,9 @@ a.mandate-title:hover {
   position: relative;
   overflow: hidden;
 }
-.notlive-rail {
+.notlive-rail,
+.notfound-rail,
+.error-card-rail {
   display: flex;
   flex-wrap: wrap;
   justify-content: space-between;
@@ -1792,33 +2086,43 @@ a.mandate-title:hover {
   font-size: var(--t-xs);
   font-weight: 700;
   letter-spacing: 0.06em;
+  text-transform: uppercase;
   color: var(--signal);
 }
 .notlive-net {
   font-size: var(--t-xs);
   color: var(--ink-2);
 }
-.notlive-body {
+.notlive-body,
+.notfound-body,
+.error-card-body {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s4);
   align-items: start;
 }
 @media (min-width: 34rem) {
-  .notlive-body {
+  .notlive-body,
+  .notfound-body,
+  .error-card-body {
     grid-template-columns: auto minmax(0, 1fr);
   }
 }
-.notlive-mark {
+.notlive-mark,
+.error-card-mark {
   width: 3.25rem;
   height: 3.25rem;
   display: grid;
   place-items: center;
   border-radius: 0.75rem;
+}
+.notlive-mark {
   background: var(--signal-tint);
-  border: 1px solid color-mix(in oklab, var(--signal) 40%, transparent);
+  border: 1px solid color-mix(in oklab, var(--signal) 42%, transparent);
   color: var(--signal);
 }
-.notlive-mark .icon {
+.notlive-mark .icon,
+.error-card-mark .icon {
   width: 1.5rem;
   height: 1.5rem;
 }
@@ -1845,7 +2149,7 @@ a.mandate-title:hover {
   padding: var(--s3) var(--s4);
   border-radius: var(--r-control);
   background: var(--surface-2);
-  border: 1px solid var(--line);
+  border: 1px solid var(--field-line);
   color: var(--ink);
   text-decoration: none;
   font-weight: 500;
@@ -1872,52 +2176,132 @@ a.mandate-title:hover {
   max-width: none;
 }
 
+.notfound {
+  max-width: 46rem;
+  margin-block-start: var(--s4);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s5);
+  border-inline-start: 4px solid var(--signal-bright);
+}
+.notfound-code {
+  margin: 0;
+  font-size: min(clamp(2.6rem, 2rem + 2.5vw, 3.8rem), 14vw);
+  font-weight: 700;
+  line-height: 0.95;
+  color: var(--signal);
+  letter-spacing: -0.04em;
+}
+.notfound-body h1 {
+  margin-block-end: var(--s2);
+}
+.notfound-body .hero-actions {
+  margin-block-start: var(--s4);
+}
+
+.error-card {
+  max-width: 48rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s4);
+  border-inline-start: 4px solid var(--danger);
+  border-color: color-mix(in oklab, var(--danger) 42%, var(--line));
+}
+.error-card-beacon {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: var(--t-xs);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--danger);
+}
+.error-card-mark {
+  background: var(--danger-tint);
+  border: 1px solid color-mix(in oklab, var(--danger) 42%, transparent);
+  color: var(--danger);
+}
+.error-card-body h1 {
+  margin: 0 0 var(--s2);
+  font-size: var(--t-h2);
+}
+.error-card-body p {
+  margin: 0 0 var(--s3);
+}
+.error-card-body p:last-child {
+  margin-block-end: 0;
+}
+
 /* ------------------------------------------------------------------ how it works */
 
 .how .steps {
   list-style: none;
   counter-reset: step;
   padding: 0;
-  margin: var(--s6) 0 0;
+  margin: 0;
   display: grid;
-  gap: var(--s5);
+  gap: var(--s4);
 }
 .how .steps li {
   counter-increment: step;
   display: grid;
-  grid-template-columns: 2.5rem minmax(0, 1fr);
-  gap: 0 var(--s4);
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: var(--s1) var(--s4);
+  padding: clamp(0.85rem, 4vw, 1.5rem);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r-panel);
+  box-shadow: inset 0 1px 0 var(--surface-edge), var(--shadow-sm);
 }
 .how .steps li::before {
   content: "0" counter(step);
   grid-row: span 2;
-  width: 2.25rem;
-  height: 2.25rem;
+  width: 2.35rem;
+  height: 2.35rem;
   border-radius: 0.5rem;
   display: grid;
   place-items: center;
   background: var(--accent-tint);
-  border: 1px solid color-mix(in oklab, var(--accent) 35%, transparent);
+  border: 1px solid color-mix(in oklab, var(--accent) 40%, transparent);
   color: var(--accent);
   font-family: var(--font-mono);
   font-size: var(--t-xs);
   font-weight: 700;
 }
-.how .steps h2 {
+.how .steps h3 {
   margin: 0.15rem 0 var(--s2);
   font-size: var(--t-h3);
 }
+.how .steps p {
+  margin: 0;
+  color: var(--ink-2);
+}
+.faq {
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  gap: var(--s4);
+}
+.faq-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s2);
+  align-content: start;
+}
 .faq dt {
+  font-family: var(--font-display);
   font-weight: 650;
-  margin-block-start: var(--s4);
+  font-size: var(--t-lg);
+  color: var(--ink);
 }
 .faq dd {
-  margin: var(--s1) 0 0;
+  margin: 0;
   color: var(--ink-2);
-  max-width: var(--text);
+  font-size: var(--t-sm);
 }
 
-/* ------------------------------------------------------------------ the flow schematic */
+/* ------------------------------------------------------------------ the flow illustration */
 
 .flow {
   margin: var(--s4) 0 var(--s6);
@@ -1942,7 +2326,7 @@ a.mandate-title:hover {
   font-weight: 700;
   color: var(--signal);
   background: var(--signal-tint);
-  border: 1px solid color-mix(in oklab, var(--signal) 38%, transparent);
+  border: 1px solid color-mix(in oklab, var(--signal) 40%, transparent);
   padding: 0.2rem 0.65rem;
   border-radius: 999px;
 }
@@ -1970,7 +2354,7 @@ a.mandate-title:hover {
   *,
   *::before,
   *::after {
-    transition-duration: 0.01ms !important;
+    transition: none !important;
   }
 }
 .flow-svg {
@@ -2018,7 +2402,7 @@ a.mandate-title:hover {
 }
 .flow-panel {
   fill: var(--surface-2);
-  stroke: var(--line-strong);
+  stroke: var(--field-line);
   stroke-width: 1.4;
 }
 .flow-realm {
@@ -2043,7 +2427,7 @@ a.mandate-title:hover {
   stroke: var(--accent);
 }
 .flow-track {
-  stroke: var(--line-strong);
+  stroke: var(--field-line);
   stroke-width: 3;
   stroke-linecap: round;
   stroke-dasharray: 2 8;
@@ -2084,7 +2468,7 @@ a.mandate-title:hover {
 }
 .flow-check-bg {
   fill: color-mix(in oklab, var(--surface) 75%, transparent);
-  stroke: color-mix(in oklab, var(--ok) 30%, var(--line));
+  stroke: color-mix(in oklab, var(--ok) 35%, var(--line));
   stroke-width: 1;
 }
 .flow-check text {
@@ -2109,7 +2493,7 @@ a.mandate-title:hover {
   font-weight: 700;
 }
 .flow-time-axis {
-  stroke: var(--line-strong);
+  stroke: var(--field-line);
   stroke-width: 1.25;
 }
 .flow-beat-tick {
@@ -2121,7 +2505,7 @@ a.mandate-title:hover {
 }
 
 .flow-coin {
-  transform: translate(496px, 162px); /* still picture: travelling to creator under the ceiling */
+  transform: translate(496px, 162px);
 }
 .flow-coin-v {
   transform: translate(170px, 370px);
@@ -2148,7 +2532,7 @@ a.mandate-title:hover {
     animation: page-in 200ms var(--ease-out) both;
   }
   .hero-copy > * {
-    animation: rise-in 420ms var(--ease-out) both;
+    animation: rise-in 400ms var(--ease-out) both;
   }
   .hero-copy > :nth-child(2) {
     animation-delay: 50ms;
@@ -2160,13 +2544,13 @@ a.mandate-title:hover {
     animation-delay: 150ms;
   }
   .hero-console {
-    animation: rise-in 480ms var(--ease-out) 120ms both;
+    animation: rise-in 450ms var(--ease-out) 110ms both;
   }
   .cap-meter-price {
-    animation: bar-grow 520ms var(--ease-out) 120ms both;
+    animation: bar-grow 480ms var(--ease-out) 100ms both;
   }
-  .rhythm-ok .rhythm-bar {
-    animation: rhythm-pulse 3.6s var(--ease-out) calc(var(--i, 0) * 180ms) infinite;
+  .rhythm-bar {
+    animation: bar-rise 360ms var(--ease-out) calc(var(--i, 0) * 30ms) both;
   }
   .flow-coin {
     animation: flow-coin 4.8s var(--ease-out) infinite;
@@ -2223,15 +2607,10 @@ a.mandate-title:hover {
     transform: scaleX(0.2);
   }
 }
-@keyframes rhythm-pulse {
-  0%,
-  70%,
-  100% {
-    opacity: 0.84;
-  }
-  20% {
-    opacity: 1;
-    filter: brightness(1.14);
+@keyframes bar-rise {
+  from {
+    transform: scaleY(0.2);
+    opacity: 0.4;
   }
 }
 @keyframes flow-coin {
@@ -2320,7 +2699,8 @@ a.mandate-title:hover {
   .plan-card-link,
   .notice,
   .cap-meter,
-  .rhythm {
+  .rhythm,
+  .steps-panel {
     border: 1px solid CanvasText;
   }
 }
@@ -2348,9 +2728,13 @@ a.mandate-title:hover {
   gap: var(--s3);
   justify-items: start;
   padding: clamp(0.85rem, 4vw, 1.5rem);
-  border: 1px solid color-mix(in oklab, var(--accent) 42%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--accent) 48%, var(--line));
   border-radius: 0.7rem;
   background: color-mix(in oklab, var(--accent-tint) 34%, var(--surface-2));
+}
+.confirm-paused {
+  border-color: var(--line-strong);
+  background: var(--surface-2);
 }
 .confirm-head {
   width: 100%;
@@ -2379,9 +2763,10 @@ a.mandate-title:hover {
 }
 .confirm-inline {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s3);
   padding: var(--s4);
-  border: 1px solid color-mix(in oklab, var(--danger) 40%, var(--line));
+  border: 1px solid color-mix(in oklab, var(--danger) 45%, var(--line));
   border-inline-start: 3px solid var(--danger);
   border-radius: var(--r-control);
   background: var(--danger-tint);
@@ -2397,37 +2782,101 @@ a.mandate-title:hover {
   padding-block-start: var(--s1);
 }
 
+.steps-panel {
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: 0.7rem;
+  padding: clamp(0.75rem, 3.5vw, 1.15rem);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s3);
+  width: 100%;
+}
+.steps-panel-head {
+  padding-block-end: var(--s2);
+  border-block-end: 1px solid var(--line);
+}
 .steps-run {
   list-style: none;
   padding: 0;
   margin: 0;
   display: grid;
-  gap: var(--s2);
+  gap: var(--s3);
 }
 .step-run {
   display: flex;
   gap: var(--s3);
-  align-items: baseline;
+  align-items: flex-start;
+}
+.step-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s1) var(--s3);
+  flex: 1;
+  min-width: 0;
+}
+.step-label {
+  font-weight: 500;
+  color: var(--ink);
+}
+.step-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--s2);
+}
+.step-tag {
+  font-size: var(--t-xs);
+  font-weight: 600;
+  padding: 0.12rem 0.55rem;
+  border-radius: 999px;
+  border: 1px solid var(--field-line);
+  background: var(--surface);
+  color: var(--ink-2);
+}
+.step-tag-wallet,
+.step-tag-block {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.step-tag-done {
+  background: var(--ok-tint);
+  border-color: color-mix(in oklab, var(--ok) 45%, transparent);
+  color: var(--ok);
+}
+.step-tag-failed {
+  background: var(--danger-tint);
+  border-color: color-mix(in oklab, var(--danger) 45%, transparent);
+  color: var(--danger);
+}
+.step-tag-pending {
+  background: var(--warn-tint);
+  border-color: color-mix(in oklab, var(--warn) 45%, transparent);
+  color: var(--warn);
 }
 .step-dot {
   flex: none;
-  width: 1.6rem;
-  height: 1.6rem;
+  width: 1.65rem;
+  height: 1.65rem;
   border-radius: 50%;
   display: inline-grid;
   place-items: center;
   font-family: var(--font-mono);
   font-size: var(--t-xs);
   font-weight: 700;
-  background: var(--surface-2);
+  background: var(--surface);
   color: var(--ink-2);
-  border: 1px solid var(--line-strong);
+  border: 1.5px solid var(--field-line);
 }
 .step-dot .icon {
   width: 0.9rem;
   height: 0.9rem;
 }
-.step-wallet .step-dot {
+.step-wallet .step-dot,
+.step-block .step-dot {
   background: var(--accent-tint);
   color: var(--accent);
   border-color: var(--accent);
@@ -2435,12 +2884,17 @@ a.mandate-title:hover {
 .step-done .step-dot {
   background: var(--ok-tint);
   color: var(--ok);
-  border-color: transparent;
+  border-color: var(--ok);
 }
 .step-failed .step-dot {
   background: var(--danger-tint);
   color: var(--danger);
-  border-color: transparent;
+  border-color: var(--danger);
+}
+.step-pending .step-dot {
+  background: var(--warn-tint);
+  color: var(--warn);
+  border-color: var(--warn);
 }
 
 .other-ways {

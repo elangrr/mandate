@@ -103,18 +103,48 @@ test("while the realm waits for approval: a calm state, no errors", async ({ pag
     await page.setViewportSize({ width: w, height: h });
     for (const scheme of ["light", "dark"] as const) {
       await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
-      await page.goto("./#/plan/1");
-      await expect(page.getByRole("heading", { name: "Deployed, waiting for the network’s approval" })).toBeVisible();
-      await page.waitForTimeout(250);
-      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-      expect(overflow, `waiting-plan ${size}: no sideways scroll`).toBeLessThanOrEqual(0);
-      await page.screenshot({ path: `e2e/out/shots/onyx-waiting-${size}-${scheme}.png`, fullPage: true });
+      for (const [prefix, url] of [
+        ["onyx-waiting", "./#/plan/1"],
+        ["waiting-home", "./"],
+        ["waiting-mine", `./#/mine?a=${paid}`],
+      ] as const) {
+        await page.goto(url);
+        await expect(page.getByRole("heading", { name: "Deployed, waiting for the network’s approval" })).toBeVisible();
+        await page.waitForTimeout(200);
+        const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        expect(overflow, `${prefix} ${size}: no sideways scroll`).toBeLessThanOrEqual(0);
+        await page.screenshot({ path: `e2e/out/shots/${prefix}-${size}-${scheme}.png`, fullPage: true });
+      }
     }
   }
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
   await page.goto("./#/how");
   await expect(page.getByRole("heading", { level: 1 })).toHaveText("How Mandate works");
+});
+
+test("chain read error: clear recovery card, no uncaught errors", async ({ page }) => {
+  await page.route(process.env.MD_RPC!, (route) =>
+    route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "node unavailable" } }) }),
+  );
+  mkdirSync("e2e/out/shots", { recursive: true });
+  for (const [w, h, size] of [
+    [1280, 800, "desktop"],
+    [390, 844, "phone"],
+  ] as const) {
+    await page.setViewportSize({ width: w, height: h });
+    for (const scheme of ["light", "dark"] as const) {
+      await page.emulateMedia({ colorScheme: scheme, reducedMotion: "reduce" });
+      await page.goto("./#/plan/1");
+      await expect(page.getByRole("alert")).toBeVisible();
+      await page.waitForTimeout(200);
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      expect(overflow, `read-error ${size}: no sideways scroll`).toBeLessThanOrEqual(0);
+      await page.screenshot({ path: `e2e/out/shots/read-error-${size}-${scheme}.png`, fullPage: true });
+    }
+  }
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
 });
 
 test("keyboard: skip link first, focus lands on the new page", async ({ page }) => {
@@ -142,6 +172,7 @@ const shots: [string, string][] = [
   ["mine", `./#/mine?a=${paid}`],
   ["creator", `./#/creator/${fluxen}`],
   ["how", "./#/how"],
+  ["not-found", "./#/does-not-exist"],
 ];
 for (const [w, h, size] of [
   [1280, 800, "desktop"],

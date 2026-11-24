@@ -59,33 +59,44 @@ const STEP_NOTE: Record<StepState, string> = {
   pending: ": not on chain yet",
 };
 
+const STEP_BADGE: Record<StepState, string> = {
+  waiting: "Waiting",
+  wallet: "Approve in Adena",
+  block: "Waiting for network",
+  done: "Done",
+  failed: "Not done",
+  pending: "Not on chain yet",
+};
+
 function Steps({ steps }: { steps: Step[] }) {
   if (steps.length === 0) return null;
   return (
-    <ol className="steps-run">
-      {steps.map((s, i) => (
-        <li key={i} className={`step-run step-${s.state}`}>
-          <span className="step-dot" aria-hidden="true">
-            {s.state === "done" ? <Icon name="check" /> : s.state === "failed" ? <Icon name="alert" /> : s.state === "pending" ? <Icon name="clock" /> : i + 1}
-          </span>
-          <span>
-            {s.label}
-            <span className="visually-hidden">{STEP_NOTE[s.state]}</span>
-            {s.state === "wallet" && <span className="muted small"> · approve it in Adena</span>}
-            {s.state === "block" && <span className="muted small"> · waiting for the network</span>}
-            {s.state === "pending" && <span className="muted small"> · not on chain yet</span>}
-            {s.hash && (
-              <>
-                {" "}
-                <a href={explorerTx(s.hash)} target="_blank" rel="noreferrer noopener" className="ext small">
-                  transaction <Icon name="external" />
-                </a>
-              </>
-            )}
-          </span>
-        </li>
-      ))}
-    </ol>
+    <div className="steps-panel">
+      <div className="steps-panel-head">
+        <span className="console-kicker">Approval progress</span>
+      </div>
+      <ol className="steps-run">
+        {steps.map((s, i) => (
+          <li key={i} className={`step-run step-${s.state}`}>
+            <span className="step-dot" aria-hidden="true">
+              {s.state === "done" ? <Icon name="check" /> : s.state === "failed" ? <Icon name="alert" /> : s.state === "pending" ? <Icon name="clock" /> : i + 1}
+            </span>
+            <span className="step-main">
+              <span className="step-label">{s.label}</span>
+              <span className="visually-hidden">{STEP_NOTE[s.state]}</span>
+              <span className="step-meta">
+                <span className={`step-tag step-tag-${s.state} mono`}>{STEP_BADGE[s.state]}</span>
+                {s.hash && (
+                  <a href={explorerTx(s.hash)} target="_blank" rel="noreferrer noopener" className="ext small">
+                    transaction <Icon name="external" />
+                  </a>
+                )}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 
@@ -326,16 +337,18 @@ function WalletGate({ children }: { children: (address: string) => ReactNode }) 
   const w = useWallet();
   if (!w.installed)
     return (
-      <p className="notice">
+      <div className="notice wallet-gate-notice">
         <Icon name="alert" />
-        <span>
-          Subscribing here needs the{" "}
-          <a href="https://adena.app" target="_blank" rel="noreferrer noopener">
-            Adena wallet
-          </a>{" "}
-          in this browser.
-        </span>
-      </p>
+        <div>
+          <p>
+            Subscribing here needs the{" "}
+            <a href="https://adena.app" target="_blank" rel="noreferrer noopener" className="ext">
+              Adena wallet <Icon name="external" />
+            </a>{" "}
+            in this browser.
+          </p>
+        </div>
+      </div>
     );
   if (!w.address)
     return (
@@ -605,11 +618,11 @@ function SubscribeBody({
       const leftover = st.leftover;
       const need = st.deposit + st.fees + plan.amount + rules.feeAllowanceUgnot;
       return (
-        <div className="confirm">
+        <div className={busy ? "confirm confirm-paused" : "confirm"}>
           <div className="confirm-head">
             <span className="console-kicker">
-              <span className="status-dot status-dot-accent" aria-hidden="true" />
-              Ready to sign
+              <span className={busy ? "status-dot status-dot-signal" : "status-dot status-dot-accent"} aria-hidden="true" />
+              {busy ? busyLabel.replace(/…$/, "") : st.resume ? "Permission on chain · 1 step left" : "Ready to sign"}
             </span>
             <span className="mono small muted">Cap {gnot(st.cap)} GNOT / {period(plan.period)}</span>
           </div>

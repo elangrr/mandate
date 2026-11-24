@@ -1,7 +1,7 @@
-// The picture of the flow: the supporter sets a hard cap ceiling once, the
-// creator's collector asks for each period's payment, and the realm checks
-// who, how much and when before the coins move. CSS animates it (styles.css,
-// "flow-"); under prefers-reduced-motion it is a still, complete console diagram.
+// The picture of the flow: the supporter sets a cap once, the creator's
+// collector asks for each period's payment, and the realm checks who, how
+// much and when before the coins move. CSS animates it (styles.css,
+// "flow-"); under prefers-reduced-motion or Pause it is a still picture.
 
 import { useState } from "react";
 import { Icon } from "./parts";
@@ -15,11 +15,11 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
   return (
     <figure className={paused ? "flow flow-paused" : "flow"}>
       <div className="flow-header">
-        <span className="console-kicker">Payment channel · live telemetry</span>
-        <span className="flow-cap-pill mono">CAP CEILING {cap} GNOT / {period.toUpperCase()}</span>
+        <span className="console-kicker">How a payment moves · illustration</span>
+        <span className="flow-cap-pill mono">Example cap: {cap} GNOT / {period}</span>
       </div>
 
-      {/* Wide instrument schematic */}
+      {/* Wide schematic */}
       <svg viewBox="0 0 720 306" role="img" aria-label={label} className="flow-svg">
         <defs>
           <pattern id="flow-grid" width="24" height="24" patternUnits="userSpaceOnUse">
@@ -27,11 +27,10 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
           </pattern>
         </defs>
 
-        {/* Subtle instrument background well + grid */}
         <rect x="8" y="8" width="704" height="290" rx="14" className="flow-frame-bg" />
         <rect x="8" y="8" width="704" height="290" rx="14" fill="url(#flow-grid)" className="flow-frame" />
 
-        {/* Hard cap ceiling band across the top of the channel */}
+        {/* Cap ceiling band across the top of the channel */}
         <rect x="10" y="10" width="700" height="58" rx="12" className="flow-ceiling-band" />
         <line x1="16" y1="68" x2="704" y2="68" className="flow-ceiling-line" />
         <g className="flow-cap">
@@ -96,7 +95,7 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
             </g>
           ))}
           <text x="360" y="244" textAnchor="middle" className="flow-micro">
-            THE RULEBOOK · ENFORCED ON CHAIN
+            THE RULEBOOK
           </text>
         </g>
 
@@ -121,7 +120,7 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
           </text>
         </g>
 
-        {/* Monthly rhythm pulse baseline */}
+        {/* Example period timeline */}
         <g className="flow-timeline">
           <line x1="34" y1="274" x2="686" y2="274" className="flow-time-axis" />
           {[0, 1, 2, 3, 4, 5].map((i) => {
@@ -139,7 +138,7 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
         </g>
       </svg>
 
-      {/* Stacked console schematic for narrow screens */}
+      {/* Stacked schematic for narrow screens */}
       <svg viewBox="0 0 340 540" role="img" aria-label={label} className="flow-svg flow-svg-narrow">
         <defs>
           <pattern id="flow-grid-narrow" width="24" height="24" patternUnits="userSpaceOnUse">

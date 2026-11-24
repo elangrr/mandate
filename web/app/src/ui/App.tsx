@@ -5,9 +5,39 @@ import { parseRoute, useRoute, useTheme, type Theme } from "./hooks";
 import { LiveProvider } from "./live";
 import { PendingNotices } from "./actions";
 import { AllPlans, Creator, Home, How, Mine, PlanPage } from "./pages";
-import { Empty, Icon } from "./parts";
+import { Icon } from "./parts";
 import { PriceFootnote } from "./price";
 import { useWallet, WalletProvider } from "./WalletContext";
+
+function NotFound() {
+  return (
+    <section className="notfound card" aria-labelledby="notfound-title">
+      <div className="notfound-rail">
+        <span className="console-kicker">
+          <span className="status-dot status-dot-signal" aria-hidden="true" />
+          404 · Page not found
+        </span>
+      </div>
+      <div className="notfound-body">
+        <p className="notfound-code mono" aria-hidden="true">
+          404
+        </p>
+        <div>
+          <h1 id="notfound-title">This page does not exist.</h1>
+          <p className="muted">Check the address in your browser, or start from the home page or the list of plans.</p>
+          <div className="hero-actions">
+            <a className="btn btn-primary" href="#/">
+              Go to the start
+            </a>
+            <a className="btn btn-quiet" href="#/plans">
+              See all plans
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function Routes() {
   const { path, query } = parseRoute(useRoute());
@@ -20,11 +50,7 @@ function Routes() {
   if (path === "/creator") return <Creator address="" />;
   if ((m = /^\/plan\/([^/]+)$/.exec(path))) return <PlanPage id={m[1]} />;
   if ((m = /^\/creator\/([^/]+)$/.exec(path))) return <Creator address={m[1]} />;
-  return (
-    <Empty>
-      This page does not exist. <a href="#/">Go to the start</a>
-    </Empty>
-  );
+  return <NotFound />;
 }
 
 function titleFor(path: string): string {
@@ -133,13 +159,34 @@ class Boundary extends Component<{ children: ReactNode; resetKey: string }, { fa
   render() {
     if (!this.state.failed) return this.props.children;
     return (
-      <div className="notice notice-error" role="alert">
-        <Icon name="alert" />
-        <p>
-          Something on this page could not be shown: the chain returned a value this page does not understand. If you were approving something in Adena,
-          look at <a href="#/mine">your mandates</a> before repeating it. Or <a href="#/">go to the start page</a>.
-        </p>
-      </div>
+      <section className="error-card card" role="alert" aria-labelledby="boundary-title">
+        <div className="error-card-rail">
+          <span className="error-card-beacon mono">
+            <span className="status-dot status-dot-danger" aria-hidden="true" />
+            Display error
+          </span>
+        </div>
+        <div className="error-card-body">
+          <div className="error-card-mark" aria-hidden="true">
+            <Icon name="alert" />
+          </div>
+          <div>
+            <h1 id="boundary-title">This page could not be shown</h1>
+            <p>
+              Something on this page could not be shown: the chain returned a value this page does not understand. If you were approving something in Adena,
+              look at <a href="#/mine">your mandates</a> before repeating it. Or <a href="#/">go to the start page</a>.
+            </p>
+            <div className="confirm-actions">
+              <a className="btn btn-primary" href="#/mine">
+                My mandates
+              </a>
+              <a className="btn btn-quiet" href="#/">
+                Go to the start
+              </a>
+            </div>
+          </div>
+        </div>
+      </section>
     );
   }
 }
@@ -183,10 +230,10 @@ function Shell() {
         </div>
         {w.error && (
           <div className="top-alert-wrap">
-            <p className="notice notice-error" role="alert">
+            <div className="notice notice-error top-alert" role="alert">
               <Icon name="alert" />
-              <span>{w.error}</span>
-            </p>
+              <p>{w.error}</p>
+            </div>
           </div>
         )}
       </header>
