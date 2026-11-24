@@ -1,0 +1,13 @@
+# sha256 of every file uploaded by the deploy command (r/mandate, namespace set).
+# Reproduce: git archive f0bbdc7 | tar -x; scripts/set-namespace.sh g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8; cd r/mandate; find . -type f | sort | xargs sha256sum
+353e216fb6e6d44c90b72b61e805b6d43e46f71d6d7436e0eca83492e685a48e  escape.gno
+a1f22960f34127047e94f41382cefe9a652cfe53b49a1124333ef61c471ffa40  filetests/z_events_filetest.gno
+368ef365310cabf1dc466f51a921c1e66c1dc9f469b1963a3043cffc368710bb  filetests/z_pages_filetest.gno
+347956a60df7a652a2f7245adfddaad971b557e833e9f83b2a96e54fd211f7b8  gnomod.toml
+8c913707f1fad2a783ca3df8cc9e848bda5dc4cb6868ba73f931eefb1482b3f2  mandate.gno
+2b0252ca46236e9049f5b2d4a320080d3ae84b4af2e6bb08b7b539882074fe82  mandate_test.gno
+b80890d710f02c43a7e7e5b0f2703ca94bd550a996bc7de535428505b2c6f56a  reads.gno
+32ee57d2745feea464b1b0d1026de5b234f61749e0e424dddd02c6828d2042c1  render.gno
+77313f5d8125cf346067fbe4c51300103e81c53adf993a931bc3e65f06255e9a  render_test.gno
+7162df0fe750b671f39869adaed2b0d99804c2ee9e3e6f8a17fe6118501e1414  store.gno
+c4cc1556d0e70b8236acc31a7135858fdb9b0594dc56a5f99044b8e650116091  store_test.gno

@@ -8,7 +8,7 @@ import (
 	"gno.land/p/nt/uassert/v0"
 )
 
-const base = "/r/mandate_dev/mandate"
+const base = "/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 
 func has(t *testing.T, page, want, what string) {
 	t.Helper()
@@ -61,11 +61,11 @@ func TestRenderHelp(cur realm, t *testing.T) {
 	resetState()
 	h := renders(t, "help")
 	net := "-broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443"
-	has(t, h, "gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Offer -args \"TITLE\" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 60000000 "+net+" YOUR_KEY", "offer command")
+	has(t, h, "gnokey maketx call -pkgpath gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate -func Offer -args \"TITLE\" -args 1000000 -args 604800 -gas-fee 100000ugnot -gas-wanted 60000000 "+net+" YOUR_KEY", "offer command")
 	has(t, h, "the joiner included, are refused", "format characters explained")
 	has(t, h, "-func SetCollectorKey -args GPUB_OF_COLLECTOR_KEY", "collector key command")
 	has(t, h, "-func Pull -send AMOUNTugnot -master SUPPORTER_ADDRESS -gas-fee 20000ugnot -gas-wanted 20000000 "+net+" COLLECTOR_KEY", "pull command")
-	has(t, h, "gnokey maketx session create -pubkey COLLECTOR_GPUB -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit PRICE_PLUS_100000ugnot -spend-period PERIOD_SECONDS -expires-at UNIX_TIME", "session command")
+	has(t, h, "gnokey maketx session create -pubkey COLLECTOR_GPUB -allow-paths vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate -spend-limit PRICE_PLUS_100000ugnot -spend-period PERIOD_SECONDS -expires-at UNIX_TIME", "session command")
 	has(t, h, "gnokey maketx session revoke -pubkey COLLECTOR_GPUB", "revoke")
 	has(t, h, "-func Cancel -args YOUR_ADDRESS -args COLLECTOR_ADDRESS", "cancel")
 	has(t, h, "gnokey query auth/accounts/PAYER/session/COLLECTOR_ADDRESS -remote https://rpc.onyx.testnets.gno.land:443", "session check")
@@ -106,8 +106,8 @@ func TestRenderPages(cur realm, t *testing.T) {
 
 	pp = renders(t, "plan/1")
 	exp := itoa(now() + 365*day)
-	has(t, pp, "gnokey maketx session create -pubkey "+gpubA+" -allow-paths vm/exec:gno.land/r/mandate_dev/mandate -spend-limit 1100000ugnot -spend-period 604800 -expires-at "+exp+" -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY", "session create")
-	has(t, pp, "gnokey maketx call -pkgpath gno.land/r/mandate_dev/mandate -func Subscribe -args 1 -args "+sessA.String()+" -args "+exp+" -gas-fee 100000ugnot", "subscribe command")
+	has(t, pp, "gnokey maketx session create -pubkey "+gpubA+" -allow-paths vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate -spend-limit 1100000ugnot -spend-period 604800 -expires-at "+exp+" -gas-fee 100000ugnot -gas-wanted 60000000 -broadcast -chainid onyx-1 -remote https://rpc.onyx.testnets.gno.land:443 YOUR_KEY", "session create")
+	has(t, pp, "gnokey maketx call -pkgpath gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate -func Subscribe -args 1 -args "+sessA.String()+" -args "+exp+" -gas-fee 100000ugnot", "subscribe command")
 	has(t, pp, "at most 1.1 GNOT every week", "cap in words")
 	has(t, pp, "1 payment in the current period", "paid count")
 	has(t, pp, "0 active mandates have not paid yet", "unpaid count")
@@ -198,7 +198,7 @@ func TestRenderInjection(cur realm, t *testing.T) {
 // stripKnown removes escaped "<" and the realm's own placeholders in code
 // spans, so any "<" left would come from a title.
 func stripKnown(pg string) string {
-	for _, k := range []string{`\<`, "`/r/mandate_dev/mandate:payer/<your address>`", "`gnokey maketx session revoke -pubkey <its gpub1 key> ... YOUR_KEY`"} {
+	for _, k := range []string{`\<`, "`/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate:payer/<your address>`", "`gnokey maketx session revoke -pubkey <its gpub1 key> ... YOUR_KEY`"} {
 		pg = strings.ReplaceAll(pg, k, "")
 	}
 	return pg

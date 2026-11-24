@@ -1,4 +1,4 @@
-// PKGPATH: gno.land/r/mandate_dev/mandate/filetests/z_events_filetest
+// PKGPATH: gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate/filetests/z_events_filetest
 
 // Every state change emits an event. Pulled, CreditDropped and the paid-time
 // values (kept, carried) above 0 need a Pull, which only a session-signed
@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"gno.land/r/mandate_dev/mandate"
+	"gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 )
 
 const (
@@ -66,7 +66,7 @@ func main(cur realm) {
 //         "value": "604800"
 //       }
 //     ],
-//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 //   },
 //   {
 //     "type": "CollectorKeySet",
@@ -84,7 +84,7 @@ func main(cur realm) {
 //         "value": "g1psdsf789f4xw3qrpjue54g2h28syd09yfkrxdh"
 //       }
 //     ],
-//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 //   },
 //   {
 //     "type": "Subscribed",
@@ -122,7 +122,7 @@ func main(cur realm) {
 //         "value": "0"
 //       }
 //     ],
-//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 //   },
 //   {
 //     "type": "Cancelled",
@@ -148,7 +148,7 @@ func main(cur realm) {
 //         "value": "0"
 //       }
 //     ],
-//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 //   },
 //   {
 //     "type": "Subscribed",
@@ -186,7 +186,7 @@ func main(cur realm) {
 //         "value": "0"
 //       }
 //     ],
-//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 //   },
 //   {
 //     "type": "MandatePruned",
@@ -208,7 +208,7 @@ func main(cur realm) {
 //         "value": "0"
 //       }
 //     ],
-//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 //   },
 //   {
 //     "type": "Subscribed",
@@ -246,6 +246,6 @@ func main(cur realm) {
 //         "value": "0"
 //       }
 //     ],
-//     "pkg_path": "gno.land/r/mandate_dev/mandate"
+//     "pkg_path": "gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 //   }
 // ]

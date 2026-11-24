@@ -35,7 +35,7 @@ var (
 	payer2   = testutils.TestAddress("md_payer2")
 	stranger = testutils.TestAddress("md_stranger")
 
-	realmAddr = chain.PackageAddress("gno.land/r/mandate_dev/mandate")
+	realmAddr = chain.PackageAddress("gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate")
 )
 
 // Two real session keys and the addresses the chain derives from them
@@ -46,7 +46,7 @@ const (
 	gpubB = "gpub1pgfj7ard9eg82cjtv4u4xetrwqer2dntxyfzxz3pqtwu0rahac8cw2fw7fmlan472nfyprlgdp4c034vmwyumy4yksl67587x7p"
 	sessB = address("g1valkxsym77y3qlj5fq9h4p64y73l3masvuxav0")
 
-	selfPaths = "vm/exec:gno.land/r/mandate_dev/mandate"
+	selfPaths = "vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"
 	gnot      = int64(1_000_000)
 	day       = int64(86400)
 )
@@ -460,11 +460,11 @@ func TestPullRules(cur realm, t *testing.T) {
 		{},
 		{"*"},
 		{"vm/exec"},
-		{"vm/exec:gno.land/r/mandate_dev"},
-		{"vm/exec:gno.land/r/mandate_dev/mandat"},
-		{"vm/exec:gno.land/r/mandate_dev/mandate/sub"},
-		{"vm/exec:gno.land/r/mandate_dev/mandate", "bank/send"},
-		{"vm/exec:gno.land/r/mandate_dev/mandate", "vm/exec:gno.land/r/mandate_dev/mandate"},
+		{"vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8"},
+		{"vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandat"},
+		{"vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate/sub"},
+		{"vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate", "bank/send"},
+		{"vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate", "vm/exec:gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate"},
 		{"bank/send"},
 	} {
 		panicsLocal(t, cur, "scoped to exactly", func() { checkPull(true, sessA, bad, payer, ugnot(2*gnot), now()) }, "paths "+strings.Join(bad, ","))
