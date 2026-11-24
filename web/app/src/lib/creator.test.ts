@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  canStillBeKey,
   mustRemove,
   normalizeKeyText,
   amountProblem,
@@ -47,7 +48,9 @@ describe("price and period", () => {
     for (const bad of ["", "abc", "1.0000001", "-1", "1e3", "0x10", "1.2.3"]) expect(parseGnot(bad), bad).toBeNull();
   });
   it("never guesses a decimal comma, a space or an underscore", () => {
-    for (const bad of ["0,5", "1,5", "1.000,50", "1 5", "1_000", "1,00", "10,0000", ",5", "1,000,", "12345,678"]) expect(parseGnot(bad), bad).toBeNull();
+    for (const bad of ["0,5", "1,5", "1.000,50", "1 5", "1_000", "1,00", "10,0000", ",5", "1,000,", "12345,678", "0,100", "00,100", "000,100", "0,000,100", "0,100.5"])
+      expect(parseGnot(bad), bad).toBeNull();
+    expect(parseGnot("100,000")).toBe(100_000_000_000n);
     expect(amountProblem(parseGnot("0,5"))).toMatch(/dot for decimals/);
   });
   it("enforces 0.1 GNOT to 1,000,000 GNOT", () => {
@@ -89,8 +92,14 @@ describe("collector key", () => {
   it("derives the address of a secp256k1 gpub", async () => {
     expect(await checkCollectorKey(`  ${GPUB}\n`, CREATOR, never)).toEqual({ ok: true, gpub: GPUB, address: COLLECTOR });
   });
-  it("accepts the key as gnokey list prints it, with its trailing comma", async () => {
+  it("accepts the key as gnokey list prints it: a pub: label, quotes, a trailing comma, all capitals", async () => {
     expect(normalizeKeyText(` ${GPUB}, `)).toBe(GPUB);
+    for (const t of [`pub: ${GPUB},`, `"${GPUB}"`, `'${GPUB}',`, `PUB: "${GPUB}"`, GPUB.toUpperCase()]) {
+      expect(normalizeKeyText(t), t).toBe(GPUB);
+      expect(await checkCollectorKey(t, CREATOR, never), t).toEqual({ ok: true, gpub: GPUB, address: COLLECTOR });
+    }
+    const mixed = "gpub1" + GPUB.slice(5, 20).toUpperCase() + GPUB.slice(20);
+    expect(await checkCollectorKey(mixed, CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/mixes capital and small letters/) });
     expect(await checkCollectorKey(`${GPUB},`, CREATOR, never)).toEqual({ ok: true, gpub: GPUB, address: COLLECTOR });
   });
   it("anything that does not start with gpub1 is marked for removal: it may be a secret", async () => {
@@ -113,6 +122,15 @@ describe("collector key", () => {
     expect(await checkCollectorKey("", CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/starts with gpub1/) });
     expect(await checkCollectorKey("gpub1 abc", CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/one word starting with gpub1/) });
     expect(await checkCollectorKey(GPUB.slice(0, -1) + "q", CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/not a secp256k1/) });
+  });
+  it("a key equal to the published one is 'already published', never a key to publish again", async () => {
+    expect(await checkCollectorKey(GPUB, CREATOR, never, GPUB)).toMatchObject({ ok: false, current: true, address: COLLECTOR, reason: expect.stringMatching(/already your published collector key/) });
+    expect(await checkCollectorKey(`pub: ${GPUB},`, CREATOR, never, GPUB)).toMatchObject({ ok: false, current: true });
+    expect(await checkCollectorKey(GPUB, CREATOR, never, "gpub1other")).toMatchObject({ ok: true });
+  });
+  it("while typing, text that can no longer become a key is caught at once", () => {
+    for (const ok of ["", "g", "gp", "gpub", "gpub1", GPUB.slice(0, 30), "p", "pub", "pub:", "pub: gp", '"gpu', "PUB: G"]) expect(canStillBeKey(ok), ok).toBe(true);
+    for (const bad of ["a", "ab", "0x", "abandon", "gpa", "gpub2", "pub:x", "12"]) expect(canStillBeKey(bad), bad).toBe(false);
   });
   it("refuses the creator's own key and a key whose address is already an account", async () => {
     expect(await checkCollectorKey(GPUB, COLLECTOR, never)).toMatchObject({ ok: false, address: COLLECTOR, reason: expect.stringMatching(/your own wallet/) });

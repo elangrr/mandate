@@ -3169,3 +3169,10 @@ select.input {
   border: 0;
   min-width: 0;
 }
+/* a command that must not wrap inside a flag: kept on its lines, scrolled sideways inside its box */
+.code-block-scroll {
+  white-space: pre;
+  overflow-wrap: normal;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+}

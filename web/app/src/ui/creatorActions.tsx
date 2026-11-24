@@ -15,6 +15,7 @@ import {
   collectorCommand,
   depositFor,
   MEASURED_GAS,
+  canStillBeKey,
   mustRemove,
   REMOVED_MESSAGE,
   type KeyCheck,
@@ -87,10 +88,29 @@ function CreatorConsole({ creator }: { creator: string }) {
   if (s.status === "loading") return <Loading what="your creator record" />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
   const v = s.value;
+  /** what a panel's button says while it cannot be used: its own step on its way, or the other panel's */
+  const waitLabel = (panel: "key" | "plan") => {
+    const own = pending ? (/collector key/.test(pending.label) ? "key" : "plan") === panel : active === panel;
+    return own ? "Waiting for this step to reach the chain…" : "Waiting for the other step…";
+  };
   return (
     <div className="publish-grid">
-      <KeyPanel creator={creator} view={v} busyElsewhere={pending !== null || active === "plan"} onBusy={(b) => setActive(b ? "key" : null)} onChanged={refresh} />
-      <PlanPanel creator={creator} view={v} busyElsewhere={pending !== null || active === "key"} onBusy={(b) => setActive(b ? "plan" : null)} onChanged={refresh} />
+      <KeyPanel
+        creator={creator}
+        view={v}
+        busyElsewhere={pending !== null || active === "plan"}
+        waitLabel={waitLabel("key")}
+        onBusy={(b) => setActive(b ? "key" : null)}
+        onChanged={refresh}
+      />
+      <PlanPanel
+        creator={creator}
+        view={v}
+        busyElsewhere={pending !== null || active === "key"}
+        waitLabel={waitLabel("plan")}
+        onBusy={(b) => setActive(b ? "plan" : null)}
+        onChanged={refresh}
+      />
       <p className="small">
         <a href={`#/creator/${creator}`}>Your creator page</a> shows your plans, payments and key as the chain has them.
       </p>
@@ -104,12 +124,14 @@ function KeyPanel({
   creator,
   view,
   busyElsewhere,
+  waitLabel,
   onBusy,
   onChanged,
 }: {
   creator: string;
   view: CreatorView;
   busyElsewhere: boolean;
+  waitLabel: string;
   onBusy: (busy: boolean) => void;
   onChanged: () => void;
 }) {
@@ -128,7 +150,7 @@ function KeyPanel({
     setDone(false);
     try {
       invalidate();
-      const c = await checkCollectorKey(text, creator, (a) => read.accountExists(a));
+      const c = await checkCollectorKey(text, creator, (a) => read.accountExists(a), view.payee?.collectorKey ?? null);
       if (!c.ok && c.cleared) setText(""); // never keep a possible secret in the page
       setChecked(c);
       if (!c.ok) document.getElementById(`${id}-key`)?.focus();
@@ -143,10 +165,9 @@ function KeyPanel({
     onBusy(true);
     const out = await r.run(creator, async () => {
       // read again right before the popup: the key's address, the creator's record and the balance
-      const again = await checkCollectorKey(c.gpub, creator, (a) => read.accountExists(a));
-      if (!again.ok) return again.reason;
       const payee = await read.payee(creator);
-      if (payee?.collectorKey === c.gpub) return "This key is already your published collector key.";
+      const again = await checkCollectorKey(c.gpub, creator, (a) => read.accountExists(a), payee?.collectorKey ?? null);
+      if (!again.ok) return again.reason;
       const gp = await read.gasPrice();
       const short = await balanceShort(creator, depositFor("key", { hasRecord: !!payee, hasKey: !!payee?.collectorKey }) + feeEstimate(MEASURED_GAS.setKey, gp));
       if (short) return short;
@@ -168,7 +189,8 @@ function KeyPanel({
       // the panel states only what was just read: check the key again, or drop the old verdict
       try {
         invalidate();
-        setChecked(await checkCollectorKey(c.gpub, creator, (a) => read.accountExists(a)));
+        const payee = await read.payee(creator);
+        setChecked(await checkCollectorKey(c.gpub, creator, (a) => read.accountExists(a), payee?.collectorKey ?? null));
       } catch {
         setChecked(null);
       }
@@ -187,6 +209,11 @@ function KeyPanel({
     setChecked({ ok: false, reason: REMOVED_MESSAGE, address: null, cleared: true });
   }
 
+  // whenever the view is read again (a step confirmed later, another tab), a key equal to the published one is "already published", never a replace offer
+  const shown: KeyCheck | null =
+    checked?.ok && view.payee?.collectorKey === checked.gpub
+      ? { ok: false, reason: "This is already your published collector key: nothing to change.", address: checked.address, current: true }
+      : checked;
   const deposit = depositFor("key", { hasRecord: !!view.payee, hasKey: replacing });
   const fee = feeEstimate(MEASURED_GAS.setKey, view.gasPrice);
   const busy = r.busy || busyElsewhere;
@@ -246,6 +273,13 @@ function KeyPanel({
           rows={3}
           value={text}
           onChange={(e) => {
+            if (!canStillBeKey(e.target.value)) {
+              // it can no longer become gpub1…: it may be a secret that arrived without a paste event
+              setText("");
+              setDone(false);
+              setChecked({ ok: false, reason: REMOVED_MESSAGE, address: null, cleared: true });
+              return;
+            }
             setText(e.target.value);
             setChecked(null);
           }}
@@ -261,16 +295,16 @@ function KeyPanel({
           spellCheck={false}
           autoComplete="off"
           autoCapitalize="off"
-          aria-invalid={checked !== null && !checked.ok}
-          aria-describedby={`${id}-hint${checked && !checked.ok ? ` ${id}-err` : ""}`}
+          aria-invalid={shown !== null && !shown.ok && !shown.current}
+          aria-describedby={`${id}-hint${shown && !shown.ok ? ` ${id}-err` : ""}`}
         />
-        {checked && !checked.ok && (
-          <p id={`${id}-err`} className="field-error" role="alert">
-            {checked.reason}
-            {checked.address && (
+        {shown && !shown.ok && (
+          <p id={`${id}-err`} className={shown.current ? "notice notice-ok" : "field-error"} role={shown.current ? "status" : "alert"}>
+            {shown.reason}
+            {shown.address && (
               <>
                 {" "}
-                Its address: <span className="mono break">{checked.address}</span>.
+                Its address: <span className="mono break">{shown.address}</span>.
               </>
             )}
           </p>
@@ -282,11 +316,11 @@ function KeyPanel({
         </div>
       </form>
 
-      {checked?.ok && (
+      {shown?.ok && (
         <div className="confirm publish-confirm">
           <p className="confirm-sentence">
             {replacing ? "Replace your collector key with the key at " : "Publish the key at "}
-            <strong className="mono break">{checked.address}</strong>.
+            <strong className="mono break">{shown.address}</strong>.
           </p>
           <ul className="confirm-list">
             <li>It is a secp256k1 key, not your wallet’s own key, and its address has never received coins.</li>
@@ -295,8 +329,8 @@ function KeyPanel({
             </li>
           </ul>
           <div className="confirm-actions">
-            <button type="button" className="btn btn-primary" onClick={() => void publish(checked)} disabled={busy}>
-              {r.busy ? "Working…" : busyElsewhere ? "Waiting for the other step…" : replacing ? "Replace collector key" : "Publish collector key"}
+            <button type="button" className="btn btn-primary" onClick={() => void publish(shown)} disabled={busy}>
+              {r.busy ? "Working…" : busyElsewhere ? waitLabel : replacing ? "Replace collector key" : "Publish collector key"}
             </button>
           </div>
         </div>
@@ -317,12 +351,14 @@ function PlanPanel({
   creator,
   view,
   busyElsewhere,
+  waitLabel,
   onBusy,
   onChanged,
 }: {
   creator: string;
   view: CreatorView;
   busyElsewhere: boolean;
+  waitLabel: string;
   onBusy: (busy: boolean) => void;
   onChanged: () => void;
 }) {
@@ -520,7 +556,7 @@ function PlanPanel({
         </ul>
         <div className="confirm-actions">
           <button type="submit" className="btn btn-primary" disabled={busy}>
-            {r.busy ? "Working…" : busyElsewhere ? "Waiting for the other step…" : "Publish plan"}
+            {r.busy ? "Working…" : busyElsewhere ? waitLabel : "Publish plan"}
           </button>
         </div>
         </fieldset>
@@ -535,6 +571,8 @@ export function CollectorGuide({ address }: { address: string }) {
   const w = useWallet();
   // the address in the link, else the connected wallet's; never a placeholder in something to copy
   const payee = ADDRESS.test(address) ? address : w.address && ADDRESS.test(w.address) ? w.address : null;
+  const fromLink = ADDRESS.test(address);
+  const other = fromLink && w.address && ADDRESS.test(w.address) && w.address !== address ? w.address : null;
   const home = "~/mandate-collector";
   const cmd = collectorCommand({ payee: payee ?? "YOUR_ADDRESS", home, keyName: "collector" });
   const [copied, setCopied] = useState(false);
@@ -565,9 +603,10 @@ export function CollectorGuide({ address }: { address: string }) {
             <code>{`gnokey add -home ${home} collector\ngnokey list -home ${home}`}</code>
           </pre>
           <p className="small muted">
-            gnokey asks for a password and shows a recovery phrase. Mandate never asks for either. Write the phrase down offline, or do without it: a lost
-            collector key is simply replaced by a new one on the Publish page. Never send coins to this key: once its address holds any coin, the chain
-            refuses every new permission for it.
+            gnokey asks for a password and shows a recovery phrase. Mandate never asks for either. Write the phrase down and keep it offline, not on the
+            machine that runs the collector. If the key is lost, every existing supporter’s permission still names it: none of their payments can be taken
+            until each of them subscribes again with your new key. Never send coins to this key: once its address holds any coin, the chain refuses every
+            new permission for it.
           </p>
         </li>
         <li className="card">
@@ -606,12 +645,18 @@ export function CollectorGuide({ address }: { address: string }) {
           <p>It asks for the key’s password once per run.</p>
           {payee && (
             <>
-              <p>To run it unattended, every 10 minutes for example, store the password in a file only you can read, without it entering your shell history:</p>
+              <p>
+                To run it unattended, every 10 minutes for example, store the password in a file only you can read. In bash, this asks for it without echoing
+                it or keeping it in your shell history, and creates the file afresh:
+              </p>
               <pre className="code-block mono">
-                <code>{`(umask 077; read -rs -p "Collector key password: " p && printf '%s\\n' "$p" > ~/.mandate-collector-pass)`}</code>
+                <code>{`printf 'Collector key password: '; (umask 077; rm -f ~/.mandate-collector-pass; IFS= read -rs p && printf '%s\\n' "$p" > ~/.mandate-collector-pass); echo`}</code>
               </pre>
-              <p>Then add these two lines with crontab -e. Cron starts with a minimal PATH, so name the folders that hold gnokey, python3 and flock:</p>
-              <pre className="code-block mono">
+              <p>
+                Then add these two lines with crontab -e. They assume the Mandate repository is at ~/mandate. Cron starts with a minimal PATH, so name the
+                folders that hold gnokey, python3 and flock:
+              </p>
+              <pre className="code-block code-block-scroll mono" tabIndex={0} aria-label="Two lines for crontab; scroll sideways to read them whole">
                 <code>{`PATH=/usr/local/bin:/usr/bin:/bin:/home/YOU/go/bin\n*/10 * * * * cd ~/mandate && ${cmd} -insecure-password-stdin < ~/.mandate-collector-pass >> ~/mandate-collector.log 2>&1`}</code>
               </pre>
               <p className="small muted">
@@ -653,7 +698,13 @@ export function CollectorGuide({ address }: { address: string }) {
       </ol>
       <p className="small muted">
         Realm <span className="mono break">{config.realmPath}</span> on the {config.networkName} ({config.chainId}).{" "}
-        {payee && <>Filled in for {shortAddr(payee)}.</>}
+        {payee && (
+          <>
+            Filled in for {shortAddr(payee)}
+            {fromLink ? ", the address in the link" : ", your connected wallet"}
+            {other && <> (not your connected wallet, {shortAddr(other)})</>}.
+          </>
+        )}
       </p>
     </article>
   );

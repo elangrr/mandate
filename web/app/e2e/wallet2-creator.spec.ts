@@ -59,15 +59,14 @@ test("a collector key is checked before any popup: not a key, the creator's own 
   const { calls } = await installStandin(page, c, stranger);
   await openPublish(page);
   await shots(page, "publish-empty");
-  // a recovery phrase, typed: refused and removed from the page
+  // a recovery phrase, typed or inserted without a paste event: removed as soon as it cannot become gpub1…
   await keyField(page).fill("abandon ability able about above absent absorb abstract absurd abuse access accident");
-  await page.getByRole("button", { name: "Check this key" }).click();
-  await expect(page.getByText(/so the page removed it/)).toBeVisible();
   await expect(keyField(page)).toHaveValue("");
+  await expect(page.getByText(/so the page removed it/)).toBeVisible();
   // a private key in hex: the same
   await keyField(page).fill("0x" + "ab".repeat(32));
-  await page.getByRole("button", { name: "Check this key" }).click();
   await expect(keyField(page)).toHaveValue("");
+  await expect(page.getByText(/so the page removed it/)).toBeVisible();
   // pasted: never even shown
   await keyField(page).focus();
   await page.evaluate(() => {
@@ -106,6 +105,12 @@ test("publish a collector key: check, see its address, publish; the creator page
   expect(calls[0].messages[0].value).toMatchObject({ func: "SetCollectorKey", args: [k.gpub], caller: stranger.address, send: "" });
   expect(calls[0].commit).toBe(true);
   expect(options[0]).toEqual({ isVisibleResult: false });
+  // the same key again: it is the published one, so there is nothing to publish or replace
+  await keyField(page).fill(k.gpub);
+  await page.getByRole("button", { name: "Check this key" }).click();
+  await expect(page.getByText(/This is already your published collector key: nothing to change/)).toBeVisible();
+  await expect(page.getByRole("button", { name: /Replace collector key|Publish collector key/ })).toHaveCount(0);
+  await expect(keyField(page)).toHaveAttribute("aria-invalid", "false");
   await page.goto(`./#/creator/${stranger.address}`);
   await expect(page.locator(".collector-card")).toContainText(k.addr);
   await expect(page.locator(".collector-card .pill")).toHaveText("Ready");
@@ -221,7 +226,7 @@ test("a plan not on chain yet: the warning survives a reload and clears once the
   await expect(banner).toContainText("Publish the plan");
   await page.getByRole("button", { name: "Connect wallet to publish" }).click();
   // while it is pending, neither panel offers another approval
-  await expect(page.getByRole("button", { name: "Waiting for the other step…" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Waiting for this step to reach the chain…" })).toBeDisabled();
   await expect(page.getByLabel("Title")).toBeDisabled();
   await page.waitForTimeout(6_000);
   await page.getByRole("button", { name: "Check again" }).click();
@@ -258,6 +263,8 @@ test("the collector guide: the exact command for this creator, what it says, wha
   await expect(cmd).toContainText(`scripts/collect.sh -home ~/mandate-collector -key collector -payee ${fluxen.address} -remote ${process.env.MD_RPC}`);
   await expect(cmd).toContainText(`-chainid dev -realm ${c.realm}`);
   await expect(page.getByText(/\*\/10 \* \* \* \*/)).toBeVisible();
+  await expect(page.getByText(/assume the Mandate repository is at ~\/mandate/)).toBeVisible();
+  await expect(page.getByText(/the address in the link/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "When the key is blocked" })).toBeVisible();
   await shots(page, "collector-guide");
 });

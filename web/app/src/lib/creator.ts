@@ -48,7 +48,8 @@ export function titleProblem(title: string): string | null {
  */
 export function parseGnot(text: string): bigint | null {
   const t = text.trim();
-  const m = /^(\d{1,7}|\d{1,3}(?:,\d{3}){1,2})(?:\.(\d{1,6}))?$/.exec(t);
+  // grouped thousands start with 1 to 9: "0,100" is a decimal comma, never 100
+  const m = /^(\d{1,7}|[1-9]\d{0,2}(?:,\d{3}){1,2})(?:\.(\d{1,6}))?$/.exec(t);
   if (!m) return null;
   const whole = m[1].replace(/,/g, "");
   if (whole.length > 7) return null;
@@ -100,13 +101,23 @@ export function buildOffer(o: { payee: string } & OfferInput): MsgCall {
 
 /** What the page knows about a pasted collector key. */
 export type KeyCheck =
-  /** cleared: the text did not start with gpub1 and may be a secret, so the page removes it */
-  | { ok: false; reason: string; address: string | null; cleared?: boolean }
+  /** cleared: the text did not start with gpub1 and may be a secret, so the page removes it; current: it is the published key already */
+  | { ok: false; reason: string; address: string | null; cleared?: boolean; current?: boolean }
   | { ok: true; gpub: string; address: string };
 
-/** A pasted key as gnokey list prints it ("pub: gpub1..., path: ..."): one trailing comma is allowed. */
+/**
+ * A pasted key as gnokey list prints it: a leading "pub:" label, quotes around
+ * it and one trailing comma are dropped. An all-capitals key is lowered (bech32
+ * allows one case or the other, never both); a mixed-case one is left as it is
+ * and refused by the check with the reason.
+ */
 export function normalizeKeyText(text: string): string {
-  return text.trim().replace(/,$/, "").trim();
+  let t = text.trim().replace(/^pub:\s*/i, "").trim();
+  t = t.replace(/^["'`](.*)["'`]$/s, "$1").trim();
+  t = t.replace(/,$/, "").trim();
+  t = t.replace(/^["'`](.*)["'`]$/s, "$1").trim();
+  if (/^GPUB1/.test(t) && t === t.toUpperCase()) t = t.toLowerCase();
+  return t;
 }
 
 /**
@@ -116,7 +127,19 @@ export function normalizeKeyText(text: string): string {
  */
 export function mustRemove(text: string): boolean {
   const t = normalizeKeyText(text);
-  return t !== "" && !t.startsWith("gpub1");
+  return t !== "" && !/^gpub1/i.test(t);
+}
+
+/**
+ * While typing: can this still become a public key? False as soon as it
+ * cannot (it may be a secret arriving without a paste event, such as a
+ * phone keyboard's clipboard suggestion), so the page clears it at once.
+ */
+export function canStillBeKey(text: string): boolean {
+  let t = text.trimStart().replace(/^["'`]/, "").toLowerCase();
+  if ("pub:".startsWith(t)) return true; // typing the label itself
+  t = t.replace(/^pub:\s*/, "").replace(/^["'`]/, "");
+  return t === "" || t.startsWith("gpub1") || "gpub1".startsWith(t);
 }
 
 export const REMOVED_MESSAGE =
@@ -128,11 +151,18 @@ export const REMOVED_MESSAGE =
  * refuses every permission for such a key, even once its coins are gone).
  * `isAccount` asks the chain.
  */
-export async function checkCollectorKey(text: string, creator: string, isAccount: (addr: string) => Promise<boolean>): Promise<KeyCheck> {
+export async function checkCollectorKey(
+  text: string,
+  creator: string,
+  isAccount: (addr: string) => Promise<boolean>,
+  published: string | null = null,
+): Promise<KeyCheck> {
   const gpub = normalizeKeyText(text);
   if (gpub === "") return { ok: false, reason: "Paste the collector key’s public key (it starts with gpub1).", address: null };
   if (mustRemove(gpub)) return { ok: false, reason: REMOVED_MESSAGE, address: null, cleared: true };
   if (gpub.length > 200 || /\s/.test(gpub)) return { ok: false, reason: "A public key is one word starting with gpub1. Copy it from gnokey list again.", address: null };
+  if (gpub !== gpub.toLowerCase())
+    return { ok: false, reason: "This key mixes capital and small letters, which a gpub1 key never does. Copy it again from gnokey list.", address: null };
   let pub: Uint8Array;
   try {
     pub = pubFromGpub(gpub);
@@ -140,6 +170,8 @@ export async function checkCollectorKey(text: string, creator: string, isAccount
     return { ok: false, reason: "This is not a secp256k1 public key (gnokey’s default kind). Copy the gpub1… value from gnokey list again.", address: null };
   }
   const address = await addressOf(pub);
+  if (published && normalizeKeyText(published) === gpub)
+    return { ok: false, reason: "This is already your published collector key: nothing to change.", address, current: true };
   if (address === creator)
     return { ok: false, reason: "This is your own wallet’s key. Make a separate key used only for collecting.", address };
   if (await isAccount(address))
