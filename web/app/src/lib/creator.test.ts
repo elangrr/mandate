@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  mustRemove,
+  normalizeKeyText,
   amountProblem,
   buildOffer,
   buildSetCollectorKey,
@@ -36,15 +38,20 @@ describe("plan title: the realm's validateTitle", () => {
 });
 
 describe("price and period", () => {
-  it("parses GNOT exactly into ugnot", () => {
+  it("parses GNOT exactly into ugnot: a dot for decimals, a comma only between thousands", () => {
     expect(parseGnot("1")).toBe(1_000_000n);
     expect(parseGnot("0.1")).toBe(100_000n);
     expect(parseGnot(" 1,000.25 ")).toBe(1_000_250_000n);
+    expect(parseGnot("1,234,567")).toBe(1_234_567_000_000n);
     expect(parseGnot("0.000001")).toBe(1n);
     for (const bad of ["", "abc", "1.0000001", "-1", "1e3", "0x10", "1.2.3"]) expect(parseGnot(bad), bad).toBeNull();
   });
+  it("never guesses a decimal comma, a space or an underscore", () => {
+    for (const bad of ["0,5", "1,5", "1.000,50", "1 5", "1_000", "1,00", "10,0000", ",5", "1,000,", "12345,678"]) expect(parseGnot(bad), bad).toBeNull();
+    expect(amountProblem(parseGnot("0,5"))).toMatch(/dot for decimals/);
+  });
   it("enforces 0.1 GNOT to 1,000,000 GNOT", () => {
-    expect(amountProblem(null)).toMatch(/number of GNOT/);
+    expect(amountProblem(null)).toMatch(/price in GNOT with a dot for decimals/);
     expect(amountProblem(99_999n)).toMatch(/at least 0.1 GNOT/);
     expect(amountProblem(100_000n)).toBeNull();
     expect(amountProblem(1_000_000_000_000n)).toBeNull();
@@ -82,13 +89,30 @@ describe("collector key", () => {
   it("derives the address of a secp256k1 gpub", async () => {
     expect(await checkCollectorKey(`  ${GPUB}\n`, CREATOR, never)).toEqual({ ok: true, gpub: GPUB, address: COLLECTOR });
   });
+  it("accepts the key as gnokey list prints it, with its trailing comma", async () => {
+    expect(normalizeKeyText(` ${GPUB}, `)).toBe(GPUB);
+    expect(await checkCollectorKey(`${GPUB},`, CREATOR, never)).toEqual({ ok: true, gpub: GPUB, address: COLLECTOR });
+  });
+  it("anything that does not start with gpub1 is marked for removal: it may be a secret", async () => {
+    for (const secret of [
+      "abandon ability able about above absent absorb abstract absurd abuse access accident",
+      "abandon,ability,able,about,above,absent,absorb,abstract,absurd,abuse,access,accident",
+      "0x" + "ab".repeat(32),
+      "ab".repeat(32),
+      "ábaco abdomen abeja abierto abogado abono aborto abrazo abrir abuelo abuso acabar",
+      "g1jg8mtutu9khhfwc4nxmuhcpftf0pajdhfvsqf5",
+    ]) {
+      expect(mustRemove(secret), secret).toBe(true);
+      expect(await checkCollectorKey(secret, CREATOR, never)).toMatchObject({ ok: false, cleared: true, reason: expect.stringMatching(/removed it/) });
+    }
+    expect(mustRemove(GPUB)).toBe(false);
+    expect(mustRemove("")).toBe(false);
+    expect(mustRemove("gpub1 broken")).toBe(false); // starts with gpub1: kept, refused as not a key
+  });
   it("refuses what is not a public key, before anything else", async () => {
     expect(await checkCollectorKey("", CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/starts with gpub1/) });
-    expect(await checkCollectorKey("g1abc", CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/starts with gpub1/) });
+    expect(await checkCollectorKey("gpub1 abc", CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/one word starting with gpub1/) });
     expect(await checkCollectorKey(GPUB.slice(0, -1) + "q", CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/not a secp256k1/) });
-    const seed = "abandon ability able about above absent absorb abstract absurd abuse access accident";
-    expect(await checkCollectorKey(seed, CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/seed phrase or a private key/) });
-    expect(await checkCollectorKey("ab".repeat(32), CREATOR, never)).toMatchObject({ ok: false, reason: expect.stringMatching(/seed phrase or a private key/) });
   });
   it("refuses the creator's own key and a key whose address is already an account", async () => {
     expect(await checkCollectorKey(GPUB, COLLECTOR, never)).toMatchObject({ ok: false, address: COLLECTOR, reason: expect.stringMatching(/your own wallet/) });

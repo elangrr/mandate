@@ -3161,3 +3161,11 @@ select.input {
   overflow-wrap: anywhere;
   min-width: 0;
 }
+.form-lock {
+  display: grid;
+  gap: var(--s4);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}

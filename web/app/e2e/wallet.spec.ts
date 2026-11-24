@@ -48,6 +48,9 @@ async function stopAll(page: Page) {
     await page.getByRole("group").getByRole("button", { name: name.trim() }).click();
     await expect(page.getByRole("group")).toHaveCount(0, { timeout: 30_000 });
   }
+  // the retries above must not hide a page that keeps re-rendering its buttons: nothing is left to stop
+  await expect(page.locator(".loading")).toHaveCount(0);
+  await expect(page.locator(".stop > button.btn:not([disabled])")).toHaveCount(0);
 }
 
 /** Permission messages for n fresh random keys (the wallet's own, for the 16-permission test). */

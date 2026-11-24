@@ -59,9 +59,25 @@ test("a collector key is checked before any popup: not a key, the creator's own 
   const { calls } = await installStandin(page, c, stranger);
   await openPublish(page);
   await shots(page, "publish-empty");
+  // a recovery phrase, typed: refused and removed from the page
   await keyField(page).fill("abandon ability able about above absent absorb abstract absurd abuse access accident");
   await page.getByRole("button", { name: "Check this key" }).click();
-  await expect(page.getByText(/looks like a seed phrase or a private key/)).toBeVisible();
+  await expect(page.getByText(/so the page removed it/)).toBeVisible();
+  await expect(keyField(page)).toHaveValue("");
+  // a private key in hex: the same
+  await keyField(page).fill("0x" + "ab".repeat(32));
+  await page.getByRole("button", { name: "Check this key" }).click();
+  await expect(keyField(page)).toHaveValue("");
+  // pasted: never even shown
+  await keyField(page).focus();
+  await page.evaluate(() => {
+    const dt = new DataTransfer();
+    dt.setData("text/plain", "abandon,ability,able,about,above,absent,absorb,abstract,absurd,abuse,access,accident");
+    document.activeElement!.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }));
+  });
+  await expect(keyField(page)).toHaveValue("");
+  await expect(page.getByText(/so the page removed it/)).toBeVisible();
+  expect(await page.evaluate(() => document.body.innerText.includes("absurd"))).toBe(false);
   await keyField(page).fill(c.keys.stranger.gpub);
   await page.getByRole("button", { name: "Check this key" }).click();
   await expect(page.getByText(/This is your own wallet’s key/)).toBeVisible();
@@ -159,7 +175,59 @@ test("refused in the block: the new key's address received coins after the page 
   await page.getByRole("button", { name: "Replace collector key" }).click();
   await expect(page.getByRole("alert").filter({ hasText: "The chain refused it: mandate: this key's address" })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("alert").filter({ hasText: "Check the page and try again" })).toBeVisible();
+  // the panel states only what was just read: the key is now an account, and it cannot be published
+  await expect(page.getByText(/already received coins, so it is an account/)).toBeVisible();
+  await expect(page.getByText(/its address has never received coins/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Replace collector key" })).toHaveCount(0);
   await shots(page, "publish-key-refused-in-block");
+});
+
+test("the key's address receives coins between the check and the popup: the fresh read refuses it, nothing is sent", async ({ page }) => {
+  const k = await newKey(c, "stranger-collector-3");
+  const { calls } = await installStandin(page, c, stranger);
+  await openPublish(page);
+  await keyField(page).fill(k.gpub);
+  await page.getByRole("button", { name: "Check this key" }).click();
+  await expect(page.locator(".publish-confirm")).toContainText("never received coins");
+  await sendCoins(c, "fluxen", k.addr, "1ugnot");
+  await page.getByRole("button", { name: "Replace collector key" }).click();
+  await expect(page.getByRole("alert").filter({ hasText: "already received coins" }).filter({ hasText: "Nothing was sent" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Replace collector key" })).toHaveCount(0);
+  expect(calls).toHaveLength(0);
+});
+
+test("a key whose address was emptied again is still an account: refused before any popup", async ({ page }) => {
+  const k = await newKey(c, "emptied-collector");
+  await sendCoins(c, "fluxen", k.addr, "200000ugnot");
+  await sendCoins(c, k.name, fluxen.address, "100000ugnot"); // the other 100000ugnot pays the fee: nothing is left
+  const { calls } = await installStandin(page, c, stranger);
+  await openPublish(page);
+  await keyField(page).fill(k.gpub);
+  await page.getByRole("button", { name: "Check this key" }).click();
+  await expect(page.getByText(/already received coins, so it is an account \(even if its coins are gone\)/)).toBeVisible();
+  expect(calls).toHaveLength(0);
+});
+
+test("a plan not on chain yet: the warning survives a reload and clears once the chain shows it", async ({ page }) => {
+  test.setTimeout(90_000);
+  await installStandin(page, c, { ...stranger, queuedOnly: true, delayMs: 9_000 });
+  await openPublish(page);
+  await page.getByLabel("Title").fill("Fluxen's slow plan");
+  await page.getByLabel("Price per period, in GNOT").fill("1");
+  await page.getByRole("button", { name: "Publish plan" }).click();
+  const banner = page.locator(".pending");
+  await expect(banner).toContainText("Do not approve it again", { timeout: 15_000 });
+  await page.reload();
+  await expect(banner).toContainText("Publish the plan");
+  await page.getByRole("button", { name: "Connect wallet to publish" }).click();
+  // while it is pending, neither panel offers another approval
+  await expect(page.getByRole("button", { name: "Waiting for the other step…" })).toBeDisabled();
+  await expect(page.getByLabel("Title")).toBeDisabled();
+  await page.waitForTimeout(6_000);
+  await page.getByRole("button", { name: "Check again" }).click();
+  await expect(banner).toHaveCount(0, { timeout: 15_000 });
+  await page.goto(`./#/creator/${stranger.address}`);
+  await expect(page.locator(".table")).toContainText("Fluxen's slow plan");
 });
 
 test("replace a blocked key while supporters exist: the old mandates are still collected with the old key", async ({ page }) => {

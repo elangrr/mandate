@@ -40,17 +40,24 @@ export function titleProblem(title: string): string | null {
   return null;
 }
 
-/** Parses a GNOT amount typed by a person ("1", "0.5", "1,000.25") into ugnot. Null when it is not a plain decimal number. */
+/**
+ * Parses a GNOT amount typed by a person into ugnot: digits, a dot for decimals
+ * (up to 6), and a comma only as a thousands separator in its exact place
+ * ("1,000.25"). Anything else is refused rather than guessed: "0,5" would
+ * otherwise become 5 GNOT on a plan that can never be changed.
+ */
 export function parseGnot(text: string): bigint | null {
-  const t = text.trim().replace(/[,\s_]/g, "");
-  const m = /^(\d{1,7})(?:\.(\d{1,6}))?$/.exec(t);
+  const t = text.trim();
+  const m = /^(\d{1,7}|\d{1,3}(?:,\d{3}){1,2})(?:\.(\d{1,6}))?$/.exec(t);
   if (!m) return null;
-  return BigInt(m[1]) * 1_000_000n + BigInt((m[2] ?? "").padEnd(6, "0"));
+  const whole = m[1].replace(/,/g, "");
+  if (whole.length > 7) return null;
+  return BigInt(whole) * 1_000_000n + BigInt((m[2] ?? "").padEnd(6, "0"));
 }
 
 /** Why a price is refused, or null. */
 export function amountProblem(ugnot: bigint | null): string | null {
-  if (ugnot === null) return "Enter the price as a number of GNOT, for example 1 or 0.5 (up to 6 decimals).";
+  if (ugnot === null) return "Enter the price in GNOT with a dot for decimals, for example 1 or 0.5 (up to 6 decimals). Use a comma only to separate thousands, as in 1,000.";
   if (ugnot < rules.minAmountUgnot) return "The price must be at least 0.1 GNOT: below that, the collector’s network fee would eat most of each payment.";
   if (ugnot > MAX_AMOUNT_UGNOT) return "The price can be at most 1,000,000 GNOT a period.";
   return null;
@@ -93,24 +100,39 @@ export function buildOffer(o: { payee: string } & OfferInput): MsgCall {
 
 /** What the page knows about a pasted collector key. */
 export type KeyCheck =
-  | { ok: false; reason: string; address: string | null }
+  /** cleared: the text did not start with gpub1 and may be a secret, so the page removes it */
+  | { ok: false; reason: string; address: string | null; cleared?: boolean }
   | { ok: true; gpub: string; address: string };
+
+/** A pasted key as gnokey list prints it ("pub: gpub1..., path: ..."): one trailing comma is allowed. */
+export function normalizeKeyText(text: string): string {
+  return text.trim().replace(/,$/, "").trim();
+}
+
+/**
+ * Whether pasted text must be removed from the page: anything that does not
+ * start with gpub1 may be a private key or a recovery phrase (in any language,
+ * with any separator, with or without 0x), so it is never kept or shown.
+ */
+export function mustRemove(text: string): boolean {
+  const t = normalizeKeyText(text);
+  return t !== "" && !t.startsWith("gpub1");
+}
+
+export const REMOVED_MESSAGE =
+  "The pasted text did not start with gpub1, so the page removed it: it may have been a private key or a recovery phrase, which must never be pasted anywhere. Paste only the public key, which starts with gpub1.";
 
 /**
  * Checks a pasted public key the way SetCollectorKey will, plus what the
  * realm cannot see: the address must not be an account already (the chain
- * refuses every permission for such a key). `isAccount` asks the chain.
+ * refuses every permission for such a key, even once its coins are gone).
+ * `isAccount` asks the chain.
  */
 export async function checkCollectorKey(text: string, creator: string, isAccount: (addr: string) => Promise<boolean>): Promise<KeyCheck> {
-  const gpub = text.trim();
+  const gpub = normalizeKeyText(text);
   if (gpub === "") return { ok: false, reason: "Paste the collector key’s public key (it starts with gpub1).", address: null };
-  if (/(^|\s)(\w+\s+){11,}\w+/.test(gpub) || /^[0-9a-fA-F]{64}$/.test(gpub))
-    return {
-      ok: false,
-      reason: "That looks like a seed phrase or a private key. Never paste those anywhere: paste only the public key, which starts with gpub1.",
-      address: null,
-    };
-  if (gpub.length > 200 || !gpub.startsWith("gpub1")) return { ok: false, reason: "A public key starts with gpub1. Copy it from gnokey list.", address: null };
+  if (mustRemove(gpub)) return { ok: false, reason: REMOVED_MESSAGE, address: null, cleared: true };
+  if (gpub.length > 200 || /\s/.test(gpub)) return { ok: false, reason: "A public key is one word starting with gpub1. Copy it from gnokey list again.", address: null };
   let pub: Uint8Array;
   try {
     pub = pubFromGpub(gpub);
@@ -123,7 +145,7 @@ export async function checkCollectorKey(text: string, creator: string, isAccount
   if (await isAccount(address))
     return {
       ok: false,
-      reason: "This key’s address has already received coins, so it is an account, and the chain refuses every new permission for such a key. Make a new key and never send coins to it.",
+      reason: "This key’s address has already received coins, so it is an account (even if its coins are gone), and the chain refuses every new permission for such a key. Make a new key and never send coins to it.",
       address,
     };
   return { ok: true, gpub, address };
