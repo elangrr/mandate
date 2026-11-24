@@ -1,0 +1,740 @@
+import { useState, type FormEvent, type ReactNode } from "react";
+import { config, gnowebPage, rules } from "../config";
+import type { Mandate, Plan } from "../lib/amino";
+import { date, dateTime, gnot, isTestPeriod, period, plural, price, relative, shortAddr, thousands } from "../lib/format";
+import { isAddress, read, type Session } from "../lib/rpc";
+import { FlowPicture } from "./FlowPicture";
+import { go, useAsync } from "./hooks";
+import { useLive } from "./live";
+import { Addr, Empty, ExplorerAccount, Gnot, Icon, Loading, NotLive, ReadFailed } from "./parts";
+import { useWallet } from "./WalletContext";
+
+const PLAN_WALK_PAGES = 10; // the home page looks at the newest 200 plans
+
+/** Runs `children` only once the realm is live; otherwise the calm waiting state. */
+function WhenLive({ children }: { children: ReactNode }) {
+  const live = useLive();
+  if (live.status === "loading") return <Loading what="Mandate’s status" />;
+  if (live.status === "error") return <ReadFailed error={live.error} retry={live.reload} />;
+  if (live.value.status !== "live") return <NotLive status={live.value} />;
+  return <>{children}</>;
+}
+
+function PlanCard({ p }: { p: Plan }) {
+  return (
+    <li className="plan-card">
+      <a href={`#/plan/${p.id}`} className="plan-card-link">
+        <span className="plan-card-title">
+          <span className="plan-num">#{p.id.toString()}</span> {p.title}
+        </span>
+        <span className="plan-card-price">{price(p.amount, p.period)}</span>
+        <span className="plan-card-meta">
+          {plural(p.paidThisPeriod, "payment")} this period · {plural(p.paidLastPeriod, "payment")} the one before
+          {isTestPeriod(p.period) && <span className="badge">test plan</span>}
+        </span>
+      </a>
+    </li>
+  );
+}
+
+// ------------------------------------------------------------------ home
+
+export function Home() {
+  return (
+    <>
+      <section className="hero">
+        <h1>Support a creator every month, with a cap you set yourself.</h1>
+        <p className="lede">
+          You sign one permission from your own wallet: <em>at most this much, every period, through Mandate only, until you stop</em>. The
+          creator’s collector takes each payment when it is due, and Mandate checks who, how much and when before any coin moves.
+        </p>
+        <div className="hero-actions">
+          <a className="btn btn-primary" href="#/plans">
+            See the plans <Icon name="arrow-right" />
+          </a>
+          <a className="btn btn-quiet" href="#/how">
+            How it works
+          </a>
+        </div>
+      </section>
+      <FlowPicture />
+      <Limits />
+      <WhenLive>
+        <Numbers />
+        <PaidPlans />
+      </WhenLive>
+    </>
+  );
+}
+
+function Limits() {
+  return (
+    <section className="limits" aria-labelledby="limits-title">
+      <h2 id="limits-title">The honest limits</h2>
+      <ul className="limit-grid">
+        <li>
+          <strong>Direct debit, not escrow.</strong> Nothing is locked up front. You can stop at any time, and a creator is only paid when a
+          payment goes through.
+        </li>
+        <li>
+          <strong>A cap the chain enforces.</strong> At most the price plus a {gnot(rules.feeAllowanceUgnot)} GNOT fee allowance per period,
+          never more, never more often.
+        </li>
+        <li>
+          <strong>Stop any time.</strong> Revoking the permission in your wallet stops every payment at once; cancelling here ends the mandate.
+        </li>
+        <li>
+          <strong>Test GNOT.</strong> This runs on the {config.networkName}. Dollar figures show what the same amount of real GNOT is worth today.
+        </li>
+      </ul>
+    </section>
+  );
+}
+
+function Numbers() {
+  const [t] = useAsync(() => read.totals(), []);
+  if (t.status !== "ready") return null;
+  const { plans, mandates, pulls, paid } = t.value;
+  return (
+    <section className="numbers" aria-label="Mandate in numbers">
+      <div>
+        <span className="num">{thousands(plans)}</span>
+        <span className="num-label">plans</span>
+      </div>
+      <div>
+        <span className="num">{thousands(mandates)}</span>
+        <span className="num-label">mandates recorded</span>
+      </div>
+      <div>
+        <span className="num">{thousands(pulls)}</span>
+        <span className="num-label">payments</span>
+      </div>
+      <div>
+        <span className="num">{gnot(paid)}</span>
+        <span className="num-label">GNOT paid to creators</span>
+      </div>
+    </section>
+  );
+}
+
+async function walkPlans(): Promise<Plan[]> {
+  const out: Plan[] = [];
+  for (let page = 1; page <= PLAN_WALK_PAGES; page++) {
+    const list = await read.plans(page);
+    out.push(...list);
+    if (list.length < rules.pageSize) break;
+  }
+  return out;
+}
+
+function PaidPlans() {
+  const [s, reload] = useAsync(walkPlans, []);
+  return (
+    <section aria-labelledby="paid-title">
+      <div className="section-head">
+        <h2 id="paid-title">Plans people pay for</h2>
+        <a href="#/plans">All plans</a>
+      </div>
+      {s.status === "loading" && <Loading what="the plans" />}
+      {s.status === "error" && <ReadFailed error={s.error} retry={reload} />}
+      {s.status === "ready" &&
+        (() => {
+          const paid = s.value.filter((p) => p.paidThisPeriod + p.paidLastPeriod > 0);
+          if (paid.length === 0)
+            return (
+              <Empty>
+                No plan has been paid for in its current or last period yet. <a href="#/plans">See every plan</a>
+              </Empty>
+            );
+          return (
+            <ul className="plan-list">
+              {paid.map((p) => (
+                <PlanCard key={p.id.toString()} p={p} />
+              ))}
+            </ul>
+          );
+        })()}
+    </section>
+  );
+}
+
+// ------------------------------------------------------------------ all plans
+
+export function AllPlans({ page }: { page: number }) {
+  return (
+    <>
+      <h1>All plans</h1>
+      <p className="lede">Every plan ever published, newest first. A plan never changes: new terms mean a new plan.</p>
+      <WhenLive>
+        <PlansPage page={page} />
+      </WhenLive>
+    </>
+  );
+}
+
+function PlansPage({ page }: { page: number }) {
+  const [s, reload] = useAsync(() => read.plans(page), [page]);
+  if (s.status === "loading") return <Loading what="the plans" />;
+  if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
+  if (s.value.length === 0) return <Empty>No plans on this page.</Empty>;
+  return (
+    <>
+      <ul className="plan-list">
+        {s.value.map((p) => (
+          <PlanCard key={p.id.toString()} p={p} />
+        ))}
+      </ul>
+      <Pager base="#/plans" page={page} more={s.value.length === rules.pageSize} />
+    </>
+  );
+}
+
+function Pager({ base, page, more }: { base: string; page: number; more: boolean }) {
+  if (page <= 1 && !more) return null;
+  return (
+    <nav className="pager" aria-label="Pages">
+      {page > 1 ? <a href={`${base}?page=${page - 1}`}>Previous page</a> : <span />}
+      {more && <a href={`${base}?page=${page + 1}`}>Next page</a>}
+    </nav>
+  );
+}
+
+// ------------------------------------------------------------------ plan page
+
+export function PlanPage({ id }: { id: string }) {
+  if (!/^\d{1,19}$/.test(id) || id === "0") return <Empty>There is no plan with that number.</Empty>;
+  return (
+    <WhenLive>
+      <PlanBody id={BigInt(id)} />
+    </WhenLive>
+  );
+}
+
+async function loadPlan(id: bigint) {
+  const plan = await read.plan(id);
+  if (!plan) return null;
+  const [payee, counts, now] = await Promise.all([read.payee(plan.payee), read.planCounts(id), read.chainTime()]);
+  // The chain refuses a session for a key whose address is an account: ask it
+  // directly (the realm's funded flag cannot see an emptied account).
+  const keyBlocked = payee?.collectorAddr ? payee.collectorFunded || (await read.accountExists(payee.collectorAddr)) : false;
+  return { plan, payee, counts, now, keyBlocked };
+}
+
+function PlanBody({ id }: { id: bigint }) {
+  const [s, reload] = useAsync(() => loadPlan(id), [id]);
+  if (s.status === "loading") return <Loading what={`plan #${id}`} />;
+  if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
+  if (!s.value) return <Empty>There is no plan #{id.toString()}.</Empty>;
+  const { plan: p, payee, counts, now, keyBlocked } = s.value;
+  const cap = p.amount + rules.feeAllowanceUgnot;
+  const until = now + 365n * 86400n;
+  return (
+    <article className="plan-page">
+      <h1>{p.title}</h1>
+      <p className="plan-meta">
+        Plan #{p.id.toString()} by <Addr a={p.payee} to={`#/creator/${p.payee}`} />
+        {isTestPeriod(p.period) && <span className="badge">test plan: shorter than a day</span>}
+      </p>
+      <p className="plan-price">
+        <Gnot ugnot={p.amount} strong /> <span>every {period(p.period)}</span>
+      </p>
+
+      <dl className="stats">
+        <div>
+          <dt>Payments this period</dt>
+          <dd>{thousands(counts.paidThisPeriod)}</dd>
+        </div>
+        <div>
+          <dt>The period before</dt>
+          <dd>{thousands(counts.paidLastPeriod)}</dd>
+        </div>
+        <div>
+          <dt>Paid to the creator</dt>
+          <dd>{gnot(p.paid)} GNOT</dd>
+        </div>
+        <div>
+          <dt>Last payment</dt>
+          <dd>{p.lastPullAt > 0n ? relative(p.lastPullAt, now) : "never"}</dd>
+        </div>
+      </dl>
+      {counts.unpaid > 0 && (
+        <p className="muted small">
+          {plural(counts.unpaid, "mandate")} recorded but not paid yet{counts.unpaidExact ? "" : ", among the latest 200"}: anyone can record a
+          mandate without paying, so these are not counted as supporters.
+        </p>
+      )}
+
+      <section className="card allow" aria-labelledby="allow-title">
+        <h2 id="allow-title">What supporting this plan means</h2>
+        <p className="allow-sentence">
+          You allow the creator’s collector to take <strong>at most {gnot(cap)} GNOT every {period(p.period)}</strong>, through Mandate only,
+          until <strong>{date(until)}</strong>. You can stop at any time.
+        </p>
+        <ul className="costs">
+          <li>
+            <span>Each period</span>
+            <span>
+              <Gnot ugnot={p.amount} /> to the creator, plus the collector’s network fee from your {gnot(rules.feeAllowanceUgnot)} GNOT allowance
+            </span>
+          </li>
+          <li>
+            <span>Once, to set it up</span>
+            <span>a storage deposit of about 0.54 GNOT the first time you subscribe to anything here (about 0.19 GNOT after), plus network fees</span>
+          </li>
+          <li>
+            <span>One plan per creator</span>
+            <span>you can support one plan of each creator at a time, and hold at most {rules.maxActive} mandates in all</span>
+          </li>
+        </ul>
+        <SubscribeState payeeKey={payee?.collectorKey ?? ""} keyBlocked={keyBlocked} planId={p.id} />
+      </section>
+
+      <Supporters plan={p} now={now} />
+    </article>
+  );
+}
+
+function SubscribeState({ payeeKey, keyBlocked, planId }: { payeeKey: string; keyBlocked: boolean; planId: bigint }) {
+  if (!payeeKey)
+    return (
+      <div className="notice">
+        <Icon name="alert" />
+        <p>The creator has not published a collector key yet, so nobody can subscribe to this plan. Check back later.</p>
+      </div>
+    );
+  if (keyBlocked)
+    return (
+      <div className="notice notice-warn" role="status">
+        <Icon name="alert" />
+        <p>
+          <strong>New supporters cannot join right now.</strong> The creator’s collector key has received coins, which makes its address an
+          account, and the chain refuses a permission for such a key. The creator must publish a new collector key. Existing supporters keep
+          paying until their mandates expire.
+        </p>
+      </div>
+    );
+  return (
+    <div className="notice">
+      <Icon name="clock" />
+      <p>
+        Subscribing with Adena from this site arrives in the next update. Until then, the plan’s own page shows the two exact commands to run:{" "}
+        <a href={gnowebPage(`plan/${planId}`)} target="_blank" rel="noreferrer noopener" className="ext">
+          open plan #{planId.toString()} on gnoweb <Icon name="external" />
+        </a>
+      </p>
+    </div>
+  );
+}
+
+function Supporters({ plan, now }: { plan: Plan; now: bigint }) {
+  const [pages, setPages] = useState<{ list: Mandate[]; next: number }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<Error | null>(null);
+  const [first, reload] = useAsync(() => read.payingSupporters(plan.id, -1), [plan.id]);
+  const all = first.status === "ready" ? [first.value, ...pages] : [];
+  const cursor = all.length ? all[all.length - 1].next : -1;
+  const list = all.flatMap((p) => p.list);
+  async function more() {
+    if (cursor < 0) return; // -1: the list is exhausted; stop
+    setBusy(true);
+    setError(null);
+    try {
+      const page = await read.payingSupporters(plan.id, cursor);
+      setPages((ps) => [...ps, page]);
+    } catch (e) {
+      setError(e as Error);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section aria-labelledby="sup-title">
+      <h2 id="sup-title">Supporters</h2>
+      <p className="muted small">People with an active mandate who have paid at least once, newest first.</p>
+      {first.status === "loading" && <Loading what="the supporters" />}
+      {first.status === "error" && <ReadFailed error={first.error} retry={reload} />}
+      {first.status === "ready" && list.length === 0 && cursor < 0 && <Empty>No supporters yet. The first payment puts someone here.</Empty>}
+      {list.length > 0 && (
+        <ul className="sup-list">
+          {list.map((m) => (
+            <li key={m.id.toString()}>
+              <Addr a={m.payer} to={`#/mine?a=${m.payer}`} />
+              <span>{plural(Number(m.pulls), "payment")}</span>
+              <span className="muted">paid through {date(m.paidThrough)}</span>
+              <span className="muted">since {relative(m.createdAt, now)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {error && <ReadFailed error={error} />}
+      {cursor >= 0 && (
+        <button type="button" className="btn btn-quiet" onClick={more} disabled={busy}>
+          {busy ? "Reading…" : "Show more supporters"}
+        </button>
+      )}
+    </section>
+  );
+}
+
+// ------------------------------------------------------------------ my mandates
+
+function AddressForm({ value, label, submit: submitLabel, onAddress }: { value: string; label: string; submit: string; onAddress: (a: string) => void }) {
+  const [text, setText] = useState(value);
+  const [bad, setBad] = useState(false);
+  const wallet = useWallet();
+  function submit(e: FormEvent) {
+    e.preventDefault();
+    const a = text.trim();
+    if (!isAddress(a)) {
+      setBad(true);
+      document.getElementById("addr")?.focus();
+      return;
+    }
+    setBad(false);
+    onAddress(a);
+  }
+  return (
+    <form className="addr-form" onSubmit={submit} noValidate>
+      <label htmlFor="addr">{label}</label>
+      <div className="addr-row">
+        <input
+          id="addr"
+          name="address"
+          className="input mono"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="g1…"
+          spellCheck={false}
+          autoComplete="off"
+          aria-invalid={bad}
+          aria-describedby={bad ? "addr-err" : undefined}
+        />
+        <button type="submit" className="btn btn-quiet">
+          {submitLabel}
+        </button>
+        {wallet.address ? (
+          <button type="button" className="btn btn-quiet" onClick={() => onAddress(wallet.address!)}>
+            Use my wallet
+          </button>
+        ) : (
+          wallet.installed && (
+            <button type="button" className="btn btn-quiet" onClick={() => void wallet.connect()} disabled={wallet.busy}>
+              Connect wallet
+            </button>
+          )
+        )}
+      </div>
+      {bad && (
+        <p id="addr-err" className="field-error">
+          That is not a gno.land address (g1 followed by 38 letters and digits).
+        </p>
+      )}
+    </form>
+  );
+}
+
+export function Mine({ address }: { address: string }) {
+  const wallet = useWallet();
+  const a = address || wallet.address || "";
+  return (
+    <>
+      <h1>My mandates</h1>
+      <p className="lede">Every mandate a wallet has given, with what the chain itself says about each permission.</p>
+      <AddressForm key={a} value={a} label="Wallet address" submit="Show mandates" onAddress={(x) => go(`/mine?a=${x}`)} />
+      {a && isAddress(a) && (
+        <WhenLive>
+          <MandateList payer={a} />
+        </WhenLive>
+      )}
+    </>
+  );
+}
+
+interface MandateRow {
+  m: Mandate;
+  plan: Plan | null;
+  session: Session | null;
+}
+
+async function loadMandates(payer: string): Promise<{ rows: MandateRow[]; now: bigint }> {
+  const ms: Mandate[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const list = await read.mandatesOf(payer, page);
+    ms.push(...list);
+    if (list.length < rules.pageSize) break;
+  }
+  const now = await read.chainTime();
+  const rows = await Promise.all(
+    ms.map(async (m) => ({
+      m,
+      plan: await read.plan(m.planId),
+      session: m.status === "active" ? await read.session(payer, m.session) : null,
+    })),
+  );
+  return { rows, now };
+}
+
+/** What a mandate really is: the realm's view combined with the chain's view of the permission. */
+export function mandateState(m: Mandate, session: Session | null, now: bigint): { label: string; tone: "ok" | "warn" | "off"; note: string } {
+  if (m.status === "cancelled") return { label: "Cancelled", tone: "off", note: `Cancelled ${relative(m.cancelledAt, now)}.` };
+  if (m.status === "expired") return { label: "Ended", tone: "off", note: `Its term ended on ${date(m.expiresAt)}.` };
+  if (!session) return { label: "Stopped on chain", tone: "warn", note: "The permission is gone on chain (revoked or never created), so no payment can be taken. Cancel it here to tidy up." };
+  if (session.expiresAt > 0n && session.expiresAt <= now) return { label: "Permission expired", tone: "warn", note: `The permission ended on ${date(session.expiresAt)}, so no payment can be taken.` };
+  return { label: "Active", tone: "ok", note: m.due ? "A payment is due now: the creator’s collector takes it on its next run." : `Next payment from ${dateTime(m.nextPullAt)}.` };
+}
+
+function MandateList({ payer }: { payer: string }) {
+  const [s, reload] = useAsync(() => loadMandates(payer), [payer]);
+  if (s.status === "loading") return <Loading what="the mandates" />;
+  if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
+  const { rows, now } = s.value;
+  if (rows.length === 0)
+    return (
+      <Empty>
+        No mandates from <span className="mono">{shortAddr(payer)}</span> yet. <a href="#/plans">Find a plan</a>
+      </Empty>
+    );
+  const active = rows.filter((r) => r.m.status === "active").length;
+  return (
+    <>
+      <p className={active >= rules.maxActive - 2 ? "notice notice-warn" : "muted small"}>
+        {plural(active, "active mandate")} of the {rules.maxActive} a wallet can hold.
+        {active >= rules.maxActive - 2 && " You are close to the limit: cancel one you no longer need before adding another."}
+      </p>
+      <ul className="mandate-list">
+        {rows.map(({ m, plan, session }) => {
+          const st = mandateState(m, session, now);
+          return (
+            <li key={m.id.toString()} className="card mandate">
+              <div className="mandate-head">
+                <a href={`#/plan/${m.planId}`} className="mandate-title">
+                  <span className="plan-num">#{m.planId.toString()}</span> {plan?.title ?? "plan"}
+                </a>
+                <span className={`pill pill-${st.tone}`}>{st.label}</span>
+              </div>
+              <p className="mandate-price">{price(m.amount, m.period)}</p>
+              <p className="small">{st.note}</p>
+              <dl className="mandate-facts">
+                <div>
+                  <dt>Payments</dt>
+                  <dd>
+                    {thousands(m.pulls)} · {gnot(m.paid)} GNOT
+                  </dd>
+                </div>
+                <div>
+                  <dt>Paid through</dt>
+                  <dd>{m.paidThrough > 0n ? date(m.paidThrough) : "not paid yet"}</dd>
+                </div>
+                <div>
+                  <dt>Ends</dt>
+                  <dd>{date(m.expiresAt)}</dd>
+                </div>
+                <div>
+                  <dt>Creator</dt>
+                  <dd>
+                    <Addr a={m.payee} to={`#/creator/${m.payee}`} />
+                  </dd>
+                </div>
+              </dl>
+              {m.status === "active" && m.pulls === 0n && m.paidThrough > 0n && (
+                <p className="small muted">Your current period is already paid (time carried over from an earlier mandate for this plan).</p>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </>
+  );
+}
+
+// ------------------------------------------------------------------ creator page
+
+export function Creator({ address }: { address: string }) {
+  const wallet = useWallet();
+  const a = address || "";
+  return (
+    <>
+      <h1>Creator</h1>
+      {!a && <p className="lede">A creator’s plans, payments received and collector key. Paste a creator’s address, or use your own wallet.</p>}
+      <AddressForm key={a || wallet.address || ""} value={a} label="Creator address" submit="Show creator" onAddress={(x) => go(`/creator/${x}`)} />
+      {a && isAddress(a) && (
+        <WhenLive>
+          <CreatorBody payee={a} />
+        </WhenLive>
+      )}
+    </>
+  );
+}
+
+async function loadCreator(payee: string) {
+  const info = await read.payee(payee);
+  if (!info) return null;
+  const plans: Plan[] = [];
+  for (let page = 1; page <= 10; page++) {
+    const list = await read.plansOf(payee, page);
+    plans.push(...list);
+    if (list.length < rules.pageSize) break;
+  }
+  const counts = await Promise.all(plans.map((p) => read.planCounts(p.id)));
+  const keyBlocked = info.collectorAddr ? info.collectorFunded || (await read.accountExists(info.collectorAddr)) : false;
+  return { info, plans, counts, keyBlocked, now: await read.chainTime() };
+}
+
+function CreatorBody({ payee }: { payee: string }) {
+  const [s, reload] = useAsync(() => loadCreator(payee), [payee]);
+  if (s.status === "loading") return <Loading what="the creator" />;
+  if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
+  if (!s.value)
+    return (
+      <Empty>
+        No plans from <span className="mono">{shortAddr(payee)}</span> yet.
+      </Empty>
+    );
+  const { info, plans, counts, keyBlocked, now } = s.value;
+  return (
+    <>
+      <p className="muted">
+        <span className="mono break">{payee}</span> · <ExplorerAccount a={payee} />
+      </p>
+      <dl className="stats">
+        <div>
+          <dt>Plans</dt>
+          <dd>{thousands(info.plans)}</dd>
+        </div>
+        <div>
+          <dt>Payments received</dt>
+          <dd>{thousands(info.pulls)}</dd>
+        </div>
+        <div>
+          <dt>Received</dt>
+          <dd>{gnot(info.paid)} GNOT</dd>
+        </div>
+        <div>
+          <dt>Last payment</dt>
+          <dd>{info.lastPullAt > 0n ? relative(info.lastPullAt, now) : "never"}</dd>
+        </div>
+      </dl>
+      <section className="card" aria-labelledby="key-title">
+        <h2 id="key-title">Collector key</h2>
+        {!info.collectorKey ? (
+          <p>Not published yet: nobody can subscribe until it is.</p>
+        ) : (
+          <>
+            <p className="mono small break">{info.collectorAddr}</p>
+            {keyBlocked ? (
+              <p className="notice notice-warn">
+                <Icon name="alert" /> This key’s address has received coins, so the chain refuses new permissions for it: nobody new can subscribe.
+                The creator must publish a new collector key; existing mandates keep being collected with this one until they expire.
+              </p>
+            ) : (
+              <p className="small muted">Supporters give this key their permission. It must never receive coins.</p>
+            )}
+          </>
+        )}
+      </section>
+      <section aria-labelledby="cplans-title">
+        <h2 id="cplans-title">Plans</h2>
+        <div className="table-wrap">
+          <table className="table">
+            <thead>
+              <tr>
+                <th scope="col">Plan</th>
+                <th scope="col">Price</th>
+                <th scope="col">Payments this / last period</th>
+                <th scope="col">Not paid yet</th>
+                <th scope="col">Received</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plans.map((p, i) => (
+                <tr key={p.id.toString()}>
+                  <td>
+                    <a href={`#/plan/${p.id}`}>
+                      <span className="plan-num">#{p.id.toString()}</span> {p.title}
+                    </a>
+                  </td>
+                  <td data-label="Price">{price(p.amount, p.period)}</td>
+                  <td data-label="Payments this / last period">
+                    {counts[i].paidThisPeriod} / {counts[i].paidLastPeriod}
+                  </td>
+                  <td data-label="Not paid yet">
+                    {counts[i].unpaid}
+                    {counts[i].unpaidExact ? "" : "+"}
+                  </td>
+                  <td data-label="Received">{gnot(p.paid)} GNOT</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+}
+
+// ------------------------------------------------------------------ how it works
+
+export function How() {
+  return (
+    <article className="how">
+      <h1>How Mandate works</h1>
+      <p className="lede">A subscription you control on gno.land, built on the chain’s session keys. Two minutes to read.</p>
+      <FlowPicture />
+      <ol className="steps">
+        <li>
+          <h2>A creator publishes a plan</h2>
+          <p>
+            For example “Support Fluxen’s work: 1 GNOT every 30 days”. Plans never change; new terms mean a new plan. The creator also publishes a
+            collector key: a separate key that only ever asks for payments.
+          </p>
+        </li>
+        <li>
+          <h2>You give one capped permission</h2>
+          <p>
+            From your own wallet you sign a permission for the creator’s collector key: at most the price plus a{" "}
+            {gnot(rules.feeAllowanceUgnot)} GNOT fee allowance per period, through Mandate only, until a date you choose (at most a year). Then
+            you record the terms in Mandate. Both are signed by you; nothing is paid yet.
+          </p>
+        </li>
+        <li>
+          <h2>The creator collects each period</h2>
+          <p>
+            When a payment is due, the creator’s collector asks for exactly the price. Mandate checks that the request comes from your permission,
+            that the amount is right and that the period has come, then sends the coins straight to the creator in the same transaction. The chain
+            itself refuses anything above your cap.
+          </p>
+        </li>
+        <li>
+          <h2>You stop whenever you like</h2>
+          <p>
+            Revoke the permission in your wallet and no payment can be taken any more. Cancel the mandate in Mandate to end it there too. Time you
+            already paid for stays yours: if you come back to the same plan within it, your first new payment waits until it ends.
+          </p>
+        </li>
+      </ol>
+      <section aria-labelledby="facts-title">
+        <h2 id="facts-title">Good to know</h2>
+        <dl className="faq">
+          <dt>Is my money locked?</dt>
+          <dd>No. Mandate is direct debit, not escrow: nothing leaves your wallet until a payment is taken, and the realm never holds coins.</dd>
+          <dt>What is the most I can lose?</dt>
+          <dd>
+            Your cap per period. A dishonest creator could at worst spend your {gnot(rules.feeAllowanceUgnot)} GNOT allowance on network fees,
+            which go to the network, not to them.
+          </dd>
+          <dt>How long can a period be?</dt>
+          <dd>From one minute (for tests) to 30 days: the chain does not allow a longer spending period. So there are no yearly plans.</dd>
+          <dt>How many can I hold?</dt>
+          <dd>
+            At most {rules.maxActive} mandates at a time (the chain allows {rules.maxActive} sessions per wallet), and one plan of each creator at a time.
+          </dd>
+          <dt>Why does a plan page sometimes say nobody can join?</dt>
+          <dd>
+            A collector key’s address must never receive coins: the chain refuses permissions for an address that is an account. When that happens,
+            the creator publishes a new key.
+          </dd>
+        </dl>
+      </section>
+    </article>
+  );
+}

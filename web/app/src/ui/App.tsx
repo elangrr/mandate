@@ -1,0 +1,175 @@
+import { useEffect, useRef } from "react";
+import { config } from "../config";
+import { shortAddr } from "../lib/format";
+import { parseRoute, useRoute, useTheme, type Theme } from "./hooks";
+import { LiveProvider } from "./live";
+import { AllPlans, Creator, Home, How, Mine, PlanPage } from "./pages";
+import { Empty, Icon } from "./parts";
+import { PriceFootnote } from "./price";
+import { useWallet, WalletProvider } from "./WalletContext";
+
+function Routes() {
+  const { path, query } = parseRoute(useRoute());
+  let m: RegExpExecArray | null;
+  const page = Math.max(1, Number.parseInt(query.get("page") ?? "1", 10) || 1);
+  if (path === "/" || path === "") return <Home />;
+  if (path === "/plans") return <AllPlans page={page} />;
+  if (path === "/how") return <How />;
+  if (path === "/mine") return <Mine address={query.get("a") ?? ""} />;
+  if (path === "/creator") return <Creator address="" />;
+  if ((m = /^\/plan\/([^/]+)$/.exec(path))) return <PlanPage id={m[1]} />;
+  if ((m = /^\/creator\/([^/]+)$/.exec(path))) return <Creator address={m[1]} />;
+  return (
+    <Empty>
+      This page does not exist. <a href="#/">Go to the start</a>
+    </Empty>
+  );
+}
+
+function titleFor(path: string): string {
+  const site = "Mandate";
+  let m: RegExpExecArray | null;
+  if (path === "/" || path === "") return `${site} · subscriptions on GNOT with a cap you set`;
+  const fixed: Record<string, string> = { "/plans": "All plans", "/how": "How it works", "/mine": "My mandates", "/creator": "Creator" };
+  if (fixed[path]) return `${fixed[path]} · ${site}`;
+  if ((m = /^\/plan\/(\d+)$/.exec(path))) return `Plan #${m[1]} · ${site}`;
+  if ((m = /^\/creator\/(g1[0-9a-z]{38})$/.exec(path))) return `Creator ${shortAddr(m[1])} · ${site}`;
+  return `Page not found · ${site}`;
+}
+
+/** New title, back to the top and focus on main after each route change (not the first). */
+function PageFrame() {
+  const { path } = parseRoute(useRoute());
+  const first = useRef(true);
+  useEffect(() => {
+    document.title = titleFor(path);
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    window.scrollTo(0, 0);
+    document.getElementById("main")?.focus({ preventScroll: true });
+  }, [path]);
+  return (
+    <div key={path} className="page-enter">
+      <Routes />
+    </div>
+  );
+}
+
+function NavLink({ to, children }: { to: string; children: string }) {
+  const { path } = parseRoute(useRoute());
+  const active = to === "/" ? path === "/" || path === "" : path === to || path.startsWith(to + "/");
+  return (
+    <a href={`#${to}`} className={active ? "nav-link active" : "nav-link"} aria-current={active ? "page" : undefined}>
+      {children}
+    </a>
+  );
+}
+
+function ThemeButton() {
+  const [theme, setTheme] = useTheme();
+  const next: Record<Theme, Theme> = { system: "light", light: "dark", dark: "system" };
+  const label: Record<Theme, string> = { system: "Theme: follows your system", light: "Theme: light", dark: "Theme: dark" };
+  const icon = theme === "light" ? "sun" : theme === "dark" ? "moon" : "auto";
+  return (
+    <button type="button" className="btn btn-quiet icon-btn" onClick={() => setTheme(next[theme])} aria-label={`${label[theme]}. Change theme`} title={label[theme]}>
+      <Icon name={icon} />
+    </button>
+  );
+}
+
+function WalletButton() {
+  const w = useWallet();
+  if (!w.installed)
+    return (
+      <a className="btn btn-quiet" href="https://adena.app" target="_blank" rel="noreferrer noopener">
+        Get Adena
+      </a>
+    );
+  if (!w.address)
+    return (
+      <button type="button" className="btn btn-quiet" onClick={() => void w.connect()} disabled={w.busy}>
+        Connect wallet
+      </button>
+    );
+  if (!w.onRightNetwork)
+    return (
+      <button type="button" className="btn btn-quiet" onClick={() => void w.switchNetwork()} disabled={w.busy}>
+        Switch to {config.chainId}
+      </button>
+    );
+  return (
+    <a className="btn btn-quiet mono" href={`#/mine?a=${w.address}`} title={w.address}>
+      {shortAddr(w.address)}
+    </a>
+  );
+}
+
+function Mark() {
+  return (
+    <svg className="brand-mark" viewBox="0 0 28 28" aria-hidden="true" focusable="false">
+      <rect x="1" y="1" width="26" height="26" rx="8" fill="currentColor" />
+      <path d="M8 18.5v-9l6 6 6-6v9" fill="none" stroke="var(--accent-ink)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function Shell() {
+  const w = useWallet();
+  return (
+    <>
+      <a className="skip" href="#main">
+        Skip to content
+      </a>
+      <header className="top">
+        <div className="top-inner">
+          <a className="brand" href="#/" translate="no">
+            <Mark />
+            Mandate
+          </a>
+          <nav className="nav" aria-label="Main">
+            <NavLink to="/plans">Plans</NavLink>
+            <NavLink to="/mine">My mandates</NavLink>
+            <NavLink to="/creator">Creators</NavLink>
+            <NavLink to="/how">How it works</NavLink>
+          </nav>
+          <div className="top-tools">
+            <span className="net">{config.networkName} · test GNOT</span>
+            <ThemeButton />
+            <WalletButton />
+          </div>
+        </div>
+        {w.error && (
+          <p className="top-inner notice notice-error" role="alert">
+            {w.error}
+          </p>
+        )}
+      </header>
+      <main id="main" tabIndex={-1}>
+        <PageFrame />
+      </main>
+      <footer className="foot">
+        <div className="foot-inner">
+          <p>Mandate runs on the {config.networkName} with test GNOT. Nothing here is real money.</p>
+          <p>
+            <a href={config.sourceUrl} target="_blank" rel="noreferrer noopener">
+              Source code
+            </a>
+          </p>
+          <PriceFootnote />
+        </div>
+      </footer>
+    </>
+  );
+}
+
+export function App() {
+  return (
+    <WalletProvider>
+      <LiveProvider>
+        <Shell />
+      </LiveProvider>
+    </WalletProvider>
+  );
+}
