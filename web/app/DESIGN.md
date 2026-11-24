@@ -10,9 +10,10 @@ Dark theme is the primary voice (**Night Console**: deep obsidian ground, layere
 
 Every label, badge, bar, and count says only what is literally true on that screen:
 - Illustrations and example cards say they are illustrations or examples (`How a payment moves · illustration`, `Example standing order`, `Example cap`); never fake telemetry or live-status claims.
-- Pre-subscribe period bars on the Plan page are labelled `Preview` and compute their period count from the real term and plan period.
-- Mandate period timelines on My mandates compute their real period count, paid periods, current period (`NOW`), and upcoming/stopped periods strictly from `createdAt`, `period`, `expiresAt`, `paidThrough`, and chain time `now`.
-- The 16-slot wallet capacity gauge counts only what the page actually read, and renders an explicit `unknown / 16` dashed state when a wallet's history exceeds the read window.
+- Pre-subscribe period bars on the Plan page are labelled `Preview` and compute possible payments from `floor((until - now - 1) / period) + 1`; all drawn bars remain visible at every width so the caption always matches what is drawn.
+- Real mandate timelines on My mandates (`src/ui/mandateView.ts`) state only three facts: exact payments made (`pulls`, up to 6 marks + `+N earlier`, never inferred from dates), present state (`paid until <date>` with `carried over` when `pulls == 0`, or `payment due`), and payments still possible before `expiresAt` (only when active; stopped/cancelled/expired mandates show 0 possible marks and state why). The cap tag is shown only when an active permission exists.
+- The 16-slot wallet capacity gauge counts the active mandates read, shows `at least N / 16` with dashed remaining slots when history is truncated, and preserves the near-limit warning whenever the read active count is at or above `maxActive - 2`.
+- `CapMeter` and bar heights draw proportionally with a minimum visible sliver and an explicit `not to scale` badge whenever clamping is needed.
 - Confirm panels never say `Ready to sign` while a button is disabled or waiting on a pending step.
 
 ## Colour (tokens in `src/styles.css`; WCAG AA verified ≥ 4.5:1 for text, ≥ 3:1 for control borders and focus rings)

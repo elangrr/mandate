@@ -4,6 +4,7 @@ import type { Mandate, Plan, PlanCounts } from "../lib/amino";
 import { date, gnot, period, shortAddr, thousands } from "../lib/format";
 import { ReadError, type PackageStatus } from "../lib/rpc";
 import { DecodeError } from "../lib/amino";
+import { buildMandateTimeline, scaleBarHeight, scaleCapMeter, type MandateTimelineStatus } from "./mandateView";
 import { Usd } from "./price";
 
 // One small icon set: 24-unit grid, 1.75 stroke, round caps, currentColor.
@@ -110,17 +111,14 @@ export function ReadFailed({ error, retry }: { error: Error; retry?: () => void 
 }
 
 /**
- * Visual cap meter: shows how the plan's price and the collector's fee allowance
- * sit inside the cap, with the blocked zone beyond the cap that the chain refuses.
+ * Visual cap meter: draws the plan's price and the collector's fee allowance
+ * proportionally inside the cap, with a minimum visible sliver when needed
+ * (explicitly marked "not to scale"), and the blocked zone beyond the cap
+ * that the chain refuses.
  */
 export function CapMeter({ amount, feeAllowance, periodSec }: { amount: bigint; feeAllowance: bigint; periodSec: bigint }) {
   const cap = amount + feeAllowance;
-  // Cap sits at 82% of the full track width; the remaining 18% represents the zone beyond the cap.
-  const capBand = 82;
-  const rawShare = cap > 0n ? Number((amount * 1000n) / cap) / 1000 : 0.9;
-  const pricePct = Math.round(Math.min(capBand - 7, Math.max(16, rawShare * capBand)) * 10) / 10;
-  const feePct = Math.round((capBand - pricePct) * 10) / 10;
-  const beyondPct = 100 - capBand;
+  const { pricePct, feePct, beyondPct, notToScale } = scaleCapMeter(amount, feeAllowance);
   const style = {
     "--price-pct": `${pricePct}%`,
     "--fee-pct": `${feePct}%`,
@@ -130,7 +128,10 @@ export function CapMeter({ amount, feeAllowance, periodSec }: { amount: bigint; 
     <div className="cap-meter" style={style}>
       <div className="cap-meter-head">
         <span className="console-kicker">Cap per {period(periodSec)}</span>
-        <span className="cap-meter-ceiling mono">Cap {gnot(cap)} GNOT</span>
+        <span className="cap-meter-head-right">
+          {notToScale && <span className="scale-note mono">not to scale</span>}
+          <span className="cap-meter-ceiling mono">Cap {gnot(cap)} GNOT</span>
+        </span>
       </div>
       <div className="cap-meter-track" aria-hidden="true">
         <span className="cap-meter-price" />
@@ -162,39 +163,39 @@ export function CapMeter({ amount, feeAllowance, periodSec }: { amount: bigint; 
 
 /**
  * Preview / example rhythm strip for the Home example card and the Plan page
- * before subscribing. Explicitly labelled as an example or a preview.
+ * before subscribing. Explicitly labelled as an example or a preview; all drawn
+ * bars stay visible at every width so the footer always matches what is shown.
  */
 export function RhythmStrip({
   kicker,
-  amountLabel,
-  capLabel,
+  amount,
+  cap,
   periodLabel,
   endLabel,
-  ratio = 0.86,
   ticks,
-  totalPeriods,
+  totalPossible,
   wide = false,
 }: {
   kicker: string;
-  amountLabel: string;
-  capLabel: string;
+  amount: bigint;
+  cap: bigint;
   periodLabel: string;
   endLabel?: string;
-  ratio?: number;
   ticks: string[];
-  totalPeriods?: bigint;
+  totalPossible?: bigint;
   wide?: boolean;
 }) {
-  const pct = Math.round(Math.min(86, Math.max(44, ratio * 88)));
+  const { heightPct, notToScale } = scaleBarHeight(amount, cap);
   const shown = ticks.length;
-  const more = totalPeriods !== undefined && totalPeriods > BigInt(shown);
+  const extra = totalPossible !== undefined && totalPossible > BigInt(shown) ? totalPossible - BigInt(shown) : 0n;
   return (
     <div className={`rhythm rhythm-preview${wide ? " rhythm-wide" : ""}`} aria-hidden="true">
       <div className="rhythm-top">
-        <span className="rhythm-cap-tag mono">Cap {capLabel} GNOT</span>
+        <span className="rhythm-cap-tag mono">Cap {gnot(cap)} GNOT</span>
         <span className="rhythm-cadence mono">
-          {kicker} · {amountLabel} GNOT / {periodLabel}
+          {kicker} · {gnot(amount)} GNOT / {periodLabel}
           {endLabel ? ` · until ${endLabel}` : ""}
+          {notToScale ? " · not to scale" : ""}
         </span>
       </div>
       <div className="rhythm-stage">
@@ -202,7 +203,7 @@ export function RhythmStrip({
         <div className="rhythm-ceiling" />
         <div className="rhythm-bars" style={{ "--cols": shown } as CSSProperties}>
           {ticks.map((t, i) => (
-            <div key={t} className="rhythm-col" style={{ "--i": i, "--h": `${pct}%` } as CSSProperties}>
+            <div key={t} className="rhythm-col" style={{ "--i": i, "--h": `${heightPct}%` } as CSSProperties}>
               <span className="rhythm-bar">
                 <span className="rhythm-bar-cap" />
               </span>
@@ -211,147 +212,119 @@ export function RhythmStrip({
           ))}
         </div>
       </div>
-      {more && totalPeriods !== undefined && (
+      {totalPossible !== undefined && (
         <div className="rhythm-foot mono">
-          Showing first {shown} of {thousands(totalPeriods)} periods in a year
+          {extra > 0n
+            ? `Showing ${shown} of up to ${thousands(totalPossible)} possible payments (+${thousands(extra)} more)`
+            : `Up to ${thousands(totalPossible)} possible ${totalPossible === 1n ? "payment" : "payments"} before ${endLabel ?? "the end"}`}
         </div>
       )}
     </div>
   );
 }
 
-interface RealPeriodSlot {
-  index: bigint; // 1-based period number
-  kind: "paid" | "current" | "upcoming" | "stopped";
-  isCurrent: boolean;
-}
-
 /**
- * Real mandate period timeline computed strictly from m.createdAt, m.period,
- * m.expiresAt, m.paidThrough, and chain time `now`. Never invents dates or counts.
+ * Facts-only view of a real mandate:
+ * 1. Payments made = m.pulls (latest 6 marks + "+N earlier"). Never inferred from dates.
+ * 2. Now = paid until <date> (or carried over), payment due, or inactive state.
+ * 3. Still possible before end = only when active; reason when stopped/cancelled/expired.
  */
 export function MandatePeriods({
   m,
   now,
+  status,
   cap,
-  tone,
+  permissionExpiresAt,
 }: {
   m: Mandate;
   now: bigint;
-  cap: bigint;
-  tone: "ok" | "warn" | "off";
+  status: MandateTimelineStatus;
+  cap: bigint | null;
+  permissionExpiresAt?: bigint;
 }) {
-  const totalBig = m.period > 0n && m.expiresAt > m.createdAt ? (m.expiresAt - m.createdAt + m.period - 1n) / m.period : 1n;
-  const maxShow = 12n;
-  // Determine 0-based current period index from real chain time
-  const rawCur = m.period > 0n && now >= m.createdAt ? (now - m.createdAt) / m.period : 0n;
-  const curIdx = rawCur >= totalBig ? totalBig - 1n : rawCur;
+  const model = buildMandateTimeline({
+    pulls: m.pulls,
+    period: m.period,
+    nextPullAt: m.nextPullAt,
+    paidThrough: m.paidThrough,
+    expiresAt: m.expiresAt,
+    now,
+    status,
+    permissionExpiresAt,
+  });
+  const tone = status === "active" ? "ok" : status === "stopped" || status === "permission-expired" ? "warn" : "off";
+  const barScale = cap !== null ? scaleBarHeight(m.amount, cap) : { heightPct: 75, notToScale: false };
 
-  let startIdx = 0n;
-  const count = totalBig < maxShow ? totalBig : maxShow;
-  if (totalBig > maxShow) {
-    // Anchor window around the current period so paid + current + upcoming are visible
-    const desiredStart = curIdx > 2n ? curIdx - 2n : 0n;
-    const maxStart = totalBig - maxShow;
-    startIdx = desiredStart > maxStart ? maxStart : desiredStart;
-  }
-
-  const ratio = cap > 0n ? Number((m.amount * 100n) / cap) / 100 : 0.9;
-  const pct = Math.round(Math.min(86, Math.max(44, ratio * 88)));
-
-  const slots: RealPeriodSlot[] = [];
-  for (let offset = 0n; offset < count; offset++) {
-    const idx = startIdx + offset;
-    const pStart = m.createdAt + idx * m.period;
-    const pEnd = pStart + m.period;
-    const isCurrent = now >= pStart && now < pEnd;
-    // Paid through advances by one period per payment from the pull timestamp;
-    // require coverage past the period midpoint so a few seconds' collector offset
-    // never marks the next unpaid period as paid.
-    const isPaid = m.paidThrough >= pStart + m.period / 2n;
-    let kind: RealPeriodSlot["kind"];
-    if (isPaid) kind = "paid";
-    else if (tone === "warn") kind = "stopped";
-    else if (isCurrent) kind = "current";
-    else kind = "upcoming";
-    slots.push({ index: idx + 1n, kind, isCurrent });
-  }
-
-  const paidCount = slots.filter((s) => s.kind === "paid").length;
   return (
-    <div className={`rhythm rhythm-real rhythm-${tone}`} aria-hidden="true">
-      <div className="rhythm-top">
-        <span className="rhythm-cap-tag mono">Cap {gnot(cap)} GNOT</span>
-        <span className="rhythm-cadence mono">
-          {date(m.createdAt)} → {date(m.expiresAt)} · {thousands(totalBig)} {totalBig === 1n ? "period" : "periods"}
+    <div className={`mandate-timeline mandate-timeline-${tone}`}>
+      <p className="sr-only">{model.summaryText}</p>
+      <div className="mt-head mono" aria-hidden="true">
+        <span>
+          {cap !== null ? `Cap ${gnot(cap)} GNOT` : "No active permission"}
+          {cap !== null && barScale.notToScale ? " · not to scale" : ""}
         </span>
+        <span className="muted">Ends {date(m.expiresAt)}</span>
       </div>
-      <div className="rhythm-stage">
-        <div className="rhythm-overband" />
-        <div className="rhythm-ceiling" />
-        <div className="rhythm-bars rhythm-bars-real" style={{ "--cols": slots.length } as CSSProperties}>
-          {slots.map((slot, i) => (
-            <div
-              key={slot.index.toString()}
-              className={`rhythm-col rhythm-slot-${slot.kind}${slot.isCurrent ? " rhythm-slot-now" : ""}`}
-              style={{ "--i": i, "--h": `${pct}%` } as CSSProperties}
-            >
-              <span className="rhythm-bar">
-                {slot.kind === "paid" && <span className="rhythm-bar-mark">✓</span>}
-                {slot.kind === "stopped" && <span className="rhythm-bar-mark">×</span>}
-              </span>
-              <span className="rhythm-tick mono">{slot.isCurrent ? `NOW` : `#${slot.index.toString()}`}</span>
-            </div>
-          ))}
+      <div className="mt-grid" aria-hidden="true">
+        <div className="mt-section">
+          <span className="mt-label mono">Payments made</span>
+          <div className="mt-marks">
+            {model.paidEarlier > 0n && <span className="mt-overflow mono">+{thousands(model.paidEarlier)} earlier</span>}
+            {model.paidMarks > 0 ? (
+              Array.from({ length: model.paidMarks }, (_, i) => (
+                <span key={i} className="mt-mark mt-mark-paid" style={{ "--h": `${barScale.heightPct}%` } as CSSProperties}>
+                  <span className="mt-mark-glyph">✓</span>
+                </span>
+              ))
+            ) : (
+              <span className="mt-empty mono">{model.paidSummary}</span>
+            )}
+          </div>
         </div>
-      </div>
-      <div className="rhythm-legend mono">
-        <span className="rhythm-legend-item">
-          <span className="rhythm-key rhythm-key-paid" />
-          Paid{paidCount > 0 ? "" : " (none yet)"}
-        </span>
-        <span className="rhythm-legend-item">
-          <span className="rhythm-key rhythm-key-now" />
-          Current period
-        </span>
-        <span className="rhythm-legend-item">
-          <span className={`rhythm-key ${tone === "warn" ? "rhythm-key-stopped" : "rhythm-key-upcoming"}`} />
-          {tone === "warn" ? "Stopped on chain" : "Upcoming"}
-        </span>
-        {totalBig > maxShow && (
-          <span className="rhythm-legend-more">
-            Showing #{(startIdx + 1n).toString()}–#{(startIdx + count).toString()} of {thousands(totalBig)}
-          </span>
-        )}
+
+        <div className="mt-section mt-section-now">
+          <span className="mt-label mono">Now</span>
+          <span className={`mt-now mt-now-${model.nowState.kind} mono`}>{model.nowState.label}</span>
+        </div>
+
+        <div className="mt-section mt-section-possible">
+          <span className="mt-label mono">Still possible before end</span>
+          {status === "active" ? (
+            model.possibleMarks > 0 ? (
+              <div className="mt-marks">
+                {Array.from({ length: model.possibleMarks }, (_, i) => (
+                  <span key={i} className="mt-mark mt-mark-possible" style={{ "--h": `${barScale.heightPct}%` } as CSSProperties} />
+                ))}
+                {model.possibleMore > 0n && <span className="mt-overflow mono">+{thousands(model.possibleMore)} more</span>}
+              </div>
+            ) : (
+              <span className="mt-empty mono">0 possible before {date(m.expiresAt)}</span>
+            )
+          ) : (
+            <span className="mt-reason small">{model.stoppedReason}</span>
+          )}
+        </div>
       </div>
     </div>
   );
 }
 
-/** 16-slot visual capacity gauge for a wallet's active mandates, or an explicit "unknown" state. */
-export function SlotGauge({ active, max }: { active: number | null; max: number }) {
-  if (active === null) {
-    return (
-      <div className="slot-gauge-wrap">
-        <div className="slot-gauge slot-gauge-unknown" aria-hidden="true">
-          {Array.from({ length: max }, (_, i) => (
-            <span key={i} className="slot-cell slot-cell-unknown" />
-          ))}
-        </div>
-        <span className="slot-gauge-label mono">unknown / {max}</span>
-      </div>
-    );
-  }
+/** 16-slot visual capacity gauge for a wallet's active mandates, with floor display when history is incomplete. */
+export function SlotGauge({ active, max, incomplete = false }: { active: number; max: number; incomplete?: boolean }) {
   const warn = active >= max - 2;
+  const filled = Math.min(max, Math.max(0, active));
   return (
     <div className="slot-gauge-wrap">
       <div className={warn ? "slot-gauge slot-gauge-warn" : "slot-gauge"} aria-hidden="true">
         {Array.from({ length: max }, (_, i) => (
-          <span key={i} className={i < active ? "slot-cell slot-cell-on" : "slot-cell"} />
+          <span
+            key={i}
+            className={i < filled ? "slot-cell slot-cell-on" : incomplete ? "slot-cell slot-cell-unknown" : "slot-cell"}
+          />
         ))}
       </div>
       <span className="slot-gauge-label mono">
-        {active} / {max}
+        {incomplete ? `at least ${active}` : active} / {max}
       </span>
     </div>
   );
@@ -363,16 +336,13 @@ export function SlotGauge({ active, max }: { active: number | null; max: number 
  */
 export function CreatorChart({ plans, counts }: { plans: Plan[]; counts: PlanCounts[] }) {
   const maxVal = counts.reduce((acc, c) => Math.max(acc, c.paidThisPeriod, c.paidLastPeriod), 0);
-  const totalThis = counts.reduce((acc, c) => acc + c.paidThisPeriod, 0);
-  const totalLast = counts.reduce((acc, c) => acc + c.paidLastPeriod, 0);
   return (
     <section className="card creator-chart" aria-labelledby="cchart-title">
       <div className="creator-chart-head">
         <div>
           <h2 id="cchart-title">Payments per period</h2>
           <p className="muted small">
-            {thousands(totalThis)} this period · {thousands(totalLast)} the period before, across {thousands(plans.length)}{" "}
-            {plans.length === 1 ? "plan" : "plans"}
+            In each plan’s current and previous period, across {thousands(plans.length)} {plans.length === 1 ? "plan" : "plans"}
           </p>
         </div>
         <div className="creator-chart-legend mono" aria-hidden="true">
@@ -387,7 +357,7 @@ export function CreatorChart({ plans, counts }: { plans: Plan[]; counts: PlanCou
         </div>
       </div>
       {maxVal === 0 ? (
-        <p className="muted small creator-chart-empty">No payments recorded in the current or previous period yet.</p>
+        <p className="muted small creator-chart-empty">No payments recorded in any plan’s current or previous period yet.</p>
       ) : (
         <ul className="creator-chart-list">
           {plans.map((p, i) => {

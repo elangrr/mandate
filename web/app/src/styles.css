@@ -84,9 +84,9 @@
   --t-lg: 1.125rem;
   --t-h3: 1.375rem;
   --t-h2: 1.75rem;
-  --t-h1: min(clamp(1.75rem, 1.3rem + 1.8vw, 2.5rem), 11vw);
-  --t-display: min(clamp(1.95rem, 1.3rem + 2.7vw, 3.35rem), 12vw);
-  --t-figure: min(clamp(1.8rem, 1.35rem + 2.4vw, 3.25rem), 11.5vw);
+  --t-h1: clamp(1.55rem, 1.25rem + 1.4vw, 2.5rem);
+  --t-display: clamp(1.75rem, 1.3rem + 2.2vw, 3.25rem);
+  --t-figure: clamp(1.75rem, 1.35rem + 1.9vw, 3.1rem);
   --ease-out: cubic-bezier(0.2, 0, 0, 1);
 }
 
@@ -840,6 +840,20 @@ main:focus-visible {
   align-items: baseline;
   gap: var(--s2);
 }
+.cap-meter-head-right {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--s2);
+}
+.scale-note {
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--field-line);
+  background: var(--surface);
+}
 .cap-meter-ceiling {
   color: var(--signal);
   font-weight: 700;
@@ -993,16 +1007,10 @@ main:focus-visible {
 @media (max-width: 42rem) {
   .rhythm-preview.rhythm-wide .rhythm-bars {
     grid-template-columns: repeat(6, minmax(0, 1fr));
-  }
-  .rhythm-preview.rhythm-wide .rhythm-col:nth-child(n + 7) {
-    display: none;
-  }
-  .rhythm-bars-real {
-    grid-template-columns: repeat(min(var(--cols, 6), 6), minmax(0, 1fr));
     height: auto;
     row-gap: var(--s3);
   }
-  .rhythm-bars-real .rhythm-col {
+  .rhythm-preview.rhythm-wide .rhythm-col {
     height: 3.5rem;
   }
 }
@@ -1042,76 +1050,138 @@ main:focus-visible {
   line-height: 1;
 }
 
-/* Real mandate period slot states: distinct fill + border + mark (never colour alone) */
-.rhythm-slot-paid .rhythm-bar {
-  background: linear-gradient(180deg, var(--ok), color-mix(in oklab, var(--ok) 65%, var(--accent)));
-  border-color: var(--ok);
-  color: var(--accent-ink);
-}
-.rhythm-slot-current .rhythm-bar {
-  background: color-mix(in oklab, var(--accent-tint) 85%, var(--surface));
-  border: 2px solid var(--accent);
-}
-.rhythm-slot-upcoming .rhythm-bar {
-  background: var(--surface);
-  border: 1.5px solid var(--field-line);
-}
-.rhythm-slot-stopped .rhythm-bar {
-  background: var(--warn-tint);
-  border: 1.5px dashed var(--warn);
-  color: var(--warn);
-}
-.rhythm-slot-now .rhythm-bar {
-  box-shadow: 0 0 0 2px var(--surface-2), 0 0 0 3.5px var(--accent);
-}
 .rhythm-tick {
   font-size: clamp(0.62rem, 2.2vw, 0.72rem);
   color: var(--ink-2);
   line-height: 1;
 }
-.rhythm-slot-now .rhythm-tick {
-  color: var(--accent);
-  font-weight: 700;
-}
-.rhythm-foot,
-.rhythm-legend {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--s2) var(--s4);
+.rhythm-foot {
   font-size: var(--t-xs);
   color: var(--ink-2);
   padding-block-start: var(--s2);
   border-block-start: 1px solid var(--line);
 }
-.rhythm-legend-item {
-  display: inline-flex;
-  align-items: center;
+
+/* Facts-only real mandate timeline (paid / now / still possible) */
+.mandate-timeline {
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 0.7rem;
+  padding: var(--s3) clamp(0.75rem, 3.5vw, 1rem);
+  box-shadow: var(--inset-shadow);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s3);
+  min-width: 0;
+}
+.mt-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: var(--s1) var(--s3);
+  font-size: var(--t-xs);
+  color: var(--signal);
+  font-weight: 600;
+  padding-block-end: var(--s2);
+  border-block-end: 1px solid var(--line);
+}
+.mandate-timeline-off .mt-head,
+.mandate-timeline-warn .mt-head {
+  color: var(--ink-2);
+}
+.mt-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: var(--s3) var(--s4);
+  align-items: start;
+}
+.mt-section {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--s2);
+  min-width: 0;
+}
+.mt-label {
+  font-size: var(--t-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  font-weight: 600;
+}
+.mt-marks {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 0.35rem;
+  min-height: 2.35rem;
 }
-.rhythm-legend-more {
-  margin-inline-start: auto;
-}
-.rhythm-key {
-  width: 0.65rem;
-  height: 0.65rem;
-  border-radius: 2px;
+.mt-mark {
+  display: inline-grid;
+  place-items: center;
+  width: 1.5rem;
+  height: max(0.85rem, calc(2.25rem * var(--h, 75%) / 100));
+  min-height: 1.15rem;
+  border-radius: 0.25rem;
   flex: none;
 }
-.rhythm-key-paid {
-  background: var(--ok);
+.mt-mark-paid {
+  background: linear-gradient(180deg, var(--ok), color-mix(in oklab, var(--ok) 68%, var(--accent)));
+  border: 1px solid var(--ok);
+  color: var(--accent-ink);
 }
-.rhythm-key-now {
-  background: var(--accent-tint);
-  border: 2px solid var(--accent);
+.mt-mark-glyph {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  line-height: 1;
 }
-.rhythm-key-upcoming {
+.mt-mark-possible {
   background: var(--surface);
   border: 1.5px solid var(--field-line);
 }
-.rhythm-key-stopped {
-  background: var(--warn-tint);
-  border: 1.5px dashed var(--warn);
+.mt-overflow,
+.mt-empty {
+  font-size: var(--t-xs);
+  color: var(--ink-2);
+  align-self: center;
+}
+.mt-overflow {
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--field-line);
+  background: var(--surface);
+}
+.mt-now {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  font-size: var(--t-xs);
+  font-weight: 600;
+  padding: 0.28rem 0.65rem;
+  border-radius: 0.4rem;
+  border: 1.5px solid var(--field-line);
+  background: var(--surface);
+  color: var(--ink);
+}
+.mt-now-paid-until {
+  background: var(--ok-tint);
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.mt-now-due {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.mt-now-inactive {
+  background: var(--surface);
+  border-color: var(--field-line);
+  color: var(--ink-2);
+}
+.mt-reason {
+  color: var(--ink-2);
 }
 
 .slot-gauge-wrap {
@@ -1254,7 +1324,7 @@ main:focus-visible {
 }
 .console-figure {
   font-family: var(--font-display);
-  font-size: min(clamp(2.5rem, 1.8rem + 2.4vw, 3.6rem), 13vw);
+  font-size: clamp(2.1rem, 1.7rem + 2.2vw, 3.5rem);
   font-weight: 700;
   line-height: 0.95;
   letter-spacing: -0.04em;
@@ -1767,7 +1837,7 @@ a.mandate-title:hover {
 .mandate-price {
   margin: 0;
   font-family: var(--font-display);
-  font-size: min(clamp(1.35rem, 1.15rem + 0.8vw, 1.75rem), 9vw);
+  font-size: clamp(1.35rem, 1.15rem + 0.8vw, 1.75rem);
   font-weight: 700;
   letter-spacing: -0.02em;
   font-variant-numeric: tabular-nums;
@@ -2186,7 +2256,7 @@ a.mandate-title:hover {
 }
 .notfound-code {
   margin: 0;
-  font-size: min(clamp(2.6rem, 2rem + 2.5vw, 3.8rem), 14vw);
+  font-size: clamp(2.2rem, 1.8rem + 2.2vw, 3.6rem);
   font-weight: 700;
   line-height: 0.95;
   color: var(--signal);
@@ -2268,6 +2338,15 @@ a.mandate-title:hover {
   font-family: var(--font-mono);
   font-size: var(--t-xs);
   font-weight: 700;
+}
+@media (max-width: 30rem) {
+  .how .steps li {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--s2);
+  }
+  .how .steps li::before {
+    grid-row: auto;
+  }
 }
 .how .steps h3 {
   margin: 0.15rem 0 var(--s2);

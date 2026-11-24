@@ -85,7 +85,9 @@ function Steps({ steps }: { steps: Step[] }) {
               <span className="step-label">{s.label}</span>
               <span className="visually-hidden">{STEP_NOTE[s.state]}</span>
               <span className="step-meta">
-                <span className={`step-tag step-tag-${s.state} mono`}>{STEP_BADGE[s.state]}</span>
+                <span className={`step-tag step-tag-${s.state} mono`} aria-hidden="true">
+                  {STEP_BADGE[s.state]}
+                </span>
                 {s.hash && (
                   <a href={explorerTx(s.hash)} target="_blank" rel="noreferrer noopener" className="ext small">
                     transaction <Icon name="external" />

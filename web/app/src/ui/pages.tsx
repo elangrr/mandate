@@ -24,6 +24,7 @@ import {
   RhythmStrip,
   SlotGauge,
 } from "./parts";
+import { possiblePayments, type MandateTimelineStatus } from "./mandateView";
 import { useWallet } from "./WalletContext";
 
 const PLAN_WALK_PAGES = 10; // the home page looks at the newest 200 plans
@@ -63,6 +64,8 @@ function PlanCard({ p }: { p: Plan }) {
 // ------------------------------------------------------------------ home
 
 export function Home() {
+  const examplePrice = 1_000_000n;
+  const exampleCap = examplePrice + rules.feeAllowanceUgnot;
   return (
     <>
       <section className="hero">
@@ -92,7 +95,7 @@ export function Home() {
               <span className="console-stamp-example mono">Example</span>
             </div>
             <div className="console-amount">
-              <span className="console-figure mono">1</span>
+              <span className="console-figure mono">{gnot(examplePrice)}</span>
               <span className="console-unit">
                 <strong className="mono">GNOT</strong>
                 <span className="muted small">every 30 days</span>
@@ -100,20 +103,19 @@ export function Home() {
             </div>
             <RhythmStrip
               kicker="Example"
-              amountLabel="1"
-              capLabel="1.1"
+              amount={examplePrice}
+              cap={exampleCap}
               periodLabel="30 days"
-              ratio={1 / 1.1}
               ticks={["M1", "M2", "M3", "M4", "M5", "M6"]}
             />
             <div className="console-specs">
               <div>
-                <span className="console-spec-k">Locked up front</span>
-                <span className="console-spec-v mono">0 GNOT</span>
+                <span className="console-spec-k">No escrow</span>
+                <span className="console-spec-v mono">~0.54 GNOT storage deposit</span>
               </div>
               <div>
                 <span className="console-spec-k">Fee allowance</span>
-                <span className="console-spec-v mono">0.1 GNOT</span>
+                <span className="console-spec-v mono">{gnot(rules.feeAllowanceUgnot)} GNOT</span>
               </div>
               <div>
                 <span className="console-spec-k">Stop</span>
@@ -123,7 +125,7 @@ export function Home() {
           </aside>
         </div>
       </section>
-      <FlowPicture />
+      <FlowPicture amount={gnot(examplePrice)} cap={gnot(exampleCap)} />
       <Limits />
       <WhenLive>
         <Numbers />
@@ -251,7 +253,6 @@ function PlansPage({ page }: { page: number }) {
   if (s.value.length === 0) return <Empty>No plans on this page.</Empty>;
   const withPayments = s.value.filter((p) => p.paidThisPeriod + p.paidLastPeriod > 0).length;
   const testPlans = s.value.filter((p) => isTestPeriod(p.period)).length;
-  const totalThisPeriod = s.value.reduce((acc, p) => acc + p.paidThisPeriod, 0);
   return (
     <>
       <dl className="stats plans-summary" aria-label="Plans on this page">
@@ -262,10 +263,6 @@ function PlansPage({ page }: { page: number }) {
         <div>
           <dt>With recent payments</dt>
           <dd>{thousands(withPayments)}</dd>
-        </div>
-        <div>
-          <dt>Payments this period</dt>
-          <dd>{thousands(totalThisPeriod)}</dd>
         </div>
         <div>
           <dt>Test plans</dt>
@@ -328,9 +325,8 @@ function PlanBody({ id }: { id: bigint }) {
   const { plan: p, counts, now } = s.value;
   const cap = p.amount + rules.feeAllowanceUgnot;
   const until = now + 365n * 86400n;
-  const capRatio = cap > 0n ? Number((p.amount * 100n) / cap) / 100 : 0.9;
-  const totalPeriods = p.period > 0n && until > now ? (until - now) / p.period : 1n;
-  const previewCount = Number(totalPeriods > 12n ? 12n : totalPeriods < 1n ? 1n : totalPeriods);
+  const totalPossible = possiblePayments(now, until, p.period);
+  const previewCount = Number(totalPossible > 12n ? 12n : totalPossible < 1n ? 1n : totalPossible);
   const previewTicks = Array.from({ length: previewCount }, (_, i) => `P${i + 1}`);
   return (
     <article className="plan-page">
@@ -388,14 +384,13 @@ function PlanBody({ id }: { id: bigint }) {
         </p>
         <RhythmStrip
           kicker="Preview"
-          amountLabel={gnot(p.amount)}
-          capLabel={gnot(cap)}
+          amount={p.amount}
+          cap={cap}
           periodLabel={period(p.period)}
           endLabel={date(until)}
-          ratio={capRatio}
           wide
           ticks={previewTicks}
-          totalPeriods={totalPeriods}
+          totalPossible={totalPossible}
         />
         <ul className="costs">
           <li>
@@ -635,29 +630,40 @@ function MandateList({ payer }: { payer: string }) {
         No mandates from <span className="mono">{shortAddr(payer)}</span> yet. <a href="#/plans">Find a plan</a>
       </Empty>
     );
-  const activeCount = historyComplete ? rows.filter((r) => r.m.status === "active").length : null;
-  const nearLimit = activeCount !== null && activeCount >= rules.maxActive - 2;
+  const readActive = rows.filter((r) => r.m.status === "active").length;
+  const nearLimit = readActive >= rules.maxActive - 2;
   return (
     <>
       <div className={nearLimit ? "capacity-bar notice notice-warn" : "capacity-bar"}>
         <div className="capacity-copy">
-          {activeCount !== null ? (
+          {historyComplete ? (
             <p className={nearLimit ? "" : "muted small"}>
-              {plural(activeCount, "active mandate")} of the {rules.maxActive} a wallet can hold.
+              {plural(readActive, "active mandate")} of the {rules.maxActive} a wallet can hold.
               {nearLimit && " You are close to the limit: cancel one you no longer need before adding another."}
             </p>
           ) : (
-            <p className="muted small">
-              Active mandate count unknown (only the latest {thousands(rows.length)} mandates were read). A wallet can hold at most {rules.maxActive}.
+            <p className={nearLimit ? "" : "muted small"}>
+              At least {plural(readActive, "active mandate")} of the {rules.maxActive} a wallet can hold (only the latest {thousands(rows.length)} mandates were read).
+              {nearLimit && " You are close to the limit: cancel one you no longer need before adding another."}
             </p>
           )}
         </div>
-        <SlotGauge active={activeCount} max={rules.maxActive} />
+        <SlotGauge active={readActive} max={rules.maxActive} incomplete={!historyComplete} />
       </div>
       <ul className="mandate-list">
         {rows.map(({ m, plan, session }) => {
           const st = mandateState(m, session, now);
-          const cap = session ? session.spendLimit : m.amount + rules.feeAllowanceUgnot;
+          const hasActivePermission = st.tone === "ok" && session !== null;
+          const timelineStatus: MandateTimelineStatus =
+            m.status === "cancelled"
+              ? "cancelled"
+              : m.status === "expired"
+                ? "expired"
+                : !session
+                  ? "stopped"
+                  : session.expiresAt > 0n && session.expiresAt <= now
+                    ? "permission-expired"
+                    : "active";
           return (
             <li key={m.id.toString()} className="card mandate" data-tone={st.tone}>
               <div className="mandate-head">
@@ -668,10 +674,16 @@ function MandateList({ payer }: { payer: string }) {
               </div>
               <div className="mandate-amount-row">
                 <p className="mandate-price">{price(m.amount, m.period)}</p>
-                <span className="mandate-cap-tag mono">cap {gnot(cap)} GNOT</span>
+                {hasActivePermission && <span className="mandate-cap-tag mono">cap {gnot(session.spendLimit)} GNOT</span>}
               </div>
               <p className="mandate-note small">{st.note}</p>
-              {st.tone !== "off" && <MandatePeriods m={m} now={now} cap={cap} tone={st.tone} />}
+              <MandatePeriods
+                m={m}
+                now={now}
+                status={timelineStatus}
+                cap={hasActivePermission ? session.spendLimit : null}
+                permissionExpiresAt={session?.expiresAt}
+              />
               <dl className="mandate-facts">
                 <div>
                   <dt>Payments</dt>
