@@ -6,7 +6,9 @@ Mandate is subscriptions and direct debit on native GNOT, built on Gno.land sess
 
 It ships with one thing to subscribe to: **supporter pages**. A creator publishes a plan such as "1 GNOT every week"; the plan's page lists its supporters, counted from their first payment on.
 
-Status: milestone 1, tested on a local chain. Not deployed yet. The realm will live at `gno.land/r/<namespace>/mandate` on the Onyx test network; in this repository the namespace is the placeholder `mandate_dev`.
+Status: deployed to the Onyx test network (`onyx-1`) on 2026-11-24 at [`gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate`](https://onyx.testnets.gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate), in block 1366932. Onyx parks every new package until an approver enables it, so the pages open once it is live. Test GNOT only.
+
+Two branches: `master` keeps the placeholder namespace `mandate_dev`, which the tests and the local chain flow use; `onyx` is the same code with the namespace set by `scripts/set-namespace.sh`, byte for byte what is on chain (`docs/deploy-checksums.txt` and `scripts/verify-deploy.sh` there).
 
 ## How it works
 
@@ -108,10 +110,10 @@ node web/adena-test.test.mjs
 
 ## Deploying
 
-`scripts/set-namespace.sh <g1 address or registered name>` replaces the placeholder in `r/` and runs the tests. Deployment to Onyx is a separate, manual step by the owner of the namespace. Never deploy anything under the realm's path.
+`scripts/set-namespace.sh <g1 address or registered name>` replaces the placeholder in `r/` and runs the tests. Deployment is a separate, manual step by the owner of the namespace; the branch `onyx` has the guide (`docs/deploy.md`). Never deploy anything under the realm's path.
 
 ## Licence
 
-Apache License 2.0; see `LICENSE` and `NOTICE`. The copy published on the Gno.land network is also available under the GNO Network General Public License, version 6, as the network's terms provide. Imported Gno packages keep their own licence.
+MIT License; see `LICENSE` and `NOTICE`. The copy published on the Gno.land network is also available under the GNO Network General Public License, version 6, as the network's terms provide. Imported Gno packages keep their own licence.
 
 Built on [gno.land](https://gno.land).
