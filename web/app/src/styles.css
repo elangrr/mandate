@@ -1000,6 +1000,21 @@ main:focus-visible {
   height: auto;
   max-height: 22rem;
 }
+/* wide screens: the picture fills the card and the caption sits beside it, so no
+   empty band is left at the right or the bottom */
+@media (min-width: 60rem) {
+  .flow {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 15rem;
+    align-items: center;
+    gap: var(--s5);
+  }
+  .flow figcaption {
+    margin-block-start: 0;
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
 .flow-disc {
   fill: var(--surface-2);
   stroke: var(--line);
@@ -1193,4 +1208,133 @@ main:focus-visible {
   .notice {
     border: 1px solid CanvasText;
   }
+}
+
+/* ------------------------------------------------------------------ subscribe and stop */
+
+.btn-danger {
+  background: var(--danger);
+  color: var(--accent-ink);
+}
+@media (hover: hover) {
+  .btn-danger:not(:disabled):hover {
+    background: color-mix(in oklab, var(--danger) 88%, var(--ink));
+  }
+}
+.notice-ok {
+  background: var(--ok-tint);
+  border-color: color-mix(in oklab, var(--ok) 35%, transparent);
+}
+.notice-ok .icon {
+  color: var(--ok);
+}
+.subscribe,
+.stop {
+  display: grid;
+  gap: var(--s4);
+  justify-items: start;
+}
+.subscribe {
+  justify-items: stretch;
+}
+.stop {
+  margin-block-start: var(--s4);
+}
+.confirm {
+  display: grid;
+  gap: var(--s3);
+  justify-items: start;
+  padding-block-start: var(--s4);
+  border-block-start: 1px solid var(--line);
+}
+.confirm-sentence {
+  font-size: var(--t-lg);
+  margin: 0;
+  max-width: var(--text);
+}
+.confirm-list {
+  margin: 0;
+  padding-inline-start: var(--s5);
+  color: var(--ink-2);
+  max-width: var(--text);
+}
+.confirm-list li + li {
+  margin-block-start: var(--s2);
+}
+.confirm-inline {
+  display: grid;
+  gap: var(--s3);
+  padding: var(--s4);
+  border: 1px solid var(--line);
+  border-radius: var(--r-control);
+  background: var(--surface-2);
+  max-width: var(--text);
+}
+.confirm-inline p {
+  margin: 0;
+}
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s3);
+}
+.steps-run {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: var(--s2);
+}
+.step-run {
+  display: flex;
+  gap: var(--s3);
+  align-items: baseline;
+}
+.step-dot {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  font-size: var(--t-sm);
+  font-weight: 700;
+  background: var(--surface-2);
+  color: var(--ink-2);
+  border: 1px solid var(--line);
+}
+.step-dot .icon {
+  width: 0.9rem;
+  height: 0.9rem;
+}
+.step-wallet .step-dot {
+  background: var(--accent-tint);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.step-done .step-dot {
+  background: var(--ok-tint);
+  color: var(--ok);
+  border-color: transparent;
+}
+.step-failed .step-dot {
+  background: var(--danger-tint);
+  color: var(--danger);
+  border-color: transparent;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .step-wallet .step-dot {
+    animation: pulse-ring 1.6s var(--ease-out) infinite;
+  }
+}
+@keyframes pulse-ring {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in oklab, var(--accent) 40%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 8px transparent;
+  }
+}
+.other-ways {
+  margin-block: var(--s4) 0;
 }

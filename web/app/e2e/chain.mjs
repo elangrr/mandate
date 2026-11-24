@@ -98,6 +98,6 @@ export async function startChain({ keys = ["fluxen", "collector", "supporter", "
   /** Runs the repository's collector once for Fluxen's plans. */
   const collect = (extra = []) =>
     execFileSync(join(repo, "scripts/collect.sh"), ["-home", kb, "-key", "collector", "-payee", info.fluxen.addr, "-remote", rpc, "-chainid", "dev", "-realm", realm,
-      "-state", join(tmp, "collect.state"), "-insecure-password-stdin", ...extra], { input: PW + "\n", env: { ...process.env, GNOHOME: gnohome } }).toString();
+      "-state", join(tmp, "collect.state"), "-insecure-password-stdin", ...extra], { input: PW + "\n", env: { ...process.env, GNOHOME: gnohome, XDG_STATE_HOME: join(tmp, "xdg") } }).toString();
   return { tmp, kb, gnohome, rpc, rpcUrl: `http://${rpc}`, webUrl: `http://127.0.0.1:${webPort}`, keys: info, supporters, gnokey, collect, stop, log: () => out };
 }

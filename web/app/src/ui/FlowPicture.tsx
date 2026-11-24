@@ -14,10 +14,10 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
   const [paused, setPaused] = useState(false);
   return (
     <figure className={paused ? "flow flow-paused" : "flow"}>
-      <svg viewBox="0 0 640 300" role="img" aria-label={label} className="flow-svg">
+      <svg viewBox="0 4 668 266" role="img" aria-label={label} className="flow-svg">
         {/* the cap, set once by the supporter */}
         <g className="flow-cap">
-          <rect x="34" y="18" width="230" height="58" rx="14" className="flow-capbox" />
+          <rect x="14" y="18" width="270" height="58" rx="14" className="flow-capbox" />
           <text x="149" y="42" textAnchor="middle" className="flow-small">
             set once, signed by you
           </text>
@@ -93,7 +93,7 @@ export function FlowPicture({ amount = "1", period = "month", cap = "1.1" }: { a
 
       {/* the same picture stacked, for narrow screens (CSS shows one of the two) */}
       <svg viewBox="0 0 340 540" role="img" aria-label={label} className="flow-svg flow-svg-narrow">
-        <rect x="55" y="8" width="230" height="56" rx="14" className="flow-capbox" />
+        <rect x="35" y="8" width="270" height="56" rx="14" className="flow-capbox" />
         <text x="170" y="31" textAnchor="middle" className="flow-small">
           set once, signed by you
         </text>

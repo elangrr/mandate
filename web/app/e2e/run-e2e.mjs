@@ -30,7 +30,12 @@ process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
 
 console.log(chain.collect().split("\n").filter((l) => /done:|plans,/.test(l)).join("\n"));
-writeFileSync(join(out, "chain.json"), JSON.stringify({ keys: chain.keys, supporters: chain.supporters, realm }, null, 1));
+// What the tests need to sign as the stand-in wallet and to run the collector:
+// the throwaway keybase and the local chain only.
+writeFileSync(
+  join(out, "chain.json"),
+  JSON.stringify({ keys: chain.keys, supporters: chain.supporters, realm, kb: chain.kb, gnohome: chain.gnohome, rpc: chain.rpc, tmp: chain.tmp }, null, 1),
+);
 
 execFileSync("npx", ["vite", "build", "--outDir", "e2e/out/dist", "--emptyOutDir"], {
   cwd: app,

@@ -2,7 +2,8 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { config, gnowebPage, rules } from "../config";
 import type { Mandate, Plan } from "../lib/amino";
 import { date, dateTime, gnot, isTestPeriod, period, plural, price, relative, shortAddr, thousands } from "../lib/format";
-import { isAddress, read, type Session } from "../lib/rpc";
+import { isAddress, read, type Session, type SessionEntry } from "../lib/rpc";
+import { StopControls, SubscribePanel } from "./actions";
 import { FlowPicture } from "./FlowPicture";
 import { go, useAsync } from "./hooks";
 import { useLive } from "./live";
@@ -213,11 +214,8 @@ export function PlanPage({ id }: { id: string }) {
 async function loadPlan(id: bigint) {
   const plan = await read.plan(id);
   if (!plan) return null;
-  const [payee, counts, now] = await Promise.all([read.payee(plan.payee), read.planCounts(id), read.chainTime()]);
-  // The chain refuses a session for a key whose address is an account: ask it
-  // directly (the realm's funded flag cannot see an emptied account).
-  const keyBlocked = payee?.collectorAddr ? payee.collectorFunded || (await read.accountExists(payee.collectorAddr)) : false;
-  return { plan, payee, counts, now, keyBlocked };
+  const [counts, now] = await Promise.all([read.planCounts(id), read.chainTime()]);
+  return { plan, counts, now };
 }
 
 function PlanBody({ id }: { id: bigint }) {
@@ -225,7 +223,7 @@ function PlanBody({ id }: { id: bigint }) {
   if (s.status === "loading") return <Loading what={`plan #${id}`} />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
   if (!s.value) return <Empty>There is no plan #{id.toString()}.</Empty>;
-  const { plan: p, payee, counts, now, keyBlocked } = s.value;
+  const { plan: p, counts, now } = s.value;
   const cap = p.amount + rules.feeAllowanceUgnot;
   const until = now + 365n * 86400n;
   return (
@@ -286,43 +284,17 @@ function PlanBody({ id }: { id: bigint }) {
             <span>you can support one plan of each creator at a time, and hold at most {rules.maxActive} mandates in all</span>
           </li>
         </ul>
-        <SubscribeState payeeKey={payee?.collectorKey ?? ""} keyBlocked={keyBlocked} planId={p.id} />
+        <SubscribePanel plan={p} />
+        <p className="small muted other-ways">
+          Prefer the command line? The plan’s own page shows the two exact gnokey commands:{" "}
+          <a href={gnowebPage(`plan/${p.id}`)} target="_blank" rel="noreferrer noopener" className="ext">
+            open plan #{p.id.toString()} on gnoweb <Icon name="external" />
+          </a>
+        </p>
       </section>
 
       <Supporters plan={p} now={now} />
     </article>
-  );
-}
-
-function SubscribeState({ payeeKey, keyBlocked, planId }: { payeeKey: string; keyBlocked: boolean; planId: bigint }) {
-  if (!payeeKey)
-    return (
-      <div className="notice">
-        <Icon name="alert" />
-        <p>The creator has not published a collector key yet, so nobody can subscribe to this plan. Check back later.</p>
-      </div>
-    );
-  if (keyBlocked)
-    return (
-      <div className="notice notice-warn" role="status">
-        <Icon name="alert" />
-        <p>
-          <strong>New supporters cannot join right now.</strong> The creator’s collector key has received coins, which makes its address an
-          account, and the chain refuses a permission for such a key. The creator must publish a new collector key. Existing supporters keep
-          paying until their mandates expire.
-        </p>
-      </div>
-    );
-  return (
-    <div className="notice">
-      <Icon name="clock" />
-      <p>
-        Subscribing with Adena from this site arrives in the next update. Until then, the plan’s own page shows the two exact commands to run:{" "}
-        <a href={gnowebPage(`plan/${planId}`)} target="_blank" rel="noreferrer noopener" className="ext">
-          open plan #{planId.toString()} on gnoweb <Icon name="external" />
-        </a>
-      </p>
-    </div>
   );
 }
 
@@ -456,7 +428,7 @@ interface MandateRow {
   session: Session | null;
 }
 
-async function loadMandates(payer: string): Promise<{ rows: MandateRow[]; now: bigint }> {
+async function loadMandates(payer: string): Promise<{ rows: MandateRow[]; now: bigint; sessions: SessionEntry[] }> {
   const ms: Mandate[] = [];
   for (let page = 1; page <= 10; page++) {
     const list = await read.mandatesOf(payer, page);
@@ -471,7 +443,7 @@ async function loadMandates(payer: string): Promise<{ rows: MandateRow[]; now: b
       session: m.status === "active" ? await read.session(payer, m.session) : null,
     })),
   );
-  return { rows, now };
+  return { rows, now, sessions: await read.sessions(payer) };
 }
 
 /** What a mandate really is: the realm's view combined with the chain's view of the permission. */
@@ -487,7 +459,8 @@ function MandateList({ payer }: { payer: string }) {
   const [s, reload] = useAsync(() => loadMandates(payer), [payer]);
   if (s.status === "loading") return <Loading what="the mandates" />;
   if (s.status === "error") return <ReadFailed error={s.error} retry={reload} />;
-  const { rows, now } = s.value;
+  const { rows, now, sessions } = s.value;
+  const all = rows.map((r) => r.m);
   if (rows.length === 0)
     return (
       <Empty>
@@ -539,6 +512,7 @@ function MandateList({ payer }: { payer: string }) {
               {m.status === "active" && m.pulls === 0n && m.paidThrough > 0n && (
                 <p className="small muted">Your current period is already paid (time carried over from an earlier mandate for this plan).</p>
               )}
+              <StopControls m={m} all={all} payer={payer} now={now} sessions={sessions} onChanged={reload} />
             </li>
           );
         })}

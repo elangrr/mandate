@@ -20,3 +20,21 @@ cp <this repo>/web/adena-check/page-request.spec.ts packages/adena-extension/src
 cd packages/adena-extension
 PAGE=<this repo>/web/adena-test.html corepack yarn jest --ci src/mandate-check
 ```
+
+## The web app's requests
+
+`app-request.spec.ts` does the same for every request the web app (`web/app`) sends: the first and second approval of subscribing, the first and second approval of stopping, and the one-approval form of each. The requests themselves are in `app-requests.json`, which `web/app/src/lib/tx.test.ts` builds with the app's own builders and compares on every unit test run (`UPDATE_ADENA_REQUESTS=1 npm test` rewrites it after a deliberate change).
+
+The spec checks:
+
+- every request passes Adena's validators and the popup transport;
+- a request with only a permission message (create or revoke) is signed with exactly the page's gas and fee (5,000,000 gas), never Adena's fallback;
+- a request with a realm call is simulated by Adena, starting from the page's non-zero gas;
+- the encoded messages decode back to the same permission terms, realm path, function and arguments.
+
+```
+cp <this repo>/web/adena-check/app-request.spec.ts packages/adena-extension/src/mandate-check/
+REQUESTS=<this repo>/web/adena-check/app-requests.json corepack yarn jest --ci src/mandate-check/app-request.spec.ts
+```
+
+Last run (v1.22.5): 7 of 7 passed.

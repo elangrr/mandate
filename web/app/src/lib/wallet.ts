@@ -4,7 +4,7 @@
 //   AddNetwork({chainId, chainName, rpcUrl}), DoContract({messages, memo}),
 //   On("changedAccount" | "changedNetwork", cb).
 // Responses: { code, status: "success" | "failure", type, message, data }.
-// Transactions are added in slice M2b; this slice only connects and reads the address.
+// Requests are built in tx.ts; send() below is the only place one leaves for Adena.
 
 import { config } from "../config";
 
@@ -45,12 +45,17 @@ function need(): Adena {
   return a;
 }
 
+/** Chain text shown to a person is plain text (React escapes it) and never longer than this. */
+function clip(t: string, max = 200): string {
+  return t.length > max ? t.slice(0, max - 1) + "…" : t;
+}
+
 /** The realm's own error text from a failed transaction, if present. */
 export function chainErrorText(...sources: unknown[]): string | null {
   for (const s of sources) {
     const text = typeof s === "string" ? s : s ? JSON.stringify(s) : "";
     const m = /(mandate: [^"\\\n]+)/.exec(text);
-    if (m) return m[1].trim();
+    if (m) return clip(m[1].trim());
   }
   return null;
 }
@@ -120,4 +125,49 @@ export async function switchNetwork(): Promise<void> {
     if (r.status === "success" || r.type === "REDUNDANT_CHANGE_REQUEST") return;
   }
   throw failure(r);
+}
+
+/** What a transaction did, as Adena reports it. */
+export interface Sent {
+  hash: string;
+  height: bigint | null;
+}
+
+/**
+ * Asks Adena to sign and send one request (one approval popup). Checks first
+ * that Adena is on the app's network and on the account that signs, so a
+ * request never goes out from the wrong wallet. A chain refusal comes back
+ * as a WalletError with the realm's or the chain's own words.
+ */
+export async function send(signer: string, params: { messages: unknown[]; memo: string; gasWanted: number; gasFee: number }): Promise<Sent> {
+  const a = need();
+  const acc = await account();
+  if (acc.chainId !== config.chainId)
+    throw new WalletError("wrong-network", `Adena is on ${acc.chainId || "another network"}; switch it to the ${config.networkName} (${config.chainId}).`);
+  if (acc.address !== signer) throw new WalletError("failed", "The account in Adena changed. Reconnect and try again.");
+  const r = await a.DoContract(params);
+  if (r.status !== "success") throw failure(r);
+  const d = r.data ?? {};
+  const base = d.deliverTx?.ResponseBase ?? d.checkTx?.ResponseBase;
+  if (base?.Error) {
+    const words = chainErrorText(base.Log, base.Error) ?? sessionErrorText(base.Log, base.Error);
+    // A refusal costs only the network fee: nothing else changed. The usual cause is
+    // that the chain changed between Adena's simulation and the block (for example
+    // another approval landed first); the page reads the chain again after this.
+    throw new WalletError("failed", `${words ? `The chain refused it: ${words}.` : "The transaction failed on chain."} Nothing changed apart from the network fee. Check the page and try again.`);
+  }
+  if (typeof d.hash !== "string" || !/^[A-Za-z0-9+/=_-]{1,128}$/.test(d.hash)) throw new WalletError("failed", "Adena did not return a transaction hash. Check your mandates: it may have gone through.");
+  const height = typeof d.height === "string" && /^\d{1,19}$/.test(d.height) ? BigInt(d.height) : typeof d.height === "number" && Number.isSafeInteger(d.height) && d.height > 0 ? BigInt(d.height) : null;
+  return { hash: d.hash, height };
+}
+
+/** The chain's own words for the session refusals a supporter can meet. */
+export function sessionErrorText(...sources: unknown[]): string | null {
+  const text = sources.map((s) => (typeof s === "string" ? s : s ? JSON.stringify(s) : "")).join(" ");
+  if (/session key address collides with existing account/.test(text)) return "the creator's collector key can no longer be used for new permissions (its address is an account); the creator must publish a new one";
+  if (/session key already exists/.test(text)) return "you already gave this collector key a permission";
+  if (/too many sessions/.test(text)) return "your wallet already holds the 16 permissions the chain allows";
+  if (/out of gas/i.test(text)) return "the network needed more gas than estimated";
+  if (/insufficient (funds|coins)/i.test(text)) return "not enough GNOT in your wallet for the deposit and fees";
+  return null;
 }

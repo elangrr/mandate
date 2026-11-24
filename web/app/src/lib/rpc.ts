@@ -160,6 +160,47 @@ export function parseSession(r: AbciResult): Session | null {
   };
 }
 
+/** One of a wallet's permissions as the chain lists them (auth/accounts/<payer>/sessions). */
+export interface SessionEntry extends Session {
+  address: string; // the session key's address
+  pubKey: string; // base64 of its 33-byte public key, "" if unknown
+}
+
+/** Parses the sessions list (JSON array, or null when there are none). */
+export function parseSessions(r: AbciResult): SessionEntry[] {
+  if (r.error) throw new ReadError("chain", r.error);
+  let d: any;
+  try {
+    d = JSON.parse(r.data || "null");
+  } catch {
+    throw new ReadError("chain", "unexpected sessions data");
+  }
+  if (d === null) return [];
+  if (!Array.isArray(d)) throw new ReadError("chain", "unexpected sessions data");
+  return d.map((item: any) => {
+    const s = parseSession({ data: JSON.stringify(item), error: null, log: "" })!;
+    const base = item?.BaseSessionAccount?.BaseAccount ?? {};
+    const address = typeof base.address === "string" && isAddress(base.address) ? base.address : "";
+    const pk = base.public_key;
+    const pubKey = pk && pk["@type"] === "/tm.PubKeySecp256k1" && typeof pk.value === "string" ? pk.value : "";
+    return { ...s, address, pubKey };
+  });
+}
+
+/** The chain's gas price: `price.amount` ugnot per `price.gas` gas (auth/gasprice). */
+export function parseGasPrice(r: AbciResult): { gas: bigint; amount: bigint } {
+  if (r.error) throw new ReadError("chain", r.error);
+  let d: any;
+  try {
+    d = JSON.parse(r.data);
+  } catch {
+    throw new ReadError("chain", "unexpected gas price data");
+  }
+  const m = typeof d?.price === "string" ? /^(\d+)ugnot$/.exec(d.price) : null;
+  if (!m || typeof d.gas !== "string" || !/^[1-9]\d*$/.test(d.gas)) throw new ReadError("chain", "unexpected gas price data");
+  return { gas: BigInt(d.gas), amount: BigInt(m[1]) };
+}
+
 /** Whether an address is an account on chain (it has received coins at some point). */
 export function parseAccountExists(r: AbciResult): boolean {
   if (r.error) throw new ReadError("chain", r.error);
@@ -215,6 +256,16 @@ export const read = {
   hasMandate: (payer: string, p: bigint): Promise<boolean> => cached(`hm${payer}/${p}`, async () => decodeBool(await evalJson(`HasMandate(${addr(payer)}, ${id(p)})`))),
   session: (payer: string, key: string): Promise<Session | null> =>
     cached(`s${payer}/${key}`, async () => parseSession(await abciQuery(`auth/accounts/${payer}/session/${key}`, ""))),
+  sessions: (payer: string): Promise<SessionEntry[]> => cached(`ss${payer}`, async () => parseSessions(await abciQuery(`auth/accounts/${payer}/sessions`, ""))),
+  gasPrice: (): Promise<{ gas: bigint; amount: bigint }> => cached("gasprice", async () => parseGasPrice(await abciQuery("auth/gasprice", ""))),
+  /** The wallet's spendable ugnot (bank/balances). */
+  balance: (a: string): Promise<bigint> =>
+    cached(`bal${a}`, async () => {
+      const r = await abciQuery(`bank/balances/${a}`, "");
+      if (r.error) throw new ReadError("chain", r.error);
+      const m = /"?(\d+)ugnot"?/.exec(r.data);
+      return m ? BigInt(m[1]) : 0n;
+    }),
   accountExists: (a: string): Promise<boolean> => cached(`acct${a}`, async () => parseAccountExists(await abciQuery(`auth/accounts/${a}`, ""))),
   /** The time of the chain's latest block (unix seconds): "now" for due dates. */
   chainTime: (): Promise<bigint> =>
