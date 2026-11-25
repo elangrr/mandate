@@ -84,7 +84,7 @@
 set -euo pipefail
 
 usage() {
-	sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//' >&2
+	sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//' >&2
 	exit 2
 }
 

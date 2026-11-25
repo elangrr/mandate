@@ -46,11 +46,11 @@ Two self-hosted SIL OFL 1.1 variable fonts committed in `public/fonts/` (Latin s
 
 - **Shell**: Translucent sticky command bar with 2px cyan-to-amber hairline, capped-channel `M` emblem, active nav bar, network pill, theme switcher, wallet readout, and full-width alert slot for wallet errors and persistent pending-step banners.
 - **Home**: Split hero pairing the display headline with an explicitly labelled `Example standing order` card, the ceiling-banded `FlowPicture` illustration (pausable), `01–04` honest-limits cards, oversized 4-cell chain totals, and plan cards.
-- **All plans**: 4-cell page summary strip (real counts from the loaded page), plan cards with cap readouts, and button pager controls.
+- **All plans**: 3-cell page summary strip (real counts from the loaded page: plans shown, with recent payments, test plans), plan cards with cap readouts, and button pager controls.
 - **Plan page**: Oversized price header with `CapMeter` (price + fee allowance → amber cap pin → coral-hatched beyond-cap zone labelled `"Above the cap: refused by the chain"`), 4-cell telemetry bar, `Plan terms` card with labelled period `Preview`, framed `Steps` approval progress panel, and wallet states (`Ready to sign`, recovery, blocked, refused, stopped on chain, pending, wrong network, missing/locked wallet).
 - **My mandates**: Command-bar address form, 16-slot `SlotGauge` (with `unknown` fallback), tone-coded standing-order passes with data-driven `MandatePeriods` (distinct paid / current `NOW` / upcoming / stopped bars), recessed facts grid, stop confirmation, and amber loose-permission cards.
 - **Creator**: Identity bar with live collector-key status pill, 4-cell totals, `CreatorChart` paired horizontal bar chart (`Current window` vs `Window before` from real counts, each row saying when its counting window began), tone-coded collector key card with blocked-key notice, and responsive plans table that stacks cleanly on phones.
-- **How it works, Waiting for approval, 404 & Error recovery**: `FlowPicture` + `01–04` architecture step cards + 2-column FAQ grid; amber `Waiting for approval` standby card (`NotLive`); `404 · Page not found` panel; and coral-edged `ErrorCard` shared by `Boundary` and `ReadFailed`.
+- **How it works, Waiting for approval, 404 & Error recovery**: `FlowPicture` + `01–04` architecture step cards + 2-column FAQ grid; amber `Waiting for approval` standby card (`NotLive`); `404 · Page not found` panel; and the coral-edged error card (`.error-card`) used by both `Boundary` and `ReadFailed`.
 
 ## Motion
 

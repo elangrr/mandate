@@ -1,16 +1,20 @@
 # Mandate web app
 
+Live at **[elangrr.github.io/mandate](https://elangrr.github.io/mandate/)**, built from `master` and served from the `gh-pages` branch.
+
 A static site (Vite, TypeScript, React) for Mandate on the Onyx test network. It reads the realm through the network's public RPC; nothing runs on a server of ours, and it loads nothing from third parties except the optional dollar hint (CoinGecko).
 
-Slice M2a, the site that only reads: home with the how-it-works picture, all plans, a plan page, "my mandates" (by address or connected Adena wallet), a creator page, how it works, and a calm "waiting for the network's approval" state while the realm is parked.
+## Browsing (no wallet needed)
 
-Slice M2b, subscribe and stop with the Adena wallet:
+Home with the how-it-works picture (`#/`), all plans (`#/plans`), a plan page (`#/plan/<id>`), "My mandates" by address or connected Adena wallet (`#/mine`), a creator page (`#/creator/<address>`), how it works (`#/how`), and a calm "waiting for the network's approval" state while the realm is parked.
+
+## Subscribing and stopping, with the Adena wallet
 
 - Every request asks Adena to wait for the block (`commit: true`) and to close its popup itself with the real reply (`isVisibleResult: false`). When Adena reports "cancelled" (also what it says when its window is closed after the transaction went out), the page reads the chain for 10 seconds before saying anything. A step counts as done only when the page reads its result back from the chain (the permission, or the mandate); the second approval opens only after the first is on chain. If the chain does not show a sent step within a minute, the page says "sent, but not on chain yet" and asks you not to repeat it; that warning stays at the top of every page (through a reload, a network switch or leaving the page) until the chain shows the step or another account is connected. Before each later step the page checks the chain again (before recording the terms: that the permission just given is still there with the end date signed, and that no mandate for the key or the plan appeared). A popup opens only while its page is open: once you leave it, no further approval opens, and a step already sent is still watched and, if needed, shown in that warning. Permissions for Mandate that no mandate uses are listed on My mandates with a Remove button (an expired one is said to be unusable, but it still takes one of the wallet's 16 places until removed). A creator's own plan offers nothing to sign: the realm refuses it.
 - Right before any popup the page reads the chain again (plan, collector key, permissions, MandateOf for the key) and sends nothing if what it showed has changed.
 - `#/plan/<id>?approval=one` puts the permission and the terms (or the removal and the cancel) in one approval. **Experimental**: it passes Adena v1.22.5's own code (`../adena-check`) but has not been tried with the real wallet yet. Without it, two approvals.
 
-Slice M2c, the creator's side:
+## Creator actions: publishing and the collector guide
 
 - `#/publish` (behind the wallet): publish or replace the collector key, after the page checks it is a secp256k1 public key, shows its address, and refuses the creator's own key or a key whose address is already an account; and publish a plan, with the realm's limits checked on the page (title one line of 1 to 80 characters without control or invisible formatting characters, price 0.1 to 1,000,000 GNOT, period 1 minute to 30 days), a preview with the cap, the storage deposit and the fee. Plans never change once published. The page never asks for, makes or handles a private key, password or seed phrase.
 - `#/collector?a=<address>`: the collector guide, with the exact `scripts/collect.sh` command for that creator and realm, a sample cron line, what the script's messages mean and what to do when the key is blocked.
