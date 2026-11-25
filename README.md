@@ -1,26 +1,26 @@
 # Mandate
 
-Say you write a newsletter about Gno development and you want 1 GNOT a month from each reader who likes it. Your readers don't want to lock money up in advance. They also don't want to sign a transaction every month. Those two wishes usually work against each other: either the money sits in an escrow, or someone has to sign every time.
+Say you write a newsletter about Gno development and you want 1 GNOT a month from each reader who likes it. Your readers don't want to lock money up in advance, and they don't want to sign a transaction every month. Usually they have to accept one of the two: either the money sits in an escrow, or someone signs every payment.
 
-Mandate gives you subscriptions, as direct debit on native GNOT, for exactly that case. The reader (a *supporter*, in Mandate's words) signs one permission from their own wallet: *at most X GNOT every period, through this realm only, until I cancel or it expires*. You, the *creator*, run a small collector that takes each payment when it is due. The realm checks who, how much and when, and forwards the coins to you in the same transaction. It keeps nothing.
+Mandate gives you subscriptions for that case, as direct debit on native GNOT. The reader (a *supporter*, in Mandate's words) signs one permission from their own wallet: *at most X GNOT every period, through this realm only, until I cancel or it expires*. You, the *creator*, run a small collector that takes each payment when it is due. The realm checks who, how much and when, and forwards the coins to you in the same transaction. It keeps nothing.
 
 It is built on the session keys that came with Gno.land v1.8.0, and it is live on the Onyx test network. Everything here uses test GNOT only.
 
 ![Plan #1 on the live site: price, cap bar, payment counts and plan terms](docs/img/plan-1.png)
 
-**One thing that surprises people: nothing takes a payment by itself.** Each payment is taken when the creator's collector runs. So a creator runs the collector on a schedule (cron), at least once per period of their shortest plan. The site's collector guide, [`#/collector`](https://elangrr.github.io/mandate/#/collector), shows the cron lines.
+Nothing takes a payment by itself: each payment is taken only when the creator's collector runs. So a creator runs the collector on a schedule (cron), at least once per period of their shortest plan. The site's collector guide, [`#/collector`](https://elangrr.github.io/mandate/#/collector), shows the cron lines.
 
-If you have two minutes: open [the site](https://elangrr.github.io/mandate/), read [the two real runs](#two-real-runs) and [why it needs Gno.land](#why-it-needs-gnoland), then [try it](#try-it). If you want the detail, it is further down: [how it works](#how-it-works), [the honest limits](#the-honest-limits), [what subscribing costs](#what-subscribing-costs), [the command line and the realm API](#using-it-from-the-command-line), and [the tests](#tests).
+If you have two minutes: open [the site](https://elangrr.github.io/mandate/), read [the two real runs](#two-real-runs) and [why it needs Gno.land](#why-it-needs-gnoland), then [try it](#try-it). For the detail, see [how it works](#how-it-works), [the honest limits](#the-honest-limits), [what subscribing costs](#what-subscribing-costs), [the command line and the realm API](#using-it-from-the-command-line), and [the tests](#tests).
 
 ## Live on Onyx
 
-- **The site:** [elangrr.github.io/mandate](https://elangrr.github.io/mandate/). Browse plans, subscribe and stop with the Adena wallet, publish as a creator.
-- **Plan #1 on the site:** [elangrr.github.io/mandate/#/plan/1](https://elangrr.github.io/mandate/#/plan/1).
-- **Plan #3 on the site:** [elangrr.github.io/mandate/#/plan/3](https://elangrr.github.io/mandate/#/plan/3), the demo plan with a repeat payment.
-- **The realm on gnoweb:** [`gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate`](https://onyx.testnets.gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate)
-- **Every command, on the realm's help page:** [`:help`](https://onyx.testnets.gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate:help)
+- The site: [elangrr.github.io/mandate](https://elangrr.github.io/mandate/). Browse plans, subscribe and stop with the Adena wallet, publish as a creator.
+- Plan #1 on the site: [elangrr.github.io/mandate/#/plan/1](https://elangrr.github.io/mandate/#/plan/1).
+- Plan #3 on the site: [elangrr.github.io/mandate/#/plan/3](https://elangrr.github.io/mandate/#/plan/3), the demo plan with a repeat payment.
+- The realm on gnoweb: [`gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate`](https://onyx.testnets.gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate)
+- Every command, on the realm's help page: [`:help`](https://onyx.testnets.gno.land/r/g1llc3lq3zmjtjdk29dk52munrzxt5ne746cl7r8/mandate:help)
 
-The realm was deployed to the Onyx test network (`onyx-1`) on 2026-11-24, in block 1366932. The network's package approver then enabled it. Since 2026-11-24 it is live: anyone can read it and use it. Test GNOT only.
+The realm was deployed to the Onyx test network (`onyx-1`) on 2026-11-24, in block 1366932. The network's package approver then enabled it. Since 2026-11-24 it has been live: anyone can read it and use it. Test GNOT only.
 
 ### Two real runs
 
@@ -48,22 +48,22 @@ Gno v1.8.0 lets a wallet create a *session*. A session is a second key that the 
 
 The details, with sources, are in [`docs/notes.md`](docs/notes.md), "Sessions".
 
-A Mandate permission is such a session. It is given to the creator's collector key, it allows only `vm/exec:<this realm>`, and its spend limit is the price plus a 0.1 GNOT fee allowance in each of the plan's periods. (The glossary calls this limit the *cap*.)
+A Mandate permission is such a session. It is given to the creator's collector key, it allows only `vm/exec:<this realm>`, and its spend limit, the *cap*, is the price plus a 0.1 GNOT fee allowance in each of the plan's periods.
 
-That is what makes direct debit possible. The collector can take each payment from an ordinary GNOT wallet. There is no escrow that locks funds, and the supporter does not sign each payment.
+With such a session, the collector can take each payment from an ordinary GNOT wallet: no escrow locks the funds, and the supporter does not sign each payment.
 
 The work is split between the chain and the realm:
 
-- **The chain enforces the cap and the scope.** The collector key can never spend more than the cap in a period, and can sign only calls to this realm (and to anything under its path, which is why nothing is ever deployed there).
-- **The realm enforces who, how much and when.** `Pull` accepts only a session scoped to exactly this realm, for a recorded mandate that is active and due, and exactly the plan's price. It then forwards the coins to the creator in the same transaction.
+- The chain enforces the cap and the scope. The collector key can never spend more than the cap in a period, and can sign only calls to this realm (and to anything under its path, which is why nothing is ever deployed there).
+- The realm enforces who, how much and when. `Pull` accepts only a session scoped to exactly this realm, for a recorded mandate that is active and due, and exactly the plan's price. It then forwards the coins to the creator in the same transaction.
 
-And the supporter keeps the off switch. Revoking the session in the wallet stops every payment at once.
+The supporter can stop every payment at once by revoking the session in their wallet.
 
 ## Try it
 
-First, an honest note about the demo plans. No mandate is active on them right now, and no collector is running on a schedule for them. If you subscribe to plan #1 or plan #3 today, your mandate is recorded, but no payment is taken until that plan's creator runs their collector.
+No mandate is active on the demo plans right now, and no collector is running on a schedule for them. If you subscribe to plan #1 or plan #3 today, your mandate is recorded, but no payment is taken until that plan's creator runs their collector.
 
-So if you want to see a payment go through end to end, take the creator path below: publish your own plan, subscribe to it from a second wallet, and run the collector yourself.
+To see a payment go through end to end, take the creator path below: publish your own plan, subscribe to it from a second wallet, and run the collector yourself.
 
 ### As a supporter
 
@@ -147,7 +147,7 @@ Its work per run is bounded and resumable. A revoked session is not an error.
 
 ## The honest limits
 
-These are the trade-offs I know about. Several come from the chain's rules for sessions. The reasoning and the measurements are in [`docs/design.md`](docs/design.md).
+Several of these limits come from the chain's rules for sessions. The reasoning and the measurements are in [`docs/design.md`](docs/design.md).
 
 ### For supporters
 
@@ -163,7 +163,7 @@ These are the trade-offs I know about. Several come from the chain's rules for s
 ### For creators
 
 - **It is direct debit, not escrow.** Nothing is locked up front. A supporter can revoke, cancel or empty their account at any time, and a creator is only paid when a payment succeeds. Payments are taken at the start of each period, so a creator is exposed for one period at most.
-- **You need a collector that is always on**, holding the collector key. It takes payments only when it runs, so it has to run on a schedule.
+- **You need a collector that is always on**, holding the collector key and running on a schedule.
 - **Periods go from one minute to 30 days.** The chain refuses a session whose spend period is longer than 30 days, so there are no yearly plans. A monthly plan with a one-year mandate is the longest commitment.
 - **Never send coins to a collector key.** An address that has received coins is an account, and the chain refuses to create a session for it, so nobody new could subscribe.
   - Anyone can do this to a published key with a 1 ugnot send. The creator then publishes a new key (the plan page says so), and existing supporters are unaffected.
