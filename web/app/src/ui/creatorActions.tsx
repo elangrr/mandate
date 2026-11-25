@@ -617,6 +617,10 @@ export function CollectorGuide({ address }: { address: string }) {
         <li className="card">
           <h2>Run it</h2>
           <p>
+            Nothing takes a payment by itself: each payment is taken when the collector runs, so run it on a schedule (shown below), at least once per
+            period of your shortest plan.
+          </p>
+          <p>
             From a copy of the{" "}
             <a href={config.sourceUrl} target="_blank" rel="noreferrer noopener" className="ext">
               Mandate source <Icon name="external" />
@@ -642,29 +646,26 @@ export function CollectorGuide({ address }: { address: string }) {
             </p>
           )}
           <p>It asks for the key’s password once per run.</p>
-          {payee && (
-            <>
-              <p>
-                To run it unattended, every 10 minutes for example, store the password in a file only you can read. In bash, this asks for it without echoing
-                it or keeping it in your shell history, and creates the file afresh:
-              </p>
-              <pre className="code-block mono">
-                <code>{`printf 'Collector key password: '; (umask 077; rm -f ~/.mandate-collector-pass; IFS= read -rs p && printf '%s\\n' "$p" > ~/.mandate-collector-pass); echo`}</code>
-              </pre>
-              <p>
-                Then add these two lines with crontab -e. They assume the Mandate repository is at ~/mandate. Cron starts with a minimal PATH, so name the
-                folders that hold gnokey, python3 and flock:
-              </p>
-              <pre className="code-block code-block-scroll mono" tabIndex={0} aria-label="Two lines for crontab; scroll sideways to read them whole">
-                <code>{`PATH=/usr/local/bin:/usr/bin:/bin:/home/YOU/go/bin\n*/10 * * * * cd ~/mandate && ${cmd} -insecure-password-stdin < ~/.mandate-collector-pass >> ~/mandate-collector.log 2>&1`}</code>
-              </pre>
-              <p className="small muted">
-                -insecure-password-stdin is the script’s mode for unattended runs: whoever can read that file can sign with the collector key, which can
-                only take payments your supporters allowed. Replace /home/YOU/go/bin with the folder where gnokey is. Run it at least once per period of
-                your shortest plan.
-              </p>
-            </>
-          )}
+          <p>
+            To run it unattended, every 10 minutes for example, store the password in a file only you can read. In bash, this asks for it without echoing
+            it or keeping it in your shell history, and creates the file afresh:
+          </p>
+          <pre className="code-block mono">
+            <code>{`printf 'Collector key password: '; (umask 077; rm -f ~/.mandate-collector-pass; IFS= read -rs p && printf '%s\\n' "$p" > ~/.mandate-collector-pass); echo`}</code>
+          </pre>
+          <p>
+            Then add these two lines with crontab -e. They assume the Mandate repository is at ~/mandate. Cron starts with a minimal PATH, so name the
+            folders that hold gnokey, python3 and flock:
+          </p>
+          <pre className="code-block code-block-scroll mono" tabIndex={0} aria-label="Two lines for crontab; scroll sideways to read them whole">
+            <code>{`PATH=/usr/local/bin:/usr/bin:/bin:/home/YOU/go/bin\n*/10 * * * * cd ~/mandate && ${cmd} -insecure-password-stdin < ~/.mandate-collector-pass >> ~/mandate-collector.log 2>&1`}</code>
+          </pre>
+          <p className="small muted">
+            -insecure-password-stdin is the script’s mode for unattended runs: whoever can read that file can sign with the collector key, which can
+            only take payments your supporters allowed. Replace /home/YOU/go/bin with the folder where gnokey is
+            {payee ? "" : ", and YOUR_ADDRESS with your creator address"}. */10 runs it every 10 minutes: if a plan of yours has a shorter period,
+            change */10 so it runs at least once per that period.
+          </p>
         </li>
         <li className="card">
           <h2>What it says</h2>

@@ -975,7 +975,8 @@ export function How() {
             <p>
               When a payment is due, the creator’s collector asks for exactly the price. Mandate checks that the request comes from your permission,
               that the amount is right and that the period has come, then sends the coins straight to the creator in the same transaction. The chain
-              itself refuses anything above your cap.
+              itself refuses anything above your cap. The collector is a program the creator runs on their own machine, on a schedule: a payment is
+              taken only when it runs.
             </p>
           </li>
           <li>

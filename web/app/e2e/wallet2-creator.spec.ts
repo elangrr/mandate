@@ -304,6 +304,13 @@ test("the collector guide: the exact command for this creator, what it says, wha
   await expect(page.getByText(/the address in the link/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "When the key is blocked" })).toBeVisible();
   await shots(page, "collector-guide");
+  // with no wallet and no address: still how to run it on a schedule, with the placeholder to replace
+  await page.goto("./#/collector");
+  await expect(page.getByText(/Nothing takes a payment by itself/)).toBeVisible();
+  const lines = page.getByLabel(/Two lines for crontab/);
+  await expect(lines).toContainText("*/10 * * * * cd ~/mandate && scripts/collect.sh");
+  await expect(lines).toContainText("-payee YOUR_ADDRESS ");
+  await expect(page.getByText(/and YOUR_ADDRESS with your creator address/)).toBeVisible();
 });
 
 test("320px wide and 200% text: the publish forms, their errors and the guide stay on screen", async ({ page }) => {
